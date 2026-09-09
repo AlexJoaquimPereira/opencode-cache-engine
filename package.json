@@ -1,0 +1,16 @@
+{
+  "name": "opencode-cache-engine",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "Provider-aware prompt-cache optimization and telemetry for OpenCode",
+  "keywords": [
+    "opencode",
+    "cache",
+    "prompt-cache",
+    "deepseek",
+    "glm",
+    "gpt"
+  ],
+  "license": "MIT"
+}
