@@ -2,7 +2,6 @@
   "name": "opencode-cache-engine",
   "version": "0.1.0",
   "private": false,
-  "type": "module",
   "description": "Provider-aware prompt-cache optimization and telemetry for OpenCode",
   "keywords": [
     "opencode",
@@ -12,5 +11,23 @@
     "glm",
     "gpt"
   ],
-  "license": "MIT"
+  "homepage": "https://github.com/AlexJoaquimPereira/opencode-cache-engine#readme",
+  "bugs": {
+    "url": "https://github.com/AlexJoaquimPereira/opencode-cache-engine/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AlexJoaquimPereira/opencode-cache-engine.git"
+  },
+  "license": "MIT",
+  "author": "Alex Joaquim Pereira",
+  "type": "package",
+  "main": "src/cache-engine.ts",
+  "directories": {
+    "example": "examples",
+    "test": "test"
+  },
+  "scripts": {
+    "test": "node --test test/cache-engine.test.mjs"
+  }
 }
