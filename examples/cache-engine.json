@@ -1,0 +1,25 @@
+{
+  "enabled": true,
+  "metricsFile": "~/.cache/opencode/cache-metrics.jsonl",
+  "compactTemplate": true,
+  "logPrefixChanges": true,
+  "policies": {
+    "deepseek": {
+      "enabled": true
+    },
+    "gpt56": {
+      "enabled": true,
+      "promptCacheKey": true,
+      "cacheRootKey": false,
+      "compactionCacheIsolation": true,
+      "reasoningEffortDiagnostics": true,
+      "mode": "implicit",
+      "ttl": "30m"
+    },
+    "glm53": {
+      "enabled": true,
+      "stabilizeSystem": true,
+      "preserveThinkingIntegrity": true
+    }
+  }
+}
