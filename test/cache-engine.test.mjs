@@ -180,7 +180,7 @@ test("disabled engine -> enabled=false", () => {
 
 test("malformed config falls back to defaults", () => {
   const dir = mkdtempSync(join(tmpdir(), "ce-"))
-  const bad = join(dir, "../src/cache-engine.json")
+  const bad = join(dir, "cache-engine.json")
   writeFileSync(bad, "{ this is not json")
   const cfg = loadConfig({ configPath: bad, env: {} })
   assert.equal(cfg.enabled, true)
@@ -227,8 +227,8 @@ test("recorder writes valid JSONL to a real file", () => {
 
 const M = (providerID, modelID, extra = {}) => ({ providerID, modelID, ...extra })
 
-test("DeepSeek V4 Flash matches DeepSeek policy (openrouter + direct)", () => {
-  assert.equal(detectPolicy(M("openrouter", "deepseek/deepseek-v4-flash-0731")), POLICY_DEEPSEEK)
+test("DeepSeek V4.1 Flash matches DeepSeek policy (openrouter + direct)", () => {
+  assert.equal(detectPolicy(M("openrouter", "deepseek/deepseek-v4.1-flash-0731")), POLICY_DEEPSEEK)
   assert.equal(detectPolicy(M("deepseek", "deepseek-chat")), POLICY_DEEPSEEK)
 })
 
@@ -602,7 +602,7 @@ test("glmHitRatio uses cached over total prompt tokens", () => {
 // GPT-5.6 cache-root derivation (pure)
 // ===========================================================================
 
-import { gptCacheKeyFor, observeReasoningEffort, prefixChangeReasons, reasoningEffortFromOptions, reasoningIssueReasons, resolveCacheRootSync } from "./cache-engine-core.mjs"
+import { gptCacheKeyFor, observeReasoningEffort, prefixChangeReasons, reasoningEffortFromOptions, reasoningIssueReasons, resolveCacheRootSync } from "../src/cache-engine-core.mjs"
 
 const parents = (m) => (id) => m[id] ?? null
 
