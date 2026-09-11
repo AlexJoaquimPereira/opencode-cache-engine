@@ -6,7 +6,7 @@ Provider-aware prompt-cache optimization and observability for [OpenCode](https:
 
 The plugin currently has three cache-policy families:
 
-* **DeepSeek V4 Flash** — passive cache-stability and observability
+* **DeepSeek V4.1 Flash** — passive cache-stability and observability
 * **GPT-5.6 Luna** — active cache-control configuration
 * **GLM-5.3 Flash** — conservative system-prompt stabilization
 
@@ -37,7 +37,7 @@ The plugin deliberately avoids pretending that a local hash is proof of a provid
 
 # Provider behavior
 
-## DeepSeek V4 Flash
+## DeepSeek V4.1 Flash
 
 ### Policy: passive
 
@@ -227,7 +227,7 @@ The plugin uses three different strategies because cache mechanisms differ by pr
 
 | Provider          | Prompt text changed? | Cache metadata changed? | Main strategy                     |
 | ----------------- | -------------------: | ----------------------: | --------------------------------- |
-| DeepSeek V4 Flash |                   No |                      No | Preserve stable harness + observe |
+| DeepSeek V4.1 Flash |                   No |                      No | Preserve stable harness + observe |
 | GPT-5.6 Luna      |                   No |                     Yes | Stable cache key + cache options  |
 | GLM-5.3 Flash     |        Yes, narrowly |   No provider cache key | Isolate volatile system content   |
 
