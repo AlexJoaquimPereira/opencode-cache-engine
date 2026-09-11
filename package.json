@@ -29,6 +29,7 @@
   },
   "scripts": {
     "test": "node --test test/cache-engine.test.mjs",
+    "postpublish": "VERSION=$(node -p \"require('./package').version\") && TAG=v$VERSION && echo \"Creating git tag $TAG for npm $VERSION\" && git tag $TAG && git push origin $TAG || echo \"Tag $TAG may already exist or push failed; continuing.\"",
     "updateGit": "npm uninstall PACKAGE-NAME && npm install git+https://github.com/username/repo.git"
   }
 }
