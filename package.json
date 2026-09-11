@@ -1,6 +1,6 @@
 {
   "name": "opencode-cache-engine",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": false,
   "description": "Provider-aware prompt-cache optimization and telemetry for OpenCode",
   "keywords": [
@@ -28,6 +28,7 @@
     "test": "test"
   },
   "scripts": {
-    "test": "node --test test/cache-engine.test.mjs"
+    "test": "node --test test/cache-engine.test.mjs",
+    "updateGit": "npm uninstall PACKAGE-NAME && npm install git+https://github.com/username/repo.git"
   }
 }
