@@ -39,7 +39,7 @@ import {
 // Provider-aware prompt-cache observability + conservative cache-shape
 // preservation for ONE OpenCode TUI across three model families:
 //
-//   DeepSeek V4 Flash  -> pure passive. >99.66% hit rate is preserved by never
+//   DeepSeek V4.1 Flash  -> pure passive. >99.66% hit rate is preserved by never
 //                         mutating system/options/requests. Observability only.
 //   GPT-5.6 Luna       -> ACTIVE cache-control: a stable session-derived
 //                         prompt_cache_key + prompt_cache_options (implicit,
