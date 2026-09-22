@@ -5,6 +5,7 @@ import {
   DIGEST_TEMPLATE,
   POLICY_GLM53,
   POLICY_GPT56,
+  POLICY_MIMO26,
   POLICY_NEUTRAL,
   createRecorder,
   detectPolicy,
@@ -16,10 +17,13 @@ import {
   gptCacheOptionsDelta,
   hitRatePct,
   loadConfig,
+  mimoHitRate,
+  mimoSessionIdFor,
   nextProcessedCursor,
   observeReasoningEffort,
   policyEnabled,
   prefixChangeReasons,
+  providerChangeEvent,
   reasoningEffortFromOptions,
   reasoningIssueReasons,
   relocateVolatileEnvBlock,
@@ -37,7 +41,7 @@ import {
 // cache-engine
 //
 // Provider-aware prompt-cache observability + conservative cache-shape
-// preservation for ONE OpenCode TUI across three model families:
+// preservation for ONE OpenCode TUI across four model families:
 //
 //   DeepSeek V4.1 Flash  -> pure passive. >99.66% hit rate is preserved by never
 //                         mutating system/options/requests. Observability only.
@@ -52,16 +56,28 @@ import {
 //                         history stable, and INSTRUMENT preserved-thinking
 //                         integrity (duplicate/reorder/modified reasoning). No
 //                         invented cache key (Z.ai exposes none).
+//   MiMo-V2.6          -> prefix stability + OpenRouter session affinity. The
+//                         safe env-block relocation is applied (stabilizeSystem)
+//                         and provider switches within a session are diagnosed.
+//                         MiMo caching is provider-managed implicit context
+//                         caching; no cache key/breakpoint/TTL is invented. The
+//                         OpenRouter sticky-session id is derived but currently
+//                         NOT injected: this runtime's OpenRouter request
+//                         adapter forwards only usage/reasoning/prompt_cache_key
+//                         and exposes no top-level `session_id` path (verified
+//                         against the installed runtime; see README).
 //
 // The engine remains conservative: it observes, hashes, compares, records,
 // appends a compaction continuation template, and (for GPT-5.6 only) injects
 // documented cache options. It never rewrites message history, reorders tools,
 // or alters user content. DeepSeek and neutral models are byte-untouched.
+// MiMo/GLM only relocate the identifiable volatile env block, content-preserving.
 //
 // IMPORTANT (terminology): local hashes describe the *observed* prefix shape.
 // A changed hash means request bytes changed; it is NOT proof the provider's
 // cache key changed or that a cache miss occurred. Provider-reported cache
-// token counts are authoritative; hashes are diagnostics only.
+// token counts are authoritative; hashes are diagnostics only. For MiMo, the
+// authoritative cache signal is provider-reported cached_tokens.
 // ---------------------------------------------------------------------------
 
 const TOOL_FETCH_TTL_MS = 1500
@@ -113,6 +129,7 @@ type SessionState = {
   cacheRootAt: number | null
   reasoningSeen: Map<string, number>
   reasoningLastSeq: string[] | null
+  mimoProvider: { providerID: string; modelID: string } | null
 }
 
 const emptyShape = (): Shape => ({
@@ -154,6 +171,7 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
         cacheRootAt: null,
         reasoningSeen: new Map(),
         reasoningLastSeq: null,
+        mimoProvider: null,
       }
       sessions.set(sid, s)
     }
@@ -397,6 +415,25 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
           recFields.promptTokens = read + write + input
           recFields.glmHitRate = glmHitRatio(read, write, input)
         }
+        if (family === POLICY_MIMO26) {
+          // Provider-reported cached tokens / total prompt tokens. The runtime's
+          // `input` is the non-cached prompt input and `cache.read` is the
+          // cached prompt input, so total prompt tokens are derived as read +
+          // input (cache.write is a separate accounting bucket). No cache-write
+          // value is fabricated; the ratio is null when prompt tokens are 0.
+          const promptTokens = read + input
+          recFields.promptTokens = promptTokens
+          recFields.cachedTokens = read
+          recFields.cacheHitRate = mimoHitRate(read, promptTokens)
+          if (cfg.policies?.[POLICY_MIMO26]?.stickySession === true) {
+            recFields.stickySessionId = mimoSessionIdFor(sid)
+          }
+          // Prefer the latest live provider identity over the latched one.
+          if (s.mimoProvider) {
+            recFields.provider = s.mimoProvider.providerID
+            recFields.model = s.mimoProvider.modelID
+          }
+        }
         if (family === POLICY_GPT56 && s.gptInjected) {
           recFields.keyStrategy = "session"
           recFields.mode = cfg.policies?.[POLICY_GPT56]?.mode
@@ -445,6 +482,48 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
       try {
         const info = rememberModel(input.sessionID, input.model as unknown as ChatParamsModel)
         const family = info?.family
+
+        // ---- MiMo-V2.6: provider-switch diagnostics (telemetry only) ---------
+        // MiMo cache lives at the provider side, so a provider change within one
+        // OpenCode session can silently invalidate it. We record identity on every
+        // MiMo request and emit a diagnostic when the OpenCode providerID changes.
+        // This never forces or overrides provider routing.
+        // NOTE: OpenRouter's *upstream* provider selection (e.g. xiaomi/fp8) is
+        // not exposed to plugins; only the OpenCode providerID/modelID are
+        // observable here.
+        if (family === POLICY_MIMO26 && policyEnabled(cfg, POLICY_MIMO26) && info) {
+          // Use the LIVE model identity (not the latched one) so a provider
+          // switch within the session is actually observable.
+          const live = input.model as unknown as ChatParamsModel
+          const cur = {
+            providerID: String(live?.providerID ?? ""),
+            modelID: String(live?.api?.id ?? live?.id ?? ""),
+          }
+          if (cur.providerID) {
+            const s = get(input.sessionID)
+            const ev = providerChangeEvent(s.mimoProvider, cur)
+            if (ev.changed) {
+              const sticky =
+                cfg.policies?.[POLICY_MIMO26]?.stickySession === true
+                  ? { stickySessionId: mimoSessionIdFor(input.sessionID) }
+                  : {}
+              rec.record({
+                kind: "boundary",
+                sid: input.sessionID,
+                ts: Date.now(),
+                reason: "mimo_provider_changed",
+                policy: POLICY_MIMO26,
+                from: ev.from,
+                to: ev.to,
+                ...sticky,
+                note: "OpenCode providerID changed; upstream routing is not plugin-visible",
+              })
+            }
+            s.mimoProvider = cur
+          }
+          return
+        }
+
         if (!(family === POLICY_GPT56 && policyEnabled(cfg, POLICY_GPT56))) {
           // DeepSeek / GLM / neutral: nothing to inject. GLM has no cache-key API;
           // DeepSeek caching is fully passive; we never mutate requests for them.
@@ -626,28 +705,47 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
         const s = get(sid)
         const family = s.modelInfo?.family
 
-        // ---- GLM-5.3 input-shape stabilization -----------------------------
+        // ---- GLM-5.3 / MiMo-V2.6 input-shape stabilization ------------------
         // Relocate the identifiable volatile env block (per-day date) to the
         // tail of the single system string, content-preserving, ONLY when the
-        // model is GLM-5.3 and the block markers are present exactly. Never
-        // touches other content/order; never applied to other families.
+        // family opts into system stabilization and the block markers are
+        // present exactly. Never touches other content/order; never applied to
+        // other families. The runtime passes a single-element system array
+        // (verified against the installed runtime), so no generic reordering is
+        // involved.
         //
         // In-place mutation note: request.ts keeps using its own local `system`
         // array after the hook (the trigger's returned output is ignored), so
         // reassigning `output.system = [...]` would be lost. We rewrite the
         // single element in place instead.
         let systemText = output.system.join("\n")
-        if (
+        const glmStabilize =
           family === POLICY_GLM53 &&
           policyEnabled(cfg, POLICY_GLM53) &&
-          cfg.policies?.[POLICY_GLM53]?.stabilizeSystem === true &&
-          output.system.length === 1
-        ) {
+          cfg.policies?.[POLICY_GLM53]?.stabilizeSystem === true
+        const mimoStabilize =
+          family === POLICY_MIMO26 &&
+          policyEnabled(cfg, POLICY_MIMO26) &&
+          cfg.policies?.[POLICY_MIMO26]?.stabilizeSystem === true
+        if ((glmStabilize || mimoStabilize) && output.system.length === 1) {
           const rel = relocateVolatileEnvBlock(output.system[0])
           if (rel.changed) {
             output.system[0] = rel.text
             systemText = rel.text
-            log("debug", "glm system env block relocated to suffix", { sid })
+            if (family === POLICY_MIMO26) {
+              log("debug", "mimo system env block relocated to suffix", { sid })
+              rec.record({
+                kind: "boundary",
+                sid,
+                ts: Date.now(),
+                reason: "mimo_system_env_relocated",
+                policy: POLICY_MIMO26,
+                provider: s.modelInfo?.providerID,
+                model: s.modelInfo?.modelID,
+              })
+            } else {
+              log("debug", "glm system env block relocated to suffix", { sid })
+            }
           }
         }
 
@@ -724,6 +822,22 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
               ? { toolCount, prevToolCount: prevCount, semanticToolsChanged: semanticChanged, wireToolsChanged: wireChanged }
               : {}),
           })
+          // MiMo-specific explicit diagnostic: the STABLE prefix changed (not
+          // just the relocated volatile env suffix). Reported only; the new
+          // content is never overwritten with a stale snapshot.
+          if (family === POLICY_MIMO26 && reasons.includes("system_stable_prefix_changed")) {
+            rec.record({
+              kind: "boundary",
+              sid,
+              ts: Date.now(),
+              reason: "mimo_system_prefix_changed",
+              policy: POLICY_MIMO26,
+              provider: s.modelInfo?.providerID,
+              model: s.modelInfo?.modelID,
+              changedFields: granular,
+              reasons,
+            })
+          }
           if (cfg.logPrefixChanges) {
             log("warn", "observed prefix shape change", {
               sid,
