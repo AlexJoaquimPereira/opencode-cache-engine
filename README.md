@@ -1,6 +1,14 @@
 # OpenCode Cache Engine
 
-Provider-aware prompt-cache optimization and observability for [OpenCode](https://opencode.ai).
+Provider-aware prompt-cache optimization and observability for
+[OpenCode](https://opencode.ai).
+
+`opencode-cache-engine` is an OpenCode npm plugin with two targets:
+
+- **Server target** — the actual cache-engine runtime and provider policies.
+- **TUI target** — registration with OpenCode's TUI plugin manager.
+
+The server target handles cache optimization, prompt-shape diagnostics, compaction handling, and cache telemetry. The TUI target provides the plugin-manager integration and enable/disable state for the TUI-facing plugin entry.
 
 `CacheEngine` is an OpenCode plugin designed for long-running agent sessions where prompt-cache efficiency affects both latency and cost. It keeps the harness conservative for providers whose cache behavior is already automatic, while applying provider-specific optimizations where the provider exposes useful cache controls or where prompt structure can be safely improved.
 
@@ -14,7 +22,6 @@ The central design principle is:
 
 > Optimize the request structure only when there is a clear provider-specific reason to do so. Otherwise, preserve OpenCode's native request behavior and measure what the provider actually reports.
 
----
 
 ## What this plugin does
 
@@ -33,7 +40,6 @@ It:
 
 The plugin deliberately avoids pretending that a local hash is proof of a provider cache hit. Provider-reported token usage remains the authoritative signal.
 
----
 
 # Provider behavior
 
@@ -88,7 +94,6 @@ DeepSeek:
     force cache behavior
 ```
 
----
 
 ## GPT-5.6 Luna
 
@@ -153,7 +158,6 @@ compaction:
 
 This prevents a compaction-specific prompt from sharing the same GPT cache namespace as the normal live-session prompt. The behavior is deterministic and tested explicitly.
 
----
 
 ## GLM-5.3 Flash
 
@@ -219,7 +223,6 @@ It only occurs when:
 
 The plugin does not arbitrarily rearrange unrelated prompt content.
 
----
 
 # Prompt-cache strategy
 
@@ -237,7 +240,6 @@ The plugin is **not** a generic "rewrite every prompt for caching" engine.
 
 It is a provider-aware cache policy engine.
 
----
 
 # System-prompt diagnostics
 
@@ -261,7 +263,6 @@ It does **not** mean:
 
 This distinction is intentional. Provider-reported cache token counts are the authoritative cache signal.
 
----
 
 # Tool-definition diagnostics
 
@@ -294,7 +295,6 @@ This distinction matters because semantic equality and byte-level request equali
 
 The plugin uses these fingerprints for **diagnostics only**. It does not reorder the tools to force a particular fingerprint.
 
----
 
 # Compaction handling
 
@@ -313,7 +313,6 @@ The plugin adds a deterministic continuation template:
 The digest is inserted once per compaction operation using a guard that prevents duplicate insertion if the compaction hook fires multiple times.
 The objective is to provide a deterministic continuation structure rather than generating a different arbitrary cache-affecting block on every compaction.
 
----
 
 # Cache metrics
 
@@ -388,7 +387,6 @@ Telemetry is best-effort.
 
 A failed metrics write must never break an OpenCode request. The recorder catches write failures rather than allowing telemetry failures to affect execution.
 
----
 
 # Metrics examples
 
@@ -447,7 +445,6 @@ Telemetry is intended to answer questions such as:
 * Which provider/model/policy was active?
 * Did the GLM system stabilization actually change the observed prompt shape?
 
----
 
 # Configuration
 
@@ -483,7 +480,6 @@ The default configuration is:
 
 The configuration parser starts from these defaults and applies valid file/environment overrides without mutating the caller's configuration object.
 
----
 
 # Configuration options
 
@@ -535,7 +531,6 @@ Controls whether the deterministic compaction continuation block is inserted.
 
 Controls warning logs for observed prefix-shape changes.
 
----
 
 # DeepSeek configuration
 
@@ -549,7 +544,6 @@ There are intentionally very few settings here.
 
 DeepSeek is treated as the conservative/passive policy.
 
----
 
 # GPT-5.6 configuration
 
@@ -601,7 +595,6 @@ Defaults to:
 
 Existing request options are not overwritten by the plugin.
 
----
 
 # GLM-5.3 configuration
 
@@ -629,7 +622,6 @@ The reasoning instrumentation is intended to identify anomalies such as:
 
 It is diagnostic rather than a reason to rewrite or fabricate reasoning content. The implementation maps these conditions to explicit diagnostic reasons.
 
----
 
 # Model detection
 
@@ -658,7 +650,6 @@ Neutral means:
 no provider-specific request mutation
 ```
 
----
 
 # OpenRouter usage
 
@@ -670,7 +661,6 @@ The plugin does not attempt to compensate for provider switching by rewriting pr
 
 For that reason, a stable provider route is preferable when your goal is to measure and maximize prefix reuse.
 
----
 
 # Architecture
 
@@ -893,14 +883,15 @@ A typical standalone repository can use:
 opencode-cache-engine/
 ├── src/
 │   ├── cache-engine.ts
-│   └── cache-engine-core.mjs
+│   ├── cache-engine-core.mjs
+│   └── tui.mjs
 ├── test/
 │   └── cache-engine.test.mjs
 ├── examples/
 │   └── cache-engine.json
+├── package.json
 ├── README.md
-├── LICENSE
-└── package.json
+└── LICENSE
 ```
 
 The OpenCode plugin export remains:
@@ -924,6 +915,20 @@ without changing the `CacheEngine` export identifier.
 # Installation
 
 Install the plugin into the OpenCode plugins directory according to your OpenCode plugin-loading setup.
+
+`opencode-cache-engine` is distributed as an npm package.
+
+## Server/runtime plugin
+
+Add the package to the OpenCode runtime plugin configuration:
+
+```json
+{
+  "plugin": [
+    "opencode-cache-engine"
+  ]
+}
+```
 
 The runtime entry should expose:
 
