@@ -1,6 +1,6 @@
 {
   "name": "opencode-cache-engine",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": false,
   "description": "Provider-aware prompt-cache optimization and telemetry for OpenCode",
   "keywords": [
@@ -26,6 +26,10 @@
   "directories": {
     "example": "examples",
     "test": "test"
+  },
+  "exports": {
+    "./server": "./src/cache-engine.ts",
+    "./tui": "./src/tui.mjs"
   },
   "scripts": {
     "test": "node --test test/cache-engine.test.mjs",
