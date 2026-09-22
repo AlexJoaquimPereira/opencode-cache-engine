@@ -12,11 +12,12 @@ The server target handles cache optimization, prompt-shape diagnostics, compacti
 
 `CacheEngine` is an OpenCode plugin designed for long-running agent sessions where prompt-cache efficiency affects both latency and cost. It keeps the harness conservative for providers whose cache behavior is already automatic, while applying provider-specific optimizations where the provider exposes useful cache controls or where prompt structure can be safely improved.
 
-The plugin currently has three cache-policy families:
+The plugin currently has four cache-policy families:
 
 * **DeepSeek V4.1 Flash** — passive cache-stability and observability
 * **GPT-5.6 Luna** — active cache-control configuration
 * **GLM-5.3 Flash** — conservative system-prompt stabilization
+* **MiMo-V2.6 (Flash / Pro)** — prefix stability and OpenRouter session-affinity diagnostics
 
 The central design principle is:
 
@@ -35,8 +36,9 @@ It:
 4. Records provider-reported cache token usage.
 5. Adds a deterministic compaction continuation block.
 6. Applies GPT-5.6 cache-control metadata.
-7. Applies the GLM-5.3 volatile-environment relocation.
+7. Applies the GLM-5.3 and MiMo-V2.6 volatile-environment relocation.
 8. Records diagnostics that help determine whether prompt-shape changes correlate with cache behavior.
+9. Records MiMo-V2.6 provider identity and provider-switch diagnostics.
 
 The plugin deliberately avoids pretending that a local hash is proof of a provider cache hit. Provider-reported token usage remains the authoritative signal.
 
@@ -224,15 +226,167 @@ It only occurs when:
 The plugin does not arbitrarily rearrange unrelated prompt content.
 
 
+## MiMo-V2.6 (Flash / Pro)
+
+### Policy: prefix stability + OpenRouter session affinity
+
+MiMo-V2.6 is Xiaomi's current model family. The plugin targets exactly two
+identifiers:
+
+* `xiaomi/mimo-v2.6-flash` / `mimo-v2.6-flash`
+* `xiaomi/mimo-v2.6-pro` / `mimo-v2.6-pro`
+
+Detection also tolerates `provider/model` shapes where `api.id` contains those
+slugs. It deliberately does **not** match `mimo-v2.5`, `mimo-v2.5-pro`,
+`mimo-v2.6-pro-ultraspeed`, or unrelated MiMo models.
+
+### Implicit context caching
+
+Xiaomi documents context caching for both V2.6 Flash and Pro, and exposes
+`usage.prompt_tokens_details.cached_tokens` as the number of prompt tokens
+served from cache. The V2.6 API documents implicit context caching, not a
+user-supplied cache key or explicit breakpoint.
+
+Accordingly the plugin **injects no cache-control parameter** for MiMo. It does
+not send `promptCacheKey`, `cacheControl`, `cacheBreakpoint`, or `ttl`.
+Implicit caching is the default assumption.
+
+### Environment-block stabilization
+
+MiMo uses the same narrow, content-preserving transformation as GLM-5.3: the
+identifiable volatile `<env>` block is relocated to the **tail** of the single
+system string. Contents are preserved byte-for-byte; only position changes. This
+keeps the large reusable prefix stable when only the environment/date changes.
+
+The transformation is applied only when:
+
+* the selected model is MiMo-V2.6 Flash/Pro
+* `mimo26.stabilizeSystem` is `true`
+* there is exactly one system string
+* the expected `<env>` markers exist and the block is identified unambiguously
+* the block is not already at the tail
+
+### No generic system-prompt freezing
+
+MiMo-Code's own harness freezes its per-session system prefix. This plugin does
+**not** copy that mechanism. System instructions can legitimately change because
+of permissions, tools, agent mode, skills, MCP state, or project configuration;
+a plugin-level snapshot must never override a legitimate change.
+
+Instead the plugin:
+
+* records a first-seen system baseline per session;
+* computes the full system hash, stable prefix hash, and volatile suffix hash;
+* records changes for MiMo sessions;
+* allows the `<env>` relocation when that is the only identified volatility;
+* reports other system changes diagnostically and never overwrites the new
+  content.
+
+Explicit telemetry events:
+
+* `mimo_system_env_relocated`
+* `mimo_system_prefix_changed`
+
+### OpenRouter sticky session — derived but not injected
+
+OpenRouter documents a top-level `session_id` request field for sticky provider
+routing, which keeps a session's requests on the same upstream provider so
+provider-side prompt caches stay warm.
+
+The plugin includes a pure, session-scoped derivation (`mimoSessionIdFor`):
+deterministic, distinct per session, printable/no-whitespace, and well under the
+256-character cap. However, **the derived id is not injected into requests**.
+
+Rationale (verified against the installed runtime): OpenCode's OpenRouter
+request adapter forwards only `usage`, `reasoning`, and `prompt_cache_key` from
+provider options, and exposes no top-level `session_id` path. Adding an
+unsupported field would be guessing, so the id is recorded as telemetry only,
+and `mimo26.stickySession` currently gates that recording. If a future runtime
+gains a verified `session_id` path, the helper is already in place.
+
+Note that OpenCode itself sets `x-session-affinity` / `X-Session-Id` HTTP
+headers for non-opencode providers, and can set a flat `promptCacheKey` for
+OpenRouter when `setCacheKey: true` is configured. Those are HTTP routing
+headers and an OpenAI-style cache key respectively — they are not OpenRouter's
+documented body `session_id`.
+
+### MiMo cache metrics
+
+MiMo caches are provider-managed, so the authoritative metric is provider
+reported. For MiMo the plugin emits the preferred ratio:
+
+```text
+cacheHitRate = cachedTokens / promptTokens
+```
+
+This is intentionally **not** the `read / (read + write)` form used by other
+families. It is not GLM's `read / (read + write + input)` either.
+
+Derivation: the runtime exposes assistant tokens as `{ input, output,
+cache:{ read, write } }`, where `input` is the non-cached prompt input and
+`cache.read` is the cached prompt input. Total prompt tokens are therefore
+derived as `read + input`, and `cachedTokens = read`. `cache.write` is a
+separate accounting bucket and is not folded in; no cache-write value is
+fabricated, and the ratio is `null` when `promptTokens` is zero.
+
+A MiMo usage record looks conceptually like:
+
+```json
+{
+  "kind": "usage",
+  "policy": "mimo26",
+  "provider": "openrouter",
+  "model": "xiaomi/mimo-v2.6-flash",
+  "promptTokens": 50000,
+  "cachedTokens": 47000,
+  "cacheHitRate": 94
+}
+```
+
+### Provider-switch diagnostics
+
+Because MiMo caches live at the provider side, a provider change within one
+session can silently invalidate them. The plugin records provider identity on
+every MiMo request and emits a `mimo_provider_changed` boundary event when the
+OpenCode `providerID` changes within a session. It never forces or overrides the
+user's provider selection.
+
+Limitation: OpenRouter's *upstream* provider selection (for example
+`xiaomi/fp8` vs `atlas-cloud/fp8`) is not exposed to plugins, so only the
+OpenCode `providerID`/`modelID` are observable.
+
+### Reasoning / thinking
+
+MiMo-V2.6 supports deep thinking and reports reasoning tokens. The plugin does
+not treat reasoning replay as a cache requirement: reasoning diagnostics are
+instrumentation only, and the plugin never rewrites, duplicates, reorders, or
+re-injects reasoning content, nor changes reasoning effort for caching.
+
+### Skill-catalog / history limitation
+
+MiMo-Code moved skill catalogs out of repeatedly rewritten user messages and
+toward the system tail. In this OpenCode runtime the skill guidance
+(`<available_skills>`) and MCP instructions already live in the **system
+prefix**, not in user-message history. The plugin therefore performs no
+message-history rewrite. Skill/MCP changes simply appear as system-prefix changes
+and are reported diagnostically; the message content is left untouched.
+
+
+# Provider comparison
+
+| Provider            | Detection                          | Prompt text changed?        | Cache metadata changed?            | Primary cache signal                    |
+| ------------------- | ---------------------------------- | --------------------------- | ---------------------------------- | --------------------------------------- |
+| DeepSeek V4.1 Flash | `deepseek`                         | No                          | No                                 | provider `cache.read`/`cache.write`     |
+| GPT-5.6 Luna        | `gpt-5.6*` on OpenAI-ish endpoints | No                          | Yes: `prompt_cache_key` + options  | provider cache tokens                   |
+| GLM-5.3 Flash       | `glm-5.3*`                         | Yes, narrowly (`<env>` tail) | No provider cache key              | provider cache tokens (GLM ratio)       |
+| MiMo-V2.6 Flash/Pro | `mimo-v2.6-flash` / `mimo-v2.6-pro` | Yes, narrowly (`<env>` tail) | No: implicit caching only          | `cached_tokens / prompt_tokens`         |
+
+
 # Prompt-cache strategy
 
-The plugin uses three different strategies because cache mechanisms differ by provider.
-
-| Provider          | Prompt text changed? | Cache metadata changed? | Main strategy                     |
-| ----------------- | -------------------: | ----------------------: | --------------------------------- |
-| DeepSeek V4.1 Flash |                   No |                      No | Preserve stable harness + observe |
-| GPT-5.6 Luna      |                   No |                     Yes | Stable cache key + cache options  |
-| GLM-5.3 Flash     |        Yes, narrowly |   No provider cache key | Isolate volatile system content   |
+The plugin uses different strategies because cache mechanisms differ by provider.
+The table above summarises them; the essential point is the distinction between
+*changing prompt text* and *changing cache metadata*.
 
 This distinction is fundamental.
 
@@ -349,6 +503,15 @@ read / (read + write + input)
 
 as implemented by `glmHitRatio()`.
 
+For MiMo, the implementation uses the provider-documented prompt-cache ratio:
+
+```text
+cacheHitRate = cachedTokens / promptTokens
+```
+
+implemented by `mimoHitRate()`. `hitRatePct()` itself is left untouched so other
+providers are unaffected.
+
 ### Important metric distinction
 
 These ratios answer different questions.
@@ -361,7 +524,12 @@ These ratios answer different questions.
 
 > How much of the total prompt-token accounting was represented by cached reads?
 
-Do not treat the two percentages as interchangeable.
+`cachedTokens / promptTokens` (MiMo) answers:
+
+> Of the prompt tokens the provider processed, what fraction was served from
+> cache?
+
+Do not treat these percentages as interchangeable.
 
 ---
 
@@ -444,6 +612,29 @@ Telemetry is intended to answer questions such as:
 * Did a compaction occur?
 * Which provider/model/policy was active?
 * Did the GLM system stabilization actually change the observed prompt shape?
+* Did MiMo's environment relocation fire (`mimo_system_env_relocated`)?
+* Did MiMo's stable system prefix change (`mimo_system_prefix_changed`)?
+* Did the MiMo provider change within a session (`mimo_provider_changed`)?
+* What was MiMo's provider-reported cache hit rate (`cacheHitRate`)?
+
+A MiMo usage record adds the provider-reported cache fields:
+
+```json
+{
+  "kind": "usage",
+  "sid": "session-id",
+  "ts": 1750000000000,
+  "policy": "mimo26",
+  "provider": "openrouter",
+  "model": "xiaomi/mimo-v2.6-flash",
+  "read": 47000,
+  "input": 3000,
+  "promptTokens": 50000,
+  "cachedTokens": 47000,
+  "cacheHitRate": 94,
+  "stickySessionId": "mimo-ses-0123456789abcdef"
+}
+```
 
 
 # Configuration
@@ -472,6 +663,12 @@ The default configuration is:
     "glm53": {
       "enabled": true,
       "stabilizeSystem": true,
+      "preserveThinkingIntegrity": true
+    },
+    "mimo26": {
+      "enabled": true,
+      "stabilizeSystem": true,
+      "stickySession": true,
       "preserveThinkingIntegrity": true
     }
   }
@@ -623,6 +820,45 @@ The reasoning instrumentation is intended to identify anomalies such as:
 It is diagnostic rather than a reason to rewrite or fabricate reasoning content. The implementation maps these conditions to explicit diagnostic reasons.
 
 
+# MiMo-V2.6 configuration
+
+```json
+{
+  "mimo26": {
+    "enabled": true,
+    "stabilizeSystem": true,
+    "stickySession": true,
+    "preserveThinkingIntegrity": true
+  }
+}
+```
+
+### `enabled`
+
+Enables the MiMo-V2.6 policy.
+
+### `stabilizeSystem`
+
+Enables relocation of the volatile `<env>` section to the system-prompt tail
+(same narrow, content-preserving transformation as GLM-5.3).
+
+### `stickySession`
+
+Gates derivation/recording of the OpenRouter sticky-session id
+(`mimoSessionIdFor`). The id is recorded as telemetry; it is **not** injected
+into the request because this runtime exposes no verified OpenRouter top-level
+`session_id` path. See "OpenRouter sticky session — derived but not injected".
+
+### `preserveThinkingIntegrity`
+
+Enables reasoning diagnostics as instrumentation. It never rewrites, duplicates,
+reorders, or re-injects reasoning content, and it is not a cache requirement.
+
+No `cacheBlockSize`, `cacheTTL`, `cacheBreakpoint`, or `minimumCacheTokens`
+knobs are exposed: those values are not established by authoritative V2.6
+documentation.
+
+
 # Model detection
 
 The plugin classifies requests into:
@@ -631,6 +867,7 @@ The plugin classifies requests into:
 deepseek
 gpt56
 glm53
+mimo26
 neutral
 ```
 
@@ -639,8 +876,12 @@ The model detector recognizes:
 * DeepSeek model/provider identifiers
 * GPT-5.6 variants
 * GLM-5.3 variants
+* MiMo-V2.6 Flash and Pro (`xiaomi/mimo-v2.6-flash`, `mimo-v2.6-pro`, ...)
 
 GPT-5.6 has an additional OpenAI/Azure-context check so a string containing `gpt-5.6` does not automatically cause GPT-specific fields to be sent to an unrelated endpoint.
+
+MiMo detection targets exactly Flash and Pro: it excludes `mimo-v2.5`,
+`mimo-v2.5-pro`, and `mimo-v2.6-pro-ultraspeed`.
 
 Unknown models use the neutral policy.
 
@@ -657,7 +898,7 @@ This plugin is compatible with OpenRouter because the cache policy is based on t
 
 For cache-sensitive workloads, provider stability remains important.
 
-The plugin does not attempt to compensate for provider switching by rewriting prompts.
+The plugin does not attempt to compensate for provider switching by rewriting prompts. It records MiMo provider identity and provider-switch diagnostics so routing instability is at least observable.
 
 For that reason, a stable provider route is preferable when your goal is to measure and maximize prefix reuse.
 
@@ -964,6 +1205,12 @@ GPT-5.6:
 
 GLM-5.3:
     volatile env block relocated when eligible
+
+MiMo-V2.6:
+    volatile env block relocated when eligible
+    no GPT/GLM-only cache fields present
+    no OpenRouter top-level session_id injected (unsupported by this runtime)
+    telemetry carries provider/model/promptTokens/cachedTokens/cacheHitRate
 ```
 
 ---
@@ -1006,6 +1253,42 @@ The relevant block must contain the expected beginning and closing marker, and t
 
 ---
 
+## MiMo-V2.6 prompt is not being changed
+
+MiMo uses the same eligibility rules as GLM-5.3: exactly one system string, both
+`<env>` markers present, block identified unambiguously, and
+`mimo26.stabilizeSystem` enabled. If the block is already at the tail, the
+operation is a no-op.
+
+---
+
+## MiMo provider is not classified as `mimo26`
+
+Verify the model identifier is exactly Flash or Pro:
+
+```text
+mimo-v2.6-flash
+mimo-v2.6-pro
+xiaomi/mimo-v2.6-flash
+xiaomi/mimo-v2.6-pro
+```
+
+`mimo-v2.5`, `mimo-v2.5-pro`, and `mimo-v2.6-pro-ultraspeed` are intentionally
+not matched.
+
+---
+
+## No OpenRouter `session_id` is sent for MiMo
+
+This is expected. The installed OpenCode runtime's OpenRouter request adapter
+forwards only `usage`, `reasoning`, and `prompt_cache_key` from provider options
+and exposes no top-level `session_id` path. The plugin derives a stable
+`stickySessionId` and records it as telemetry, but does not inject it rather than
+send an unsupported field. This may change if a future runtime exposes a verified
+path.
+
+---
+
 ## Metrics file is missing
 
 Telemetry is best-effort.
@@ -1030,6 +1313,7 @@ The current implementation is intentionally conservative:
 DeepSeek  -> preserve and measure
 GPT-5.6   -> configure cache controls
 GLM-5.3   -> isolate volatile prompt content
+MiMo-V2.6 -> stabilize prefix + observe provider/cache reality
 ```
 
 That separation is the core design of the project.
