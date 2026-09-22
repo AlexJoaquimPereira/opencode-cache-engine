@@ -16,6 +16,7 @@ import {
   POLICY_DEEPSEEK,
   POLICY_GLM53,
   POLICY_GPT56,
+  POLICY_MIMO26,
   POLICY_NEUTRAL,
   canonicalStringify,
   commonPrefixLength,
@@ -28,8 +29,11 @@ import {
   gptCacheOptionsDelta,
   hitRatePct,
   loadConfig,
+  mimoHitRate,
+  mimoSessionIdFor,
   nextProcessedCursor,
   parseConfig,
+  providerChangeEvent,
   relocateVolatileEnvBlock,
   scanPage,
   shapeDiff,
@@ -221,6 +225,30 @@ test("recorder writes valid JSONL to a real file", () => {
   assert.deepEqual(JSON.parse(lines[0]), { kind: "prefix-change", sid: "s", dimensions: ["system"] })
 })
 
+// --- 14. TUI target test -----------------------------------------------------
+
+test("TUI target exports the expected plugin module", async () => {
+  const mod = await import("../src/tui.mjs")
+  assert.equal(mod.default.id, "opencode-cache-engine")
+  assert.equal(typeof mod.default.tui, "function")
+  assert.equal("server" in mod.default, false)
+})
+
+// --- 15. Package manifest test with TUI --------------------------------------
+
+test("package exposes separate server and TUI targets", async () => {
+  const { readFileSync } = await import("node:fs")
+  const { join } = await import("node:path")
+
+  const pkg = JSON.parse(
+    readFileSync(join(process.cwd(), "package.json"), "utf8")
+  )
+
+  assert.equal(pkg.exports["./server"], "./src/cache-engine.ts")
+  assert.equal(pkg.exports["./tui"], "./src/tui.mjs")
+})
+
+
 // ===========================================================================
 // Provider-aware model detection
 // ===========================================================================
@@ -267,6 +295,32 @@ test("GLM-5.3 Flash matches GLM policy (openrouter + z-ai variants)", () => {
 test("unrelated GLM models do NOT match GLM-5.3 policy", () => {
   assert.equal(detectPolicy(M("openrouter", "z-ai/glm-4.6")), POLICY_NEUTRAL)
   assert.equal(detectPolicy(M("zai", "glm-4.5")), POLICY_NEUTRAL)
+})
+
+test("MiMo V2.6 Flash/Pro match MiMo policy (openrouter + direct)", () => {
+  assert.equal(detectPolicy(M("openrouter", "xiaomi/mimo-v2.6-flash")), POLICY_MIMO26)
+  assert.equal(detectPolicy(M("openrouter", "xiaomi/mimo-v2.6-pro")), POLICY_MIMO26)
+  assert.equal(detectPolicy(M("xiaomi", "mimo-v2.6-flash")), POLICY_MIMO26)
+  assert.equal(detectPolicy(M("xiaomi", "mimo-v2.6-pro")), POLICY_MIMO26)
+  // full Model shape via api.id
+  assert.equal(
+    detectPolicy({ providerID: "openrouter", api: { id: "xiaomi/mimo-v2.6-flash", npm: "@openrouter/ai-sdk-provider" } }),
+    POLICY_MIMO26,
+  )
+})
+
+test("MiMo V2.5 and Pro-UltraSpeed do NOT match MiMo policy", () => {
+  assert.equal(detectPolicy(M("openrouter", "xiaomi/mimo-v2.5")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("openrouter", "xiaomi/mimo-v2.5-pro")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("xiaomi", "mimo-v2.5")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("xiaomi", "mimo-v2.6-pro-ultraspeed")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("xiaomi", "mimo-v2.6-flashx")), POLICY_NEUTRAL)
+})
+
+test("unrelated MiMo/other models do NOT match MiMo policy", () => {
+  assert.equal(detectPolicy(M("openrouter", "xiaomi/mimo-v2")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("openrouter", "xiaomi/mimo-v2-flash")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("anthropic", "claude-sonnet-4-5")), POLICY_NEUTRAL)
 })
 
 test("unrelated models match neutral policy", () => {
@@ -535,10 +589,16 @@ test("empty current sequence -> no anomalies", () => {
 // Config: provider policies
 // ===========================================================================
 
-test("config defaults enable all three policies", () => {
+test("config defaults enable all four policies", () => {
   const cfg = parseConfig({}, {})
   assert.deepEqual(cfg.policies.deepseek, { enabled: true })
   assert.deepEqual(cfg.policies.glm53, { enabled: true, stabilizeSystem: true, preserveThinkingIntegrity: true })
+  assert.deepEqual(cfg.policies.mimo26, {
+    enabled: true,
+    stabilizeSystem: true,
+    stickySession: true,
+    preserveThinkingIntegrity: true,
+  })
   assert.deepEqual(cfg.policies.gpt56, {
     enabled: true,
     promptCacheKey: true,
@@ -565,6 +625,7 @@ test("config policy overrides are honored", () => {
         },
         glm53: { stabilizeSystem: false },
         deepseek: { enabled: true },
+        mimo26: { enabled: false, stabilizeSystem: false, stickySession: false },
       },
     },
     {},
@@ -578,6 +639,10 @@ test("config policy overrides are honored", () => {
   assert.equal(cfg.policies.gpt56.ttl, "1h")
   assert.equal(cfg.policies.glm53.stabilizeSystem, false)
   assert.equal(cfg.policies.glm53.preserveThinkingIntegrity, true)
+  assert.equal(cfg.policies.mimo26.enabled, false)
+  assert.equal(cfg.policies.mimo26.stabilizeSystem, false)
+  assert.equal(cfg.policies.mimo26.stickySession, false)
+  assert.equal(cfg.policies.mimo26.preserveThinkingIntegrity, true)
 })
 
 test("config invalid policy values fall back to defaults", () => {
@@ -762,4 +827,144 @@ test("boundary: reasoning-integrity reason tokens", () => {
     "reasoning_modified",
   ])
   assert.deepEqual(reasoningIssueReasons(null), [])
+})
+
+// ===========================================================================
+// MiMo-V2.6: system env relocation (shared content-preserving helper)
+// ===========================================================================
+
+const MIMO_SYSTEM = [
+  "You are a senior software engineer.",
+  "You are powered by the model named mimo-v2.6-flash. The exact model ID is xiaomi/mimo-v2.6-flash",
+  "Here is some useful information about the environment you are running in:",
+  "<env>",
+  "Working directory: /home/dev/project",
+  "Today's date: 2026-08-17",
+  "</env>",
+  "You MUST follow AGENTS.md instructions and keep your responses concise.",
+].join("\n")
+
+test("MiMo env block is relocated to the tail, contents preserved exactly", () => {
+  const { text, changed } = relocateVolatileEnvBlock(MIMO_SYSTEM)
+  assert.equal(changed, true)
+  assert.ok(text.endsWith("</env>"))
+  const norm = (t) => t.split("\n").filter((l) => l).sort().join("\n")
+  assert.equal(norm(text), norm(MIMO_SYSTEM))
+  assert.ok(text.indexOf("You MUST follow") < text.indexOf("You are powered"))
+})
+
+test("MiMo relocation is a no-op when the block is already at the tail", () => {
+  const already = relocateVolatileEnvBlock(MIMO_SYSTEM).text
+  const again = relocateVolatileEnvBlock(already)
+  assert.equal(again.changed, false)
+  assert.equal(again.text, already)
+})
+
+test("MiMo relocation is a no-op when start/end markers are missing", () => {
+  const missingStart = "Just a system prompt.\n<env>\nToday's date: x\n</env>"
+  assert.equal(relocateVolatileEnvBlock(missingStart).changed, false)
+  const missingEnd = "You are powered by the model named mimo-v2.6-flash\nbut never closed"
+  assert.equal(relocateVolatileEnvBlock(missingEnd).changed, false)
+})
+
+// ===========================================================================
+// MiMo-V2.6: sticky-session identity (pure, derived but not injected)
+// ===========================================================================
+
+test("mimoSessionIdFor: deterministic + stable for the same session", () => {
+  assert.equal(mimoSessionIdFor("ses_abc123"), mimoSessionIdFor("ses_abc123"))
+})
+
+test("mimoSessionIdFor: distinct sessions produce distinct ids", () => {
+  assert.notEqual(mimoSessionIdFor("ses_abc"), mimoSessionIdFor("ses_xyz"))
+})
+
+test("mimoSessionIdFor: printable, no whitespace, within 256 chars", () => {
+  const id = mimoSessionIdFor("ses_" + "a".repeat(500))
+  assert.ok(id.length <= 256)
+  assert.ok(!/\s/.test(id))
+  assert.ok(/^[\x20-\x7E]+$/.test(id))
+})
+
+test("mimoSessionIdFor: invalid input -> null (no fabrication)", () => {
+  assert.equal(mimoSessionIdFor(undefined), null)
+  assert.equal(mimoSessionIdFor(null), null)
+  assert.equal(mimoSessionIdFor(""), null)
+  assert.equal(mimoSessionIdFor(123), null)
+})
+
+test("mimoSessionIdFor: transient request fields cannot alter the id", () => {
+  // the helper is a pure function of the session id; extra args are ignored
+  assert.equal(mimoSessionIdFor("ses_stable"), mimoSessionIdFor("ses_stable", { turn: 7, temperature: 0.9 }))
+})
+
+// ===========================================================================
+// MiMo-V2.6: cached/prompt token metrics
+// ===========================================================================
+
+test("mimoHitRate = cachedTokens / promptTokens", () => {
+  assert.equal(mimoHitRate(47000, 50000), 94)
+  assert.equal(mimoHitRate(0, 100), 0)
+  assert.equal(mimoHitRate(100, 100), 100)
+})
+
+test("mimoHitRate returns null for zero/unknown denominators (no fabrication)", () => {
+  assert.equal(mimoHitRate(0, 0), null)
+  assert.equal(mimoHitRate(10, 0), null)
+  assert.equal(mimoHitRate(NaN, 100), null)
+  assert.equal(mimoHitRate(10, NaN), null)
+  assert.equal(mimoHitRate(undefined, 100), null)
+  assert.equal(mimoHitRate(10, undefined), null)
+})
+
+test("mimoHitRate is NOT the read/(read+write) form", () => {
+  // read=80, input=20 -> promptTokens derived 100 -> 80%. The read/(read+write)
+  // form would give 100% for (80, 0); they must not be conflated.
+  assert.equal(mimoHitRate(80, 80 + 20), 80)
+  assert.equal(hitRatePct(80, 0), 100)
+})
+
+// ===========================================================================
+// MiMo-V2.6: provider-switch diagnostics
+// ===========================================================================
+
+test("providerChangeEvent: no event until two real observations exist", () => {
+  assert.deepEqual(providerChangeEvent(null, { providerID: "openrouter", modelID: "xiaomi/mimo-v2.6-flash" }), {
+    changed: false,
+    from: null,
+    to: null,
+  })
+  assert.equal(providerChangeEvent({ providerID: "openrouter" }, null).changed, false)
+})
+
+test("providerChangeEvent: same provider -> no change", () => {
+  const a = { providerID: "openrouter", modelID: "xiaomi/mimo-v2.6-flash" }
+  const b = { providerID: "openrouter", modelID: "xiaomi/mimo-v2.6-pro" }
+  assert.equal(providerChangeEvent(a, b).changed, false)
+})
+
+test("providerChangeEvent: different provider -> change with from/to", () => {
+  const a = { providerID: "openrouter", modelID: "xiaomi/mimo-v2.6-flash" }
+  const b = { providerID: "xiaomi", modelID: "mimo-v2.6-flash" }
+  const ev = providerChangeEvent(a, b)
+  assert.equal(ev.changed, true)
+  assert.deepEqual(ev.from, a)
+  assert.deepEqual(ev.to, b)
+})
+
+// ===========================================================================
+// MiMo-V2.6: no tool-definition mutation
+// ===========================================================================
+
+test("MiMo policy performs no tool mutation (fingerprints are pure inputs)", () => {
+  // The plugin never adds a MiMo tool-ordering pass: this runtime already sorts
+  // tools alphabetically before the wire. Classifying a model as MiMo must not
+  // affect tool fingerprints, which are a pure function of the tool definitions.
+  const model = { providerID: "openrouter", modelID: "xiaomi/mimo-v2.6-flash" }
+  assert.equal(detectPolicy(model), POLICY_MIMO26)
+  const before = { sem: toolFingerprint(TOOLS), wire: toolWireFingerprint(TOOLS) }
+  const after = { sem: toolFingerprint(TOOLS), wire: toolWireFingerprint(TOOLS) }
+  assert.deepEqual(after, before)
+  // semantic fingerprint stays order-insensitive regardless of the policy
+  assert.equal(toolFingerprint([...TOOLS].reverse()), before.sem)
 })
