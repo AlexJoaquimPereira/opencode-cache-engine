@@ -1,6 +1,6 @@
 {
   "name": "opencode-cache-engine",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": false,
   "description": "Provider-aware prompt-cache optimization and telemetry for OpenCode",
   "keywords": [
@@ -9,7 +9,8 @@
     "prompt-cache",
     "deepseek",
     "glm",
-    "gpt"
+    "gpt",
+    "mimo"
   ],
   "homepage": "https://github.com/AlexJoaquimPereira/opencode-cache-engine#readme",
   "bugs": {
