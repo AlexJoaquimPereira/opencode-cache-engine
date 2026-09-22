@@ -20,6 +20,12 @@
       "enabled": true,
       "stabilizeSystem": true,
       "preserveThinkingIntegrity": true
+    },
+    "mimo26": {
+      "enabled": true,
+      "stabilizeSystem": true,
+      "stickySession": true,
+      "preserveThinkingIntegrity": true
     }
   }
 }
