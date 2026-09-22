@@ -17,3 +17,4 @@ coverage/
 
 # OpenCode specific markdown files
 session-*.md
+AGENTS.md
