@@ -5,9 +5,10 @@
 // TypeScript compiler. The plugin entry (cache-engine.ts) imports this module.
 //
 // This module is PROVIDER-AWARE: it classifies a model into a cache-policy
-// family (deepseek | gpt56 | glm53 | neutral) and exposes small pure helpers for
-// each family's strategy. The plugin entry (cache-engine.ts) remains the only
-// place that touches OpenCode hooks; every decision here is testable in Node.
+// family (deepseek | gpt56 | glm53 | mimo26 | neutral) and exposes small pure
+// helpers for each family's strategy. The plugin entry (cache-engine.ts) remains
+// the only place that touches OpenCode hooks; every decision here is testable in
+// Node.
 //
 // Terminology note: these functions deal with the *observed* system/tool
 // prefix shape. An observed change means the request's prefix bytes changed; it
@@ -35,6 +36,7 @@ export const DIGEST_TEMPLATE = `## Session digest (cache-stable continuation blo
 export const POLICY_DEEPSEEK = "deepseek"
 export const POLICY_GPT56 = "gpt56"
 export const POLICY_GLM53 = "glm53"
+export const POLICY_MIMO26 = "mimo26"
 export const POLICY_NEUTRAL = "neutral"
 
 export const GPT56_DEFAULT_TTL = "30m"
@@ -63,6 +65,15 @@ function defaultPolicies() {
     glm53: {
       enabled: true,
       stabilizeSystem: true,
+      preserveThinkingIntegrity: true,
+    },
+    mimo26: {
+      enabled: true,
+      stabilizeSystem: true,
+      stickySession: true,
+      // MiMo reasoning diagnostics are instrumentation only. Unlike GLM
+      // preserved thinking, there is no evidence that MiMo prompt-cache reuse
+      // depends on reasoning replay, so this never rewrites reasoning content.
       preserveThinkingIntegrity: true,
     },
   }
@@ -118,7 +129,7 @@ export function parseConfig(raw, env) {
     if (typeof raw.logPrefixChanges === "boolean") cfg.logPrefixChanges = raw.logPrefixChanges
     if (raw.policies && typeof raw.policies === "object") {
       const d = defaultPolicies()
-      for (const fam of ["deepseek", "gpt56", "glm53"]) {
+      for (const fam of ["deepseek", "gpt56", "glm53", "mimo26"]) {
         if (raw.policies[fam]) cfg.policies[fam] = parsePolicy(raw.policies[fam], d[fam])
       }
     }
@@ -232,6 +243,10 @@ function isOpenAIish(s) {
 const GPT56_RE = /gpt-5\.6(?![\d.])/i
 // GLM 5.3 family only (not glm-4.x / glm-4.6 etc).
 const GLM53_RE = /glm-5\.3(?![\d.])/i
+// Xiaomi MiMo V2.6 explicitly targets Flash + Pro only. The trailing
+// (?![\w-]) guard prevents matching a hypothetical "mimo-v2.6-pro-ultraspeed"
+// or "mimo-v2.6-flashx", and the v2\.6 literal excludes V2.5 / V2.
+const MIMO26_RE = /mimo-v2\.6-(flash|pro)(?![\w-])/i
 const DEEPSEEK_RE = /deepseek/i
 
 // Pure classifier. Returns one of the POLICY_* keys. `model` may be a full
@@ -242,6 +257,7 @@ export function detectPolicy(model) {
   if (!s.slug) return POLICY_NEUTRAL
   if (GPT56_RE.test(s.slug) && isOpenAIish(s)) return POLICY_GPT56
   if (GLM53_RE.test(s.slug)) return POLICY_GLM53
+  if (MIMO26_RE.test(s.slug)) return POLICY_MIMO26
   if (DEEPSEEK_RE.test(s.slug) || DEEPSEEK_RE.test(s.providerID)) return POLICY_DEEPSEEK
   return POLICY_NEUTRAL
 }
@@ -284,16 +300,17 @@ export function gptCacheOptionsDelta(existingOptions, { key, mode = GPT56_DEFAUL
 
 // The OpenCode system string begins with the agent prompt, then an env block
 // ("You are powered by the model named ... Today's date: ... </env>") whose
-// only per-day volatile byte is the date line. For GLM-5.3 we relocate that
-// whole identifiable env block to the END of the system string so a daily date
-// change only invalidates the tail of the prompt, leaving the long stable
-// prefix intact. Content is preserved byte-for-byte (only position changes).
+// only per-day volatile byte is the date line. For GLM-5.3 and MiMo-V2.6 we
+// relocate that whole identifiable env block to the END of the system string so
+// a daily date change only invalidates the tail of the prompt, leaving the long
+// stable prefix intact. Content is preserved byte-for-byte (only position
+// changes).
 //
 // Returns { text, changed }. When the block cannot be identified unambiguously,
 // returns the input unchanged (changed:false). This is a content-preserving
 // reorder of clearly volatile metadata only -- it never reorders arbitrary
 // instructions. This function is ONLY applied when the caller has already
-// classified the model as GLM-5.3.
+// classified the model into a family that opts into system stabilization.
 export function relocateVolatileEnvBlock(text) {
   if (typeof text !== "string") return { text, changed: false }
   const START = "You are powered by the model named "
@@ -436,6 +453,56 @@ export function glmHitRatio(read, write, input) {
   const denom = read + write + input
   if (denom <= 0 || !Number.isFinite(read)) return null
   return Math.round((100 * read) / denom)
+}
+
+// ---------------------------------------------------------------------------
+// MiMo-V2.6 cache metrics + sticky-session identity
+//
+// MiMo caching is provider-managed (implicit context caching). Xiaomi documents
+// usage.prompt_tokens_details.cached_tokens as the number of PROMPT tokens
+// served from cache and prompt_tokens as the total prompt-token count, so the
+// authoritative cache metric is cachedTokens / promptTokens -- NOT the
+// read/(read+write) form used by other families. `hitRatePct` is intentionally
+// left untouched so existing providers are unaffected.
+//
+// The runtime exposes `Message.info.tokens` as { input, output, cache:{read,
+// write} } where `input` is the NON-cached prompt input and `cache.read` is the
+// cached prompt input. Total prompt tokens are therefore derived as
+// read + input (cache.write is a separate accounting bucket and is NOT folded
+// in). We never fabricate cache-write values.
+// ---------------------------------------------------------------------------
+
+// cachedTokens / promptTokens, rounded to a percentage. Returns null when the
+// denominator is unknown/zero or the inputs are not finite numbers, so no
+// fabricated hit rate is ever emitted.
+export function mimoHitRate(cachedTokens, promptTokens) {
+  if (!Number.isFinite(cachedTokens) || !Number.isFinite(promptTokens)) return null
+  if (promptTokens <= 0 || cachedTokens < 0) return null
+  return Math.round((100 * cachedTokens) / promptTokens)
+}
+
+// Derive a stable, session-scoped identifier suitable for OpenRouter's
+// documented `session_id` sticky-routing key. Pure function of the OpenCode
+// session id only: identical sessions map to identical ids, distinct sessions
+// map to distinct ids, and transient request contents cannot influence it.
+// The value is printable, contains no whitespace, and is far below the 256-char
+// cap (25 chars). NOTE: this runtime's OpenRouter request adapter does not emit
+// a top-level `session_id` (it forwards only usage/reasoning/prompt_cache_key),
+// so this id is currently recorded as telemetry only and is never injected.
+export function mimoSessionIdFor(sessionID) {
+  if (typeof sessionID !== "string" || sessionID.length === 0) return null
+  return `mimo-ses-${shorthash(sessionID)}`
+}
+
+// Detect a provider switch within the same session. `previous` and `current`
+// are {providerID, modelID} observations. Returns {changed:false} until two
+// real observations exist; a change is only reported when both are known and
+// the providerID differs. Never forces or overrides provider selection.
+export function providerChangeEvent(previous, current) {
+  const prev = previous && typeof previous.providerID === "string" ? previous.providerID : null
+  const cur = current && typeof current.providerID === "string" ? current.providerID : null
+  if (prev == null || cur == null || prev === cur) return { changed: false, from: null, to: null }
+  return { changed: true, from: previous, to: current }
 }
 
 // Decide whether a `usage` record should be emitted for an aggregation sample.
