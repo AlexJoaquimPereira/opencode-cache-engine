@@ -9,3 +9,8 @@ dist/
 .bak-*
 coverage/
 .telemetry/
+
+# archive files
+*.tar.gz
+*.tgz
+*.zip
