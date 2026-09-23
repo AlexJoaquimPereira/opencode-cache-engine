@@ -481,6 +481,25 @@ export function mimoHitRate(cachedTokens, promptTokens) {
   return Math.round((100 * cachedTokens) / promptTokens)
 }
 
+// Derive a provider-neutral stable ID from the logical OpenCode session ID.
+// The full SHA-256 digest avoids intentional truncation/collapse of distinct
+// sessions. This helper only generates an identifier; it does not select a
+// provider or inject the identifier into any request transport.
+export function stableSessionIdFor(sessionID) {
+  if (typeof sessionID !== "string" || sessionID.length === 0) return null
+  return `oc-ses-${createHash("sha256").update(sessionID).digest("hex")}`
+}
+
+// OpenRouter session affinity is currently eligible only for the two policy
+// families with documented affinity use: MiMo-V2.6 and GLM-5.3. This pure
+// policy decision is separate from ID generation and transport/header injection.
+export function isOpenRouterAffinityEligible(policyFamily, providerID) {
+  return (
+    providerID === "openrouter" &&
+    (policyFamily === POLICY_MIMO26 || policyFamily === POLICY_GLM53)
+  )
+}
+
 // Derive a stable, session-scoped identifier suitable for OpenRouter's
 // documented `session_id` sticky-routing key. Pure function of the OpenCode
 // session id only: identical sessions map to identical ids, distinct sessions
