@@ -28,6 +28,7 @@ import {
   glmHitRatio,
   gptCacheOptionsDelta,
   hitRatePct,
+  isOpenRouterAffinityEligible,
   loadConfig,
   mimoHitRate,
   mimoSessionIdFor,
@@ -40,6 +41,7 @@ import {
   shapeFieldDiffs,
   shorthash,
   shouldAggregate,
+  stableSessionIdFor,
   systemShapeHashes,
   toolFingerprint,
   toolWireFingerprint,
@@ -871,8 +873,20 @@ test("MiMo relocation is a no-op when start/end markers are missing", () => {
 // MiMo-V2.6: sticky-session identity (pure, derived but not injected)
 // ===========================================================================
 
+test("stableSessionIdFor: deterministic for the same logical session", () => {
+  assert.equal(stableSessionIdFor("ses_abc123"), stableSessionIdFor("ses_abc123"))
+})
+
+test("stableSessionIdFor: different logical sessions produce different ids", () => {
+  assert.notEqual(stableSessionIdFor("ses_abc"), stableSessionIdFor("ses_xyz"))
+})
+
 test("mimoSessionIdFor: deterministic + stable for the same session", () => {
   assert.equal(mimoSessionIdFor("ses_abc123"), mimoSessionIdFor("ses_abc123"))
+})
+
+test("mimoSessionIdFor preserves its existing id format", () => {
+  assert.equal(mimoSessionIdFor("ses_abc123"), `mimo-ses-${shorthash("ses_abc123")}`)
 })
 
 test("mimoSessionIdFor: distinct sessions produce distinct ids", () => {
@@ -896,6 +910,31 @@ test("mimoSessionIdFor: invalid input -> null (no fabrication)", () => {
 test("mimoSessionIdFor: transient request fields cannot alter the id", () => {
   // the helper is a pure function of the session id; extra args are ignored
   assert.equal(mimoSessionIdFor("ses_stable"), mimoSessionIdFor("ses_stable", { turn: 7, temperature: 0.9 }))
+})
+
+// ===========================================================================
+// OpenRouter session-affinity eligibility (pure policy decision only)
+// ===========================================================================
+
+test("OpenRouter affinity is eligible for MiMo and GLM only", () => {
+  assert.equal(isOpenRouterAffinityEligible(POLICY_MIMO26, "openrouter"), true)
+  assert.equal(isOpenRouterAffinityEligible(POLICY_GLM53, "openrouter"), true)
+})
+
+test("OpenRouter affinity is ineligible for non-OpenRouter providers", () => {
+  assert.equal(isOpenRouterAffinityEligible(POLICY_MIMO26, "xiaomi"), false)
+  assert.equal(isOpenRouterAffinityEligible(POLICY_GLM53, "zai"), false)
+  assert.equal(isOpenRouterAffinityEligible(POLICY_MIMO26, "unknown-provider"), false)
+})
+
+test("OpenRouter affinity is ineligible for DeepSeek and GPT", () => {
+  assert.equal(isOpenRouterAffinityEligible(POLICY_DEEPSEEK, "openrouter"), false)
+  assert.equal(isOpenRouterAffinityEligible(POLICY_GPT56, "openrouter"), false)
+})
+
+test("OpenRouter affinity is ineligible for unknown families and providers", () => {
+  assert.equal(isOpenRouterAffinityEligible("unknown-family", "openrouter"), false)
+  assert.equal(isOpenRouterAffinityEligible(POLICY_MIMO26, undefined), false)
 })
 
 // ===========================================================================
