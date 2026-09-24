@@ -1007,3 +1007,126 @@ test("MiMo policy performs no tool mutation (fingerprints are pure inputs)", () 
   // semantic fingerprint stays order-insensitive regardless of the policy
   assert.equal(toolFingerprint([...TOOLS].reverse()), before.sem)
 })
+
+// ===========================================================================
+// TEMPORARY v0.3.2: chat.headers transport-path diagnostic (hook level)
+//
+// Proves the chat.headers hook boundary can inspect and mutate outgoing
+// request headers WITHOUT enabling production affinity. The runtime (1.18.32)
+// triggers chat.headers in LLMRequestPrep.prepare with output.headers = {} and
+// merges the hook result into the provider request headers AFTER runtime and
+// model headers, i.e. before the provider request boundary.
+//
+// The diagnostic is gated by env CACHE_ENGINE_HEADERS_DIAGNOSTIC=1 and by
+// OpenRouter-affinity eligibility (MiMo/GLM over provider "openrouter"). These
+// tests load the real plugin entry (type-stripped by Node) with a fake client
+// and no model calls; HOME is pointed at a temp dir so the default config
+// (enabled) applies and no user config file is read.
+// ===========================================================================
+
+const HOOKS_DIAG_ENV = "CACHE_ENGINE_HEADERS_DIAGNOSTIC"
+const HOOKS_DIAG_KEY = "x-cache-engine-diag"
+
+const fakeClient = {
+  app: { log: async () => ({}) },
+  session: { get: async () => ({ data: {} }) },
+}
+
+async function loadTransportHooks() {
+  const home = mkdtempSync(join(tmpdir(), "ce-hooks-"))
+  const prevHome = process.env.HOME
+  process.env.HOME = home
+  try {
+    const { CacheEngine } = await import("../src/cache-engine.ts")
+    return await CacheEngine({ client: fakeClient, directory: home })
+  } finally {
+    process.env.HOME = prevHome
+  }
+}
+
+const headerInput = (model) => ({
+  sessionID: "ses_headers",
+  agent: "build",
+  model,
+  provider: { id: model.providerID },
+  message: { role: "user", content: "hi" },
+})
+
+test("v0.3.2 diagnostic: chat.headers hook is registered", async () => {
+  const hooks = await loadTransportHooks()
+  assert.equal(typeof hooks["chat.headers"], "function")
+})
+
+test("v0.3.2 diagnostic: gate off -> headers untouched (no mutation by default)", async () => {
+  const hooks = await loadTransportHooks()
+  delete process.env[HOOKS_DIAG_ENV]
+  const output = { headers: { "x-session-affinity": "ses_headers", "X-Session-Id": "ses_headers" } }
+  const before = { ...output.headers }
+  await hooks["chat.headers"](headerInput({ providerID: "openrouter", id: "xiaomi/mimo-v2.6-flash", api: { id: "xiaomi/mimo-v2.6-flash" } }), output)
+  assert.deepEqual(output.headers, before)
+})
+
+test("v0.3.2 diagnostic: eligible provider adds header, preserves existing headers, no object replacement", async () => {
+  const hooks = await loadTransportHooks()
+  process.env[HOOKS_DIAG_ENV] = "1"
+  try {
+    const existing = { "x-session-affinity": "ses_headers", "X-Session-Id": "ses_headers", "User-Agent": "opencode" }
+    const output = { headers: { ...existing } }
+    const headersRef = output.headers
+    await hooks["chat.headers"](headerInput({ providerID: "openrouter", id: "xiaomi/mimo-v2.6-flash", api: { id: "xiaomi/mimo-v2.6-flash" } }), output)
+    assert.equal(output.headers, headersRef, "headers object must be mutated in place, not replaced")
+    assert.deepEqual(output.headers["x-session-affinity"], "ses_headers")
+    assert.deepEqual(output.headers["X-Session-Id"], "ses_headers")
+    assert.deepEqual(output.headers["User-Agent"], "opencode")
+    assert.equal(output.headers[HOOKS_DIAG_KEY], "v0.3.2-temp")
+  } finally {
+    delete process.env[HOOKS_DIAG_ENV]
+  }
+})
+
+test("v0.3.2 diagnostic: GLM over OpenRouter is eligible", async () => {
+  const hooks = await loadTransportHooks()
+  process.env[HOOKS_DIAG_ENV] = "1"
+  try {
+    const output = { headers: {} }
+    await hooks["chat.headers"](headerInput({ providerID: "openrouter", id: "z-ai/glm-5.3", api: { id: "z-ai/glm-5.3" } }), output)
+    assert.equal(output.headers[HOOKS_DIAG_KEY], "v0.3.2-temp")
+  } finally {
+    delete process.env[HOOKS_DIAG_ENV]
+  }
+})
+
+test("v0.3.2 diagnostic: ineligible providers -> no header mutation", async () => {
+  const hooks = await loadTransportHooks()
+  process.env[HOOKS_DIAG_ENV] = "1"
+  try {
+    const cases = [
+      { providerID: "deepseek", id: "deepseek-chat", api: { id: "deepseek-chat" } }, // DeepSeek
+      { providerID: "openai", id: "gpt-5.6", api: { id: "gpt-5.6", npm: "@ai-sdk/openai" } }, // GPT
+      { providerID: "xiaomi", id: "mimo-v2.6-flash", api: { id: "mimo-v2.6-flash" } }, // direct Xiaomi
+      { providerID: "zai", id: "glm-5.3", api: { id: "glm-5.3" } }, // direct Z.AI
+      { providerID: "unknown-provider", id: "some-model", api: { id: "some-model" } }, // unknown
+    ]
+    for (const model of cases) {
+      const output = { headers: { "x-session-affinity": "keep", "X-Session-Id": "keep" } }
+      await hooks["chat.headers"](headerInput(model), output)
+      assert.equal(output.headers[HOOKS_DIAG_KEY], undefined, `no diagnostic header for ${model.providerID}`)
+      assert.deepEqual(output.headers, { "x-session-affinity": "keep", "X-Session-Id": "keep" }, `headers preserved for ${model.providerID}`)
+    }
+  } finally {
+    delete process.env[HOOKS_DIAG_ENV]
+  }
+})
+
+test("v0.3.2 diagnostic: chat.headers never mutates params/system/options", async () => {
+  const hooks = await loadTransportHooks()
+  process.env[HOOKS_DIAG_ENV] = "1"
+  try {
+    const output = { headers: {} }
+    await hooks["chat.headers"](headerInput({ providerID: "openrouter", id: "xiaomi/mimo-v2.6-flash", api: { id: "xiaomi/mimo-v2.6-flash" } }), output)
+    assert.deepEqual(Object.keys(output), ["headers"], "only the headers field may be touched")
+    assert.equal(output.headers[HOOKS_DIAG_KEY], "v0.3.2-temp")
+  } finally {
+    delete process.env[HOOKS_DIAG_ENV]
+  }
+})
