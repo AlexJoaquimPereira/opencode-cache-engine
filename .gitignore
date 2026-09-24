@@ -15,6 +15,7 @@ coverage/
 *.tgz
 *.zip
 
-# OpenCode specific markdown files
+# OpenCode specific files
+.opencode
 session-*.md
 AGENTS.md
