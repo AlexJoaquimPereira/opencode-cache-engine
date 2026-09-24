@@ -9,6 +9,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { execFileSync } from "node:child_process"
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
@@ -1009,124 +1010,114 @@ test("MiMo policy performs no tool mutation (fingerprints are pure inputs)", () 
 })
 
 // ===========================================================================
-// TEMPORARY v0.3.2: chat.headers transport-path diagnostic (hook level)
-//
-// Proves the chat.headers hook boundary can inspect and mutate outgoing
-// request headers WITHOUT enabling production affinity. The runtime (1.18.32)
-// triggers chat.headers in LLMRequestPrep.prepare with output.headers = {} and
-// merges the hook result into the provider request headers AFTER runtime and
-// model headers, i.e. before the provider request boundary.
-//
-// The diagnostic is gated by env CACHE_ENGINE_HEADERS_DIAGNOSTIC=1 and by
-// OpenRouter-affinity eligibility (MiMo/GLM over provider "openrouter"). These
-// tests load the real plugin entry (type-stripped by Node) with a fake client
-// and no model calls; HOME is pointed at a temp dir so the default config
-// (enabled) applies and no user config file is read.
+// MiMo/OpenRouter session affinity (real chat.headers hook, no model calls)
 // ===========================================================================
 
-const HOOKS_DIAG_ENV = "CACHE_ENGINE_HEADERS_DIAGNOSTIC"
-const HOOKS_DIAG_KEY = "x-cache-engine-diag"
-
-const fakeClient = {
-  app: { log: async () => ({}) },
-  session: { get: async () => ({ data: {} }) },
-}
-
-async function loadTransportHooks() {
-  const home = mkdtempSync(join(tmpdir(), "ce-hooks-"))
-  const prevHome = process.env.HOME
-  process.env.HOME = home
-  try {
-    const { CacheEngine } = await import("../src/cache-engine.ts")
-    return await CacheEngine({ client: fakeClient, directory: home })
-  } finally {
-    process.env.HOME = prevHome
-  }
-}
-
-const headerInput = (model) => ({
-  sessionID: "ses_headers",
-  agent: "build",
-  model,
-  provider: { id: model.providerID },
-  message: { role: "user", content: "hi" },
-})
-
-test("v0.3.2 diagnostic: chat.headers hook is registered", async () => {
-  const hooks = await loadTransportHooks()
-  assert.equal(typeof hooks["chat.headers"], "function")
-})
-
-test("v0.3.2 diagnostic: gate off -> headers untouched (no mutation by default)", async () => {
-  const hooks = await loadTransportHooks()
-  delete process.env[HOOKS_DIAG_ENV]
-  const output = { headers: { "x-session-affinity": "ses_headers", "X-Session-Id": "ses_headers" } }
-  const before = { ...output.headers }
-  await hooks["chat.headers"](headerInput({ providerID: "openrouter", id: "xiaomi/mimo-v2.6-flash", api: { id: "xiaomi/mimo-v2.6-flash" } }), output)
-  assert.deepEqual(output.headers, before)
-})
-
-test("v0.3.2 diagnostic: eligible provider adds header, preserves existing headers, no object replacement", async () => {
-  const hooks = await loadTransportHooks()
-  process.env[HOOKS_DIAG_ENV] = "1"
-  try {
-    const existing = { "x-session-affinity": "ses_headers", "X-Session-Id": "ses_headers", "User-Agent": "opencode" }
-    const output = { headers: { ...existing } }
-    const headersRef = output.headers
-    await hooks["chat.headers"](headerInput({ providerID: "openrouter", id: "xiaomi/mimo-v2.6-flash", api: { id: "xiaomi/mimo-v2.6-flash" } }), output)
-    assert.equal(output.headers, headersRef, "headers object must be mutated in place, not replaced")
-    assert.deepEqual(output.headers["x-session-affinity"], "ses_headers")
-    assert.deepEqual(output.headers["X-Session-Id"], "ses_headers")
-    assert.deepEqual(output.headers["User-Agent"], "opencode")
-    assert.equal(output.headers[HOOKS_DIAG_KEY], "v0.3.2-temp")
-  } finally {
-    delete process.env[HOOKS_DIAG_ENV]
-  }
-})
-
-test("v0.3.2 diagnostic: GLM over OpenRouter is eligible", async () => {
-  const hooks = await loadTransportHooks()
-  process.env[HOOKS_DIAG_ENV] = "1"
-  try {
-    const output = { headers: {} }
-    await hooks["chat.headers"](headerInput({ providerID: "openrouter", id: "z-ai/glm-5.3", api: { id: "z-ai/glm-5.3" } }), output)
-    assert.equal(output.headers[HOOKS_DIAG_KEY], "v0.3.2-temp")
-  } finally {
-    delete process.env[HOOKS_DIAG_ENV]
-  }
-})
-
-test("v0.3.2 diagnostic: ineligible providers -> no header mutation", async () => {
-  const hooks = await loadTransportHooks()
-  process.env[HOOKS_DIAG_ENV] = "1"
-  try {
-    const cases = [
-      { providerID: "deepseek", id: "deepseek-chat", api: { id: "deepseek-chat" } }, // DeepSeek
-      { providerID: "openai", id: "gpt-5.6", api: { id: "gpt-5.6", npm: "@ai-sdk/openai" } }, // GPT
-      { providerID: "xiaomi", id: "mimo-v2.6-flash", api: { id: "mimo-v2.6-flash" } }, // direct Xiaomi
-      { providerID: "zai", id: "glm-5.3", api: { id: "glm-5.3" } }, // direct Z.AI
-      { providerID: "unknown-provider", id: "some-model", api: { id: "some-model" } }, // unknown
-    ]
-    for (const model of cases) {
-      const output = { headers: { "x-session-affinity": "keep", "X-Session-Id": "keep" } }
-      await hooks["chat.headers"](headerInput(model), output)
-      assert.equal(output.headers[HOOKS_DIAG_KEY], undefined, `no diagnostic header for ${model.providerID}`)
-      assert.deepEqual(output.headers, { "x-session-affinity": "keep", "X-Session-Id": "keep" }, `headers preserved for ${model.providerID}`)
+async function runMiMoHeaderHookProbe() {
+  const home = mkdtempSync(join(tmpdir(), "ce-mimo-headers-"))
+  const pluginURL = new URL("../src/cache-engine.ts", import.meta.url).href
+  const coreURL = new URL("../src/cache-engine-core.mjs", import.meta.url).href
+  const script = `
+    import assert from "node:assert/strict"
+    const { CacheEngine } = await import(${JSON.stringify(pluginURL)})
+    const { mimoSessionIdFor } = await import(${JSON.stringify(coreURL)})
+    const client = {
+      app: { log: async () => ({}) },
+      session: { get: async () => ({ data: { parentID: null } }) },
+      tool: { list: async () => ({ data: [] }) },
     }
-  } finally {
-    delete process.env[HOOKS_DIAG_ENV]
-  }
+    const hooks = await CacheEngine({ client, directory: process.env.HOME })
+    assert.equal(typeof hooks["chat.headers"], "function")
+    const invoke = async (model, sessionID, existingHeaders = {}) => {
+      const output = { headers: { ...existingHeaders } }
+      const headersRef = output.headers
+      await hooks["chat.headers"]({
+        sessionID,
+        agent: "build",
+        model,
+        provider: { id: model.providerID },
+        message: { id: "msg", sessionID, role: "user", content: "probe" },
+      }, output)
+      return { headers: output.headers, sameObject: output.headers === headersRef, modelHeaders: model.headers }
+    }
+    const mimoOpenRouter = {
+      providerID: "openrouter",
+      id: "xiaomi/mimo-v2.6-flash",
+      api: { id: "xiaomi/mimo-v2.6-flash" },
+      headers: {},
+    }
+    const stable1 = await invoke(mimoOpenRouter, "ses_same", { "User-Agent": "preserve-me", "x-custom": "also-preserve" })
+    const stable2 = await invoke(mimoOpenRouter, "ses_same")
+    const different = await invoke(mimoOpenRouter, "ses_other")
+    const direct = await invoke({ ...mimoOpenRouter, providerID: "xiaomi" }, "ses_direct", { "User-Agent": "preserve-me" })
+    const unknown = await invoke({ ...mimoOpenRouter, providerID: "unknown-provider" }, "ses_unknown")
+    const missingProvider = await invoke({ ...mimoOpenRouter, providerID: undefined }, "ses_missing_provider")
+    const glm = await invoke({ providerID: "openrouter", id: "z-ai/glm-5.3", api: { id: "z-ai/glm-5.3" }, headers: {} }, "ses_glm")
+    const configured = await invoke({
+      ...mimoOpenRouter,
+      headers: { "X-Session-Id": "user-configured-value" },
+    }, "ses_configured")
+    const earlierPlugin = await invoke(mimoOpenRouter, "ses_plugin", { "X-SESSION-ID": "earlier-plugin-value" })
+    const result = {
+      stable1,
+      stable2,
+      different,
+      direct,
+      unknown,
+      missingProvider,
+      glm,
+      configured,
+      configuredModelHeaders: configured.modelHeaders,
+      earlierPlugin,
+      expectedSame: mimoSessionIdFor("ses_same"),
+      expectedOther: mimoSessionIdFor("ses_other"),
+    }
+    assert.equal(configured.headers["x-session-id"], undefined)
+    assert.equal(earlierPlugin.headers["X-SESSION-ID"], "earlier-plugin-value")
+    process.stdout.write(JSON.stringify(result))
+  `
+  const stdout = execFileSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], {
+    cwd: process.cwd(),
+    env: { ...process.env, HOME: home },
+    encoding: "utf8",
+  })
+  return JSON.parse(stdout.trim())
+}
+
+let miMoHeaderProbe
+const miMoHeaderResults = async () => (miMoHeaderProbe ??= runMiMoHeaderHookProbe())
+
+test("MiMo/OpenRouter attaches the existing deterministic MiMo session ID", async () => {
+  const result = await miMoHeaderResults()
+  assert.equal(result.stable1.headers["x-session-id"], result.expectedSame)
+  assert.equal(result.stable1.sameObject, true)
+  assert.deepEqual(result.stable1.headers["User-Agent"], "preserve-me")
+  assert.deepEqual(result.stable1.headers["x-custom"], "also-preserve")
 })
 
-test("v0.3.2 diagnostic: chat.headers never mutates params/system/options", async () => {
-  const hooks = await loadTransportHooks()
-  process.env[HOOKS_DIAG_ENV] = "1"
-  try {
-    const output = { headers: {} }
-    await hooks["chat.headers"](headerInput({ providerID: "openrouter", id: "xiaomi/mimo-v2.6-flash", api: { id: "xiaomi/mimo-v2.6-flash" } }), output)
-    assert.deepEqual(Object.keys(output), ["headers"], "only the headers field may be touched")
-    assert.equal(output.headers[HOOKS_DIAG_KEY], "v0.3.2-temp")
-  } finally {
-    delete process.env[HOOKS_DIAG_ENV]
-  }
+test("MiMo/OpenRouter session ID is stable across turns and distinct across sessions", async () => {
+  const result = await miMoHeaderResults()
+  assert.equal(result.stable2.headers["x-session-id"], result.stable1.headers["x-session-id"])
+  assert.equal(result.different.headers["x-session-id"], result.expectedOther)
+  assert.notEqual(result.different.headers["x-session-id"], result.stable1.headers["x-session-id"])
+})
+
+test("MiMo direct and unknown providers do not receive x-session-id", async () => {
+  const result = await miMoHeaderResults()
+  assert.equal(result.direct.headers["x-session-id"], undefined)
+  assert.equal(result.unknown.headers["x-session-id"], undefined)
+  assert.equal(result.missingProvider.headers["x-session-id"], undefined)
+  assert.deepEqual(result.direct.headers, { "User-Agent": "preserve-me" })
+})
+
+test("MiMo affinity preserves existing x-session-id values case-insensitively", async () => {
+  const result = await miMoHeaderResults()
+  assert.equal(result.configured.headers["x-session-id"], undefined)
+  assert.deepEqual(result.configuredModelHeaders, { "X-Session-Id": "user-configured-value" })
+  assert.deepEqual(result.earlierPlugin.headers, { "X-SESSION-ID": "earlier-plugin-value" })
+})
+
+test("MiMo-only affinity does not add x-session-id to GLM/OpenRouter", async () => {
+  const result = await miMoHeaderResults()
+  assert.equal(result.glm.headers["x-session-id"], undefined)
 })
