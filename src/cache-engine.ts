@@ -16,7 +16,6 @@ import {
   gptCacheKeyFor,
   gptCacheOptionsDelta,
   hitRatePct,
-  isOpenRouterAffinityEligible,
   loadConfig,
   mimoHitRate,
   mimoSessionIdFor,
@@ -57,16 +56,13 @@ import {
 //                         history stable, and INSTRUMENT preserved-thinking
 //                         integrity (duplicate/reorder/modified reasoning). No
 //                         invented cache key (Z.ai exposes none).
-//   MiMo-V2.6          -> prefix stability + OpenRouter session affinity. The
-//                         safe env-block relocation is applied (stabilizeSystem)
-//                         and provider switches within a session are diagnosed.
-//                         MiMo caching is provider-managed implicit context
-//                         caching; no cache key/breakpoint/TTL is invented. The
-//                         OpenRouter sticky-session id is derived but currently
-//                         NOT injected: this runtime's OpenRouter request
-//                         adapter forwards only usage/reasoning/prompt_cache_key
-//                         and exposes no top-level `session_id` path (verified
-//                         against the installed runtime; see README).
+//   MiMo-V2.6          -> prefix stability + provider diagnostics. The safe
+//                         env-block relocation is applied (stabilizeSystem).
+//                         For actual OpenRouter requests only, chat.headers
+//                         adds the deterministic x-session-id unless an
+//                         explicit case-insensitive value already exists in
+//                         model/plugin headers. No MiMo cache key/breakpoint/
+//                         TTL is invented.
 //
 // The engine remains conservative: it observes, hashes, compares, records,
 // appends a compaction continuation template, and (for GPT-5.6 only) injects
@@ -86,15 +82,6 @@ const PAGE_SIZE = 100
 const REASONING_SEEN_CAP = 5000
 const ROOT_HOPS_MAX = 16
 const ROOT_CACHE_TTL_MS = 30_000
-
-// TEMPORARY diagnostic for v0.3.2 ONLY: proves the chat.headers transport path
-// (inspect + mutate outgoing request headers) works at the hook boundary.
-// Gated by env `CACHE_ENGINE_HEADERS_DIAGNOSTIC=1`; default OFF. This is a
-// temporary transport-path check, NOT a production affinity feature. It must be
-// removed when real x-session-id affinity transport is implemented, and it must
-// never emit a production x-session-id header itself.
-const HEADERS_DIAG_ENV = "CACHE_ENGINE_HEADERS_DIAGNOSTIC"
-const HEADERS_DIAG_KEY = "x-cache-engine-diag"
 
 // The runtime plugin client accepts these options even though the v1 SDK type
 // only declares `path.id`/`query`; the empirical call shape is sessionID-based.
@@ -151,7 +138,13 @@ const emptyShape = (): Shape => ({
   toolCount: null,
 })
 
-type ChatParamsModel = { providerID: string; id?: string; api?: { id?: string; npm?: string }; name?: string }
+type ChatParamsModel = {
+  providerID: string
+  id?: string
+  api?: { id?: string; npm?: string }
+  headers?: Record<string, string>
+  name?: string
+}
 
 export const CacheEngine: Plugin = async ({ client, directory }) => {
   const cfg = loadConfig({ configPath: DEFAULT_CONFIG_PATH, env: process.env })
@@ -489,27 +482,24 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
     // use a deterministic separate namespace (<root>:compact) so a compaction
     // cache write never interferes with the useful live-session cache.
     //
-    // TEMPORARY v0.3.2 transport-path diagnostic. The OpenCode runtime triggers
-    // chat.headers in LLMRequestPrep.prepare with output.headers = {} and merges
-    // the hook's headers into the outgoing provider request AFTER runtime and
-    // model headers (verified against the installed 1.18.32 runtime), so this
-    // hook runs before the provider request boundary. This handler only ever
-    // adds one diagnostic key; it never replaces output.headers, never deletes
-    // an existing header, and never touches params/system/options/tools.
-    //
-    // Gate: env CACHE_ENGINE_HEADERS_DIAGNOSTIC=1 AND the model must be
-    // OpenRouter-affinity eligible (MiMo/GLM over provider "openrouter"). For
-    // any ineligible provider (DeepSeek, GPT, direct Xiaomi/Z.AI, unknown) this
-    // is a strict no-op — no header is added or removed. No x-session-id is
-    // emitted.
+    // MiMo-V2.6 + OpenRouter session affinity. Gate on the actual OpenCode
+    // provider identity as well as the detected family; a matching model slug
+    // on a direct endpoint is not sufficient. The runtime merges model.headers
+    // before this hook's output, so preserve a case-insensitive user/model or
+    // earlier-plugin x-session-id rather than silently overwriting it. Otherwise
+    // add the deterministic ID derived from the logical OpenCode session.
     "chat.headers": async (input, output) => {
       try {
-        if (process.env[HEADERS_DIAG_ENV] !== "1") return
         const model = input.model as unknown as ChatParamsModel
-        const family = detectPolicy(model)
         const providerID = String(model?.providerID ?? "")
-        if (!isOpenRouterAffinityEligible(family, providerID)) return
-        output.headers[HEADERS_DIAG_KEY] = "v0.3.2-temp"
+        if (providerID !== "openrouter" || detectPolicy(model) !== POLICY_MIMO26) return
+
+        const hasSessionIDHeader = (headers?: Record<string, string>) =>
+          Object.keys(headers ?? {}).some((name) => name.toLowerCase() === "x-session-id")
+        if (hasSessionIDHeader(model?.headers) || hasSessionIDHeader(output.headers)) return
+
+        const sessionID = mimoSessionIdFor(input.sessionID)
+        if (sessionID) output.headers["x-session-id"] = sessionID
       } catch (e) {
         rec.record({ kind: "telemetry-error", ts: Date.now(), error: String(e) })
       }
