@@ -16,6 +16,7 @@ import {
   gptCacheKeyFor,
   gptCacheOptionsDelta,
   hitRatePct,
+  isOpenRouterAffinityEligible,
   loadConfig,
   mimoHitRate,
   mimoSessionIdFor,
@@ -85,6 +86,15 @@ const PAGE_SIZE = 100
 const REASONING_SEEN_CAP = 5000
 const ROOT_HOPS_MAX = 16
 const ROOT_CACHE_TTL_MS = 30_000
+
+// TEMPORARY diagnostic for v0.3.2 ONLY: proves the chat.headers transport path
+// (inspect + mutate outgoing request headers) works at the hook boundary.
+// Gated by env `CACHE_ENGINE_HEADERS_DIAGNOSTIC=1`; default OFF. This is a
+// temporary transport-path check, NOT a production affinity feature. It must be
+// removed when real x-session-id affinity transport is implemented, and it must
+// never emit a production x-session-id header itself.
+const HEADERS_DIAG_ENV = "CACHE_ENGINE_HEADERS_DIAGNOSTIC"
+const HEADERS_DIAG_KEY = "x-cache-engine-diag"
 
 // The runtime plugin client accepts these options even though the v1 SDK type
 // only declares `path.id`/`query`; the empirical call shape is sessionID-based.
@@ -478,6 +488,33 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
     // GPT cache. Compaction requests (agent === "compaction") for the same root
     // use a deterministic separate namespace (<root>:compact) so a compaction
     // cache write never interferes with the useful live-session cache.
+    //
+    // TEMPORARY v0.3.2 transport-path diagnostic. The OpenCode runtime triggers
+    // chat.headers in LLMRequestPrep.prepare with output.headers = {} and merges
+    // the hook's headers into the outgoing provider request AFTER runtime and
+    // model headers (verified against the installed 1.18.32 runtime), so this
+    // hook runs before the provider request boundary. This handler only ever
+    // adds one diagnostic key; it never replaces output.headers, never deletes
+    // an existing header, and never touches params/system/options/tools.
+    //
+    // Gate: env CACHE_ENGINE_HEADERS_DIAGNOSTIC=1 AND the model must be
+    // OpenRouter-affinity eligible (MiMo/GLM over provider "openrouter"). For
+    // any ineligible provider (DeepSeek, GPT, direct Xiaomi/Z.AI, unknown) this
+    // is a strict no-op — no header is added or removed. No x-session-id is
+    // emitted.
+    "chat.headers": async (input, output) => {
+      try {
+        if (process.env[HEADERS_DIAG_ENV] !== "1") return
+        const model = input.model as unknown as ChatParamsModel
+        const family = detectPolicy(model)
+        const providerID = String(model?.providerID ?? "")
+        if (!isOpenRouterAffinityEligible(family, providerID)) return
+        output.headers[HEADERS_DIAG_KEY] = "v0.3.2-temp"
+      } catch (e) {
+        rec.record({ kind: "telemetry-error", ts: Date.now(), error: String(e) })
+      }
+    },
+
     "chat.params": async (input, output) => {
       try {
         const info = rememberModel(input.sessionID, input.model as unknown as ChatParamsModel)
