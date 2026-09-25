@@ -1052,7 +1052,11 @@ async function runMiMoHeaderHookProbe() {
     const direct = await invoke({ ...mimoOpenRouter, providerID: "xiaomi" }, "ses_direct", { "User-Agent": "preserve-me" })
     const unknown = await invoke({ ...mimoOpenRouter, providerID: "unknown-provider" }, "ses_unknown")
     const missingProvider = await invoke({ ...mimoOpenRouter, providerID: undefined }, "ses_missing_provider")
-    const glm = await invoke({ providerID: "openrouter", id: "z-ai/glm-5.3", api: { id: "z-ai/glm-5.3" }, headers: {} }, "ses_glm")
+    const glmOpenRouter = { providerID: "openrouter", id: "z-ai/glm-5.3", api: { id: "z-ai/glm-5.3" }, headers: {} }
+    const glm1 = await invoke(glmOpenRouter, "ses_glm_same")
+    const glm2 = await invoke(glmOpenRouter, "ses_glm_same")
+    const glmDifferent = await invoke(glmOpenRouter, "ses_glm_other")
+    const glmDirect = await invoke({ ...glmOpenRouter, providerID: "zai" }, "ses_glm_direct", { "User-Agent": "preserve-glm" })
     const configured = await invoke({
       ...mimoOpenRouter,
       headers: { "X-Session-Id": "user-configured-value" },
@@ -1065,12 +1069,17 @@ async function runMiMoHeaderHookProbe() {
       direct,
       unknown,
       missingProvider,
-      glm,
+      glm1,
+      glm2,
+      glmDifferent,
+      glmDirect,
       configured,
       configuredModelHeaders: configured.modelHeaders,
       earlierPlugin,
       expectedSame: mimoSessionIdFor("ses_same"),
       expectedOther: mimoSessionIdFor("ses_other"),
+      expectedGlm: mimoSessionIdFor("ses_glm_same"),
+      expectedGlmOther: mimoSessionIdFor("ses_glm_other"),
     }
     assert.equal(configured.headers["x-session-id"], undefined)
     assert.equal(earlierPlugin.headers["X-SESSION-ID"], "earlier-plugin-value")
@@ -1117,7 +1126,16 @@ test("MiMo affinity preserves existing x-session-id values case-insensitively", 
   assert.deepEqual(result.earlierPlugin.headers, { "X-SESSION-ID": "earlier-plugin-value" })
 })
 
-test("MiMo-only affinity does not add x-session-id to GLM/OpenRouter", async () => {
+test("GLM/OpenRouter attaches the deterministic session ID", async () => {
   const result = await miMoHeaderResults()
-  assert.equal(result.glm.headers["x-session-id"], undefined)
+  assert.equal(result.glm1.headers["x-session-id"], result.expectedGlm)
+  assert.equal(result.glm2.headers["x-session-id"], result.expectedGlm)
+  assert.equal(result.glmDifferent.headers["x-session-id"], result.expectedGlmOther)
+  assert.notEqual(result.glmDifferent.headers["x-session-id"], result.glm1.headers["x-session-id"])
+})
+
+test("GLM direct Z.AI does not receive x-session-id", async () => {
+  const result = await miMoHeaderResults()
+  assert.equal(result.glmDirect.headers["x-session-id"], undefined)
+  assert.deepEqual(result.glmDirect.headers, { "User-Agent": "preserve-glm" })
 })
