@@ -482,17 +482,18 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
     // use a deterministic separate namespace (<root>:compact) so a compaction
     // cache write never interferes with the useful live-session cache.
     //
-    // MiMo-V2.6 + OpenRouter session affinity. Gate on the actual OpenCode
-    // provider identity as well as the detected family; a matching model slug
-    // on a direct endpoint is not sufficient. The runtime merges model.headers
-    // before this hook's output, so preserve a case-insensitive user/model or
-    // earlier-plugin x-session-id rather than silently overwriting it. Otherwise
-    // add the deterministic ID derived from the logical OpenCode session.
+    // MiMo-V2.6 / GLM-5.3 + OpenRouter session affinity. Gate on the actual
+    // OpenCode provider identity as well as the detected family; a matching
+    // model slug on a direct endpoint is not sufficient. The runtime merges
+    // model.headers before this hook's output, so preserve a case-insensitive
+    // user/model or earlier-plugin x-session-id rather than silently overwriting
+    // it. Otherwise add the deterministic ID derived from the logical session.
     "chat.headers": async (input, output) => {
       try {
         const model = input.model as unknown as ChatParamsModel
         const providerID = String(model?.providerID ?? "")
-        if (providerID !== "openrouter" || detectPolicy(model) !== POLICY_MIMO26) return
+        const family = detectPolicy(model)
+        if (providerID !== "openrouter" || (family !== POLICY_MIMO26 && family !== POLICY_GLM53)) return
 
         const hasSessionIDHeader = (headers?: Record<string, string>) =>
           Object.keys(headers ?? {}).some((name) => name.toLowerCase() === "x-session-id")
