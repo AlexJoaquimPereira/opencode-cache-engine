@@ -3,21 +3,35 @@
 Provider-aware prompt-cache optimization and observability for
 [OpenCode](https://opencode.ai).
 
-`opencode-cache-engine` is an OpenCode npm plugin with two targets:
+`opencode-cache-engine` is distributed as an npm package. The Git repository is
+the development source of truth; the published package is a release artifact.
+The package exposes two separate targets required by OpenCode's installed
+plugin model:
 
-- **Server target** — the actual cache-engine runtime and provider policies.
-- **TUI target** — registration with OpenCode's TUI plugin manager.
+- **`./server`** — the CacheEngine runtime, hooks, provider policies, and telemetry.
+- **`./tui`** — plugin-manager registration and enable/disable integration; it
+  has no CacheEngine-specific UI.
 
-The server target handles cache optimization, prompt-shape diagnostics, compaction handling, and cache telemetry. The TUI target provides the plugin-manager integration and enable/disable state for the TUI-facing plugin entry.
+For local development, use the package from this Git checkout through the
+repository's OpenCode/package development path. Do not maintain or edit a copied
+plugin under `~/.config/opencode/plugins/`. For released installs where
+reproducibility matters, pin an exact package version rather than relying on
+`@latest` resolution or a moving cache entry; see [Installation](#installation).
 
 `CacheEngine` is an OpenCode plugin designed for long-running agent sessions where prompt-cache efficiency affects both latency and cost. It keeps the harness conservative for providers whose cache behavior is already automatic, while applying provider-specific optimizations where the provider exposes useful cache controls or where prompt structure can be safely improved.
 
 The plugin currently has four cache-policy families:
 
-* **DeepSeek V4.1 Flash** — passive cache-stability and observability
-* **GPT-5.6 Luna** — active cache-control configuration
-* **GLM-5.3 Flash** — conservative system-prompt stabilization
-* **MiMo-V2.6 (Flash / Pro)** — prefix stability and OpenRouter session-affinity diagnostics
+* **DeepSeek** — passive cache observability; request structure is preserved.
+* **GPT-5.6** — documented cache-key/options metadata, with prompt text unchanged.
+* **GLM-5.3** — narrow, content-preserving `<env>` relocation and diagnostics.
+* **MiMo-V2.6** — narrow, content-preserving `<env>` relocation and diagnostics.
+
+For both MiMo-V2.6 and GLM-5.3, CacheEngine adds its deterministic
+`x-session-id` request header only when OpenCode identifies the actual provider
+as `openrouter`. It does not add that OpenRouter-specific header for
+non-OpenRouter providers; direct provider endpoints retain their provider-native
+caching behavior.
 
 The central design principle is:
 
@@ -38,7 +52,7 @@ It:
 6. Applies GPT-5.6 cache-control metadata.
 7. Applies the GLM-5.3 and MiMo-V2.6 volatile-environment relocation.
 8. Records diagnostics that help determine whether prompt-shape changes correlate with cache behavior.
-9. Records MiMo-V2.6 provider identity and provider-switch diagnostics.
+9. Records MiMo/GLM affinity outcomes and provider-identity changes.
 
 The plugin deliberately avoids pretending that a local hash is proof of a provider cache hit. Provider-reported token usage remains the authoritative signal.
 
@@ -165,7 +179,9 @@ This prevents a compaction-specific prompt from sharing the same GPT cache names
 
 ### Policy: input-shape optimization
 
-GLM-5.3 receives the only prompt-text transformation in the current plugin.
+GLM-5.3 and MiMo-V2.6 use the only prompt-text transformation in the current
+plugin: a narrow, content-preserving relocation of the identifiable `<env>`
+block for the eligible model family.
 
 The plugin identifies OpenCode's volatile `<env>` section and moves it to the **tail of the system prompt**.
 
@@ -224,6 +240,22 @@ It only occurs when:
 * the block can be identified unambiguously
 
 The plugin does not arbitrarily rearrange unrelated prompt content.
+
+### OpenRouter session affinity
+
+For GLM-5.3 requests whose actual OpenCode provider identity is `openrouter`,
+CacheEngine adds its deterministic `x-session-id` request header unless a
+case-insensitive `x-session-id` is already present in model or plugin headers.
+The existing value is preserved. This header is affinity metadata, not a prompt
+transformation or cache-control field.
+
+For direct Z.AI or any other non-OpenRouter endpoint, CacheEngine does not add
+the OpenRouter-specific affinity header. It leaves the endpoint's native cache
+behavior intact.
+
+Affinity observations record eligibility, the observed provider identity,
+whether a header was already present or added, and provider-identity changes
+(`glm_provider_changed`). They do not record the header value.
 
 
 ## MiMo-V2.6 (Flash / Pro)
@@ -287,28 +319,24 @@ Explicit telemetry events:
 * `mimo_system_env_relocated`
 * `mimo_system_prefix_changed`
 
-### OpenRouter sticky session — derived but not injected
+### OpenRouter session affinity
 
-OpenRouter documents a top-level `session_id` request field for sticky provider
-routing, which keeps a session's requests on the same upstream provider so
-provider-side prompt caches stay warm.
+For MiMo-V2.6 requests whose actual OpenCode provider identity is `openrouter`,
+CacheEngine adds its existing deterministic, session-scoped `x-session-id`
+request header. If a case-insensitive `x-session-id` already exists in model or
+plugin headers, CacheEngine preserves it and does not replace it. Eligibility
+uses both the MiMo-V2.6 family and the actual provider identity; a matching model
+slug on another endpoint is not enough.
 
-The plugin includes a pure, session-scoped derivation (`mimoSessionIdFor`):
-deterministic, distinct per session, printable/no-whitespace, and well under the
-256-character cap. However, **the derived id is not injected into requests**.
+For Xiaomi's direct endpoint and every other non-OpenRouter provider, CacheEngine
+does not add its OpenRouter-specific `x-session-id`. Direct provider endpoints
+retain their provider-native caching behavior. Any header already supplied by
+the user or runtime is left untouched.
 
-Rationale (verified against the installed runtime): OpenCode's OpenRouter
-request adapter forwards only `usage`, `reasoning`, and `prompt_cache_key` from
-provider options, and exposes no top-level `session_id` path. Adding an
-unsupported field would be guessing, so the id is recorded as telemetry only,
-and `mimo26.stickySession` currently gates that recording. If a future runtime
-gains a verified `session_id` path, the helper is already in place.
-
-Note that OpenCode itself sets `x-session-affinity` / `X-Session-Id` HTTP
-headers for non-opencode providers, and can set a flat `promptCacheKey` for
-OpenRouter when `setCacheKey: true` is configured. Those are HTTP routing
-headers and an OpenAI-style cache key respectively — they are not OpenRouter's
-documented body `session_id`.
+The `x-session-id` header is not a top-level request-body `session_id`, a
+`promptCacheKey`, or a cache-control option. MiMo uses provider-managed implicit
+caching: CacheEngine sends no undocumented `promptCacheKey`, `cacheControl`,
+cache breakpoint, or TTL.
 
 ### MiMo cache metrics
 
@@ -374,12 +402,16 @@ and are reported diagnostically; the message content is left untouched.
 
 # Provider comparison
 
-| Provider            | Detection                          | Prompt text changed?        | Cache metadata changed?            | Primary cache signal                    |
-| ------------------- | ---------------------------------- | --------------------------- | ---------------------------------- | --------------------------------------- |
-| DeepSeek V4.1 Flash | `deepseek`                         | No                          | No                                 | provider `cache.read`/`cache.write`     |
-| GPT-5.6 Luna        | `gpt-5.6*` on OpenAI-ish endpoints | No                          | Yes: `prompt_cache_key` + options  | provider cache tokens                   |
-| GLM-5.3 Flash       | `glm-5.3*`                         | Yes, narrowly (`<env>` tail) | No provider cache key              | provider cache tokens (GLM ratio)       |
-| MiMo-V2.6 Flash/Pro | `mimo-v2.6-flash` / `mimo-v2.6-pro` | Yes, narrowly (`<env>` tail) | No: implicit caching only          | `cached_tokens / prompt_tokens`         |
+| Policy family | Detection | Prompt text changed? | Cache metadata changed? | OpenRouter affinity header | Primary cache signal |
+| ------------- | --------- | ------------------- | ----------------------- | -------------------------- | -------------------- |
+| DeepSeek | `deepseek` | No | No | None | provider `cache.read` / `cache.write` |
+| GPT-5.6 | `gpt-5.6*` on OpenAI-ish endpoints | No | Yes: `prompt_cache_key` + options | None | provider cache tokens |
+| GLM-5.3 | `glm-5.3*` | Yes, narrowly (`<env>` tail) | No provider cache key | `x-session-id` on OpenRouter only | provider cache tokens (GLM ratio) |
+| MiMo-V2.6 | Flash / Pro only | Yes, narrowly (`<env>` tail) | No: implicit caching only | `x-session-id` on OpenRouter only | `cached_tokens / prompt_tokens` |
+
+`x-session-id` is an HTTP affinity header, not a provider cache key or
+cache-control field. Non-OpenRouter endpoints do not receive CacheEngine's
+OpenRouter-specific affinity value; their native cache behavior is unchanged.
 
 
 # Prompt-cache strategy
@@ -614,8 +646,16 @@ Telemetry is intended to answer questions such as:
 * Did the GLM system stabilization actually change the observed prompt shape?
 * Did MiMo's environment relocation fire (`mimo_system_env_relocated`)?
 * Did MiMo's stable system prefix change (`mimo_system_prefix_changed`)?
-* Did the MiMo provider change within a session (`mimo_provider_changed`)?
+* Was MiMo/GLM affinity eligible, and did CacheEngine add its header?
+* Was affinity bypassed for a non-OpenRouter or missing provider identity?
+* Did the MiMo provider change (`mimo_provider_changed`) or the GLM provider
+  change (`glm_provider_changed`) within a session?
 * What was MiMo's provider-reported cache hit rate (`cacheHitRate`)?
+
+Affinity observations are `boundary` records. They contain provider/model
+identity and booleans/source classification such as `eligible`,
+`headerPresent`, `headerAttached`, and `headerSource`; they do not include the
+`x-session-id` header value or full request headers.
 
 A MiMo usage record adds the provider-reported cache fields:
 
@@ -792,6 +832,10 @@ Defaults to:
 
 Existing request options are not overwritten by the plugin.
 
+The established **272K pricing boundary** is controlled by user/harness-side
+configuration and remains unchanged. CacheEngine does not set or raise GPT
+context or output limits; apply the existing harness/user-side limits.
+
 
 # GLM-5.3 configuration
 
@@ -844,10 +888,11 @@ Enables relocation of the volatile `<env>` section to the system-prompt tail
 
 ### `stickySession`
 
-Gates derivation/recording of the OpenRouter sticky-session id
-(`mimoSessionIdFor`). The id is recorded as telemetry; it is **not** injected
-into the request because this runtime exposes no verified OpenRouter top-level
-`session_id` path. See "OpenRouter sticky session — derived but not injected".
+Controls whether MiMo usage/provider-change telemetry includes the derived
+`stickySessionId` field. It does not control the existing `x-session-id` header
+injection, which is gated by MiMo family plus actual `openrouter` provider
+identity. The telemetry field contains the derived identifier, not request
+headers or prompt data.
 
 ### `preserveThinkingIntegrity`
 
@@ -898,7 +943,10 @@ This plugin is compatible with OpenRouter because the cache policy is based on t
 
 For cache-sensitive workloads, provider stability remains important.
 
-The plugin does not attempt to compensate for provider switching by rewriting prompts. It records MiMo provider identity and provider-switch diagnostics so routing instability is at least observable.
+The plugin does not attempt to compensate for provider switching by rewriting
+prompts. For MiMo and GLM it records observed provider identity and provider
+changes so routing instability is observable; it never overrides the selected
+provider or inspects OpenRouter's hidden upstream provider selection.
 
 For that reason, a stable provider route is preferable when your goal is to measure and maximize prefix reuse.
 
@@ -929,7 +977,9 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
 }
 ```
 
-The identifier `CacheEngine` is the OpenCode plugin export name. It does not determine the eventual npm package name.
+`CacheEngine` is the exported plugin factory. The npm package name remains
+`opencode-cache-engine`; the server and TUI package exports are listed in
+[File layout](#file-layout).
 
 ---
 
@@ -1118,7 +1168,8 @@ For reliable cache measurements:
 
 # File layout
 
-A typical standalone repository can use:
+This Git repository is the canonical development source. The npm package is
+built from this tree and exposes the runtime entry points separately:
 
 ```text
 opencode-cache-engine/
@@ -1135,51 +1186,49 @@ opencode-cache-engine/
 └── LICENSE
 ```
 
-The OpenCode plugin export remains:
+The package exports in `package.json` are:
 
-```ts
-export const CacheEngine
+```json
+{
+  "./server": "./src/cache-engine.ts",
+  "./tui": "./src/tui.mjs"
+}
 ```
 
-regardless of the eventual npm package name.
-
-For example, the npm package could be named:
-
-```text
-opencode-cache-engine
-```
-
-without changing the `CacheEngine` export identifier.
+The server target owns all CacheEngine runtime hooks and request behavior. The
+TUI target only registers the package with OpenCode's plugin manager; it does
+not duplicate server logic.
 
 ---
 
 # Installation
 
-Install the plugin into the OpenCode plugins directory according to your OpenCode plugin-loading setup.
+### Local development
 
-`opencode-cache-engine` is distributed as an npm package.
+Develop against this repository/package checkout using the project's OpenCode
+plugin development path. Edit and test the Git working tree as the source of
+truth; do not copy the plugin into `~/.config/opencode/plugins/` or keep a
+second active source tree there.
 
-## Server/runtime plugin
+### Released package
 
-Add the package to the OpenCode runtime plugin configuration:
+OpenCode loads the server and TUI targets from the npm package's separate
+exports. For reproducible released installs, pin an exact version. For this
+release, use:
 
 ```json
 {
   "plugin": [
-    "opencode-cache-engine"
+    "opencode-cache-engine@0.3.6"
   ]
 }
 ```
 
-The runtime entry should expose:
+Avoid a bare package name that resolves a moving `@latest` version when
+reproducibility matters. Update the pinned version deliberately when upgrading.
 
-```ts
-export const CacheEngine: Plugin = async ({ client, directory }) => {
-  // ...
-}
-```
-
-After installation, verify that OpenCode loads the plugin successfully before benchmarking cache behavior.
+After installation, verify that OpenCode loads the plugin successfully before
+benchmarking cache behavior.
 
 ---
 
@@ -1209,7 +1258,7 @@ GLM-5.3:
 MiMo-V2.6:
     volatile env block relocated when eligible
     no GPT/GLM-only cache fields present
-    no OpenRouter top-level session_id injected (unsupported by this runtime)
+    x-session-id added only for actual OpenRouter provider identity
     telemetry carries provider/model/promptTokens/cachedTokens/cacheHitRate
 ```
 
@@ -1278,14 +1327,15 @@ not matched.
 
 ---
 
-## No OpenRouter `session_id` is sent for MiMo
+## OpenRouter affinity header is not added
 
-This is expected. The installed OpenCode runtime's OpenRouter request adapter
-forwards only `usage`, `reasoning`, and `prompt_cache_key` from provider options
-and exposes no top-level `session_id` path. The plugin derives a stable
-`stickySessionId` and records it as telemetry, but does not inject it rather than
-send an unsupported field. This may change if a future runtime exposes a verified
-path.
+CacheEngine adds its `x-session-id` only for a detected MiMo-V2.6 or GLM-5.3
+request when the actual OpenCode `providerID` is exactly `openrouter`. A direct
+provider route or missing provider identity is bypassed. If a case-insensitive
+`x-session-id` is already present in model or plugin headers, it is preserved
+and CacheEngine does not replace it. Check the `openrouter_affinity_*` boundary
+records for eligibility, provider identity, and whether CacheEngine added the
+header; the record does not include the header value.
 
 ---
 
@@ -1311,9 +1361,9 @@ The current implementation is intentionally conservative:
 
 ```text
 DeepSeek  -> preserve and measure
-GPT-5.6   -> configure cache controls
-GLM-5.3   -> isolate volatile prompt content
-MiMo-V2.6 -> stabilize prefix + observe provider/cache reality
+GPT-5.6   -> documented cache key/options; user/harness controls the 272K pricing boundary
+GLM-5.3   -> preserve-content <env> relocation + OpenRouter affinity header
+MiMo-V2.6 -> preserve-content <env> relocation + OpenRouter affinity header
 ```
 
 That separation is the core design of the project.
