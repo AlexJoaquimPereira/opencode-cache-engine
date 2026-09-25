@@ -1035,10 +1035,15 @@ async function runMiMoHeaderHookProbe() {
         sessionID,
         agent: "build",
         model,
-        provider: { id: model.providerID },
+        provider: { source: "config", info: { id: model.providerID }, options: {} },
         message: { id: "msg", sessionID, role: "user", content: "probe" },
       }, output)
-      return { headers: output.headers, sameObject: output.headers === headersRef, modelHeaders: model.headers }
+      return {
+        headers: output.headers,
+        sameObject: output.headers === headersRef,
+        outputKeys: Object.keys(output),
+        modelHeaders: model.headers,
+      }
     }
     const mimoOpenRouter = {
       providerID: "openrouter",
@@ -1057,6 +1062,29 @@ async function runMiMoHeaderHookProbe() {
     const glm2 = await invoke(glmOpenRouter, "ses_glm_same")
     const glmDifferent = await invoke(glmOpenRouter, "ses_glm_other")
     const glmDirect = await invoke({ ...glmOpenRouter, providerID: "zai" }, "ses_glm_direct", { "User-Agent": "preserve-glm" })
+    const nonOpenRouterMatrix = [
+      ["mimo-direct", { ...mimoOpenRouter, providerID: "xiaomi" }],
+      ["glm-direct", { ...glmOpenRouter, providerID: "zai" }],
+      ["deepseek-direct", { providerID: "deepseek", id: "deepseek-v4.1-flash", api: { id: "deepseek-v4.1-flash" }, headers: {} }],
+      ["gpt-openai", { providerID: "openai", id: "gpt-5.6", api: { id: "gpt-5.6", npm: "@ai-sdk/openai" }, headers: {} }],
+      ["unknown-provider", { ...mimoOpenRouter, providerID: "unknown-provider" }],
+      ["missing-provider", { ...mimoOpenRouter, providerID: undefined }],
+      ["opencode-go-mimo", { ...mimoOpenRouter, providerID: "opencode" }],
+      ["opencode-go-glm", { ...glmOpenRouter, providerID: "opencode" }],
+    ]
+    const compatibility = []
+    for (const [name, model] of nonOpenRouterMatrix) {
+      const existing = { "User-Agent": "preserve-" + name, "x-compat-test": name }
+      compatibility.push({ name, ...(await invoke(model, "ses_" + name, existing)), expected: existing })
+    }
+    const gptOutput = { options: {} }
+    await hooks["chat.params"]({
+      sessionID: "ses_gpt_native_cache",
+      agent: "build",
+      model: { providerID: "openai", id: "gpt-5.6", api: { id: "gpt-5.6", npm: "@ai-sdk/openai" } },
+      provider: { source: "config", info: { id: "openai" }, options: {} },
+      message: { id: "msg-gpt", sessionID: "ses_gpt_native_cache", role: "user", content: "probe" },
+    }, gptOutput)
     const configured = await invoke({
       ...mimoOpenRouter,
       headers: { "X-Session-Id": "user-configured-value" },
@@ -1073,6 +1101,8 @@ async function runMiMoHeaderHookProbe() {
       glm2,
       glmDifferent,
       glmDirect,
+      compatibility,
+      gptOptions: gptOutput.options,
       configured,
       configuredModelHeaders: configured.modelHeaders,
       earlierPlugin,
@@ -1138,4 +1168,21 @@ test("GLM direct Z.AI does not receive x-session-id", async () => {
   const result = await miMoHeaderResults()
   assert.equal(result.glmDirect.headers["x-session-id"], undefined)
   assert.deepEqual(result.glmDirect.headers, { "User-Agent": "preserve-glm" })
+})
+
+test("non-OpenRouter endpoint matrix is x-session-id non-mutating and preserves unrelated headers", async () => {
+  const result = await miMoHeaderResults()
+  assert.equal(result.compatibility.length, 8)
+  for (const item of result.compatibility) {
+    assert.equal(item.headers["x-session-id"], undefined, `${item.name} must not receive OpenRouter affinity`)
+    assert.deepEqual(item.headers, item.expected, `${item.name} unrelated headers must remain unchanged`)
+    assert.equal(item.sameObject, true, `${item.name} headers object must be preserved`)
+    assert.deepEqual(item.outputKeys, ["headers"], `${item.name} hook output remains headers-only`)
+  }
+})
+
+test("OpenAI GPT retains its existing chat.params cache options without affinity headers", async () => {
+  const result = await miMoHeaderResults()
+  assert.equal(typeof result.gptOptions.promptCacheKey, "string")
+  assert.deepEqual(result.gptOptions.promptCacheOptions, { mode: "implicit", ttl: "30m" })
 })
