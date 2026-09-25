@@ -19,6 +19,7 @@ import {
   POLICY_GPT56,
   POLICY_MIMO26,
   POLICY_NEUTRAL,
+  affinityTelemetryFields,
   canonicalStringify,
   commonPrefixLength,
   createRecorder,
@@ -938,6 +939,42 @@ test("OpenRouter affinity is ineligible for unknown families and providers", () 
   assert.equal(isOpenRouterAffinityEligible(POLICY_MIMO26, undefined), false)
 })
 
+test("affinity telemetry fields classify eligibility, attachment, bypass, and missing identity", () => {
+  assert.deepEqual(affinityTelemetryFields(POLICY_MIMO26, "openrouter", "cache_engine"), {
+    reason: "openrouter_affinity_eligible",
+    eligible: true,
+    providerIdentityKnown: true,
+    provider: "openrouter",
+    headerPresent: true,
+    headerAttached: true,
+    headerSource: "cache_engine",
+  })
+  assert.deepEqual(affinityTelemetryFields(POLICY_GLM53, "openrouter", "preexisting"), {
+    reason: "openrouter_affinity_eligible",
+    eligible: true,
+    providerIdentityKnown: true,
+    provider: "openrouter",
+    headerPresent: true,
+    headerAttached: false,
+    headerSource: "preexisting",
+  })
+  assert.equal(affinityTelemetryFields(POLICY_MIMO26, "xiaomi", "not_applicable").reason,
+    "openrouter_affinity_bypassed_non_openrouter")
+  assert.equal(affinityTelemetryFields(POLICY_GLM53, "unknown-provider", "not_applicable").reason,
+    "openrouter_affinity_bypassed_non_openrouter")
+  assert.deepEqual(affinityTelemetryFields(POLICY_MIMO26, "", "not_applicable"), {
+    reason: "openrouter_affinity_bypassed_provider_missing_or_unknown",
+    eligible: false,
+    providerIdentityKnown: false,
+    provider: null,
+    headerPresent: false,
+    headerAttached: false,
+    headerSource: "not_applicable",
+  })
+  assert.equal(affinityTelemetryFields(POLICY_DEEPSEEK, "openrouter", "not_applicable"), null)
+  assert.equal(affinityTelemetryFields(POLICY_GPT56, "openrouter", "not_applicable"), null)
+})
+
 // ===========================================================================
 // MiMo-V2.6: cached/prompt token metrics
 // ===========================================================================
@@ -1019,8 +1056,10 @@ async function runMiMoHeaderHookProbe() {
   const coreURL = new URL("../src/cache-engine-core.mjs", import.meta.url).href
   const script = `
     import assert from "node:assert/strict"
+    import { readFileSync } from "node:fs"
+    process.env.CACHE_ENGINE_METRICS_FILE = process.env.HOME + "/affinity-metrics.jsonl"
     const { CacheEngine } = await import(${JSON.stringify(pluginURL)})
-    const { mimoSessionIdFor } = await import(${JSON.stringify(coreURL)})
+    const { detectPolicy, mimoSessionIdFor, POLICY_GLM53, POLICY_MIMO26 } = await import(${JSON.stringify(coreURL)})
     const client = {
       app: { log: async () => ({}) },
       session: { get: async () => ({ data: { parentID: null } }) },
@@ -1031,6 +1070,16 @@ async function runMiMoHeaderHookProbe() {
     const invoke = async (model, sessionID, existingHeaders = {}) => {
       const output = { headers: { ...existingHeaders } }
       const headersRef = output.headers
+      const family = detectPolicy(model)
+      if (family === POLICY_MIMO26 || family === POLICY_GLM53) {
+        await hooks["chat.params"]({
+          sessionID,
+          agent: "build",
+          model,
+          provider: { source: "config", info: { id: model.providerID }, options: {} },
+          message: { id: "msg", sessionID, role: "user", content: "probe" },
+        }, { options: {} })
+      }
       await hooks["chat.headers"]({
         sessionID,
         agent: "build",
@@ -1062,6 +1111,10 @@ async function runMiMoHeaderHookProbe() {
     const glm2 = await invoke(glmOpenRouter, "ses_glm_same")
     const glmDifferent = await invoke(glmOpenRouter, "ses_glm_other")
     const glmDirect = await invoke({ ...glmOpenRouter, providerID: "zai" }, "ses_glm_direct", { "User-Agent": "preserve-glm" })
+    const mimoSwitchOpen = await invoke(mimoOpenRouter, "ses_mimo_switch")
+    const mimoSwitchDirect = await invoke({ ...mimoOpenRouter, providerID: "xiaomi" }, "ses_mimo_switch")
+    const glmSwitchOpen = await invoke(glmOpenRouter, "ses_glm_switch")
+    const glmSwitchDirect = await invoke({ ...glmOpenRouter, providerID: "zai" }, "ses_glm_switch")
     const nonOpenRouterMatrix = [
       ["mimo-direct", { ...mimoOpenRouter, providerID: "xiaomi" }],
       ["glm-direct", { ...glmOpenRouter, providerID: "zai" }],
@@ -1101,6 +1154,10 @@ async function runMiMoHeaderHookProbe() {
       glm2,
       glmDifferent,
       glmDirect,
+      mimoSwitchOpen,
+      mimoSwitchDirect,
+      glmSwitchOpen,
+      glmSwitchDirect,
       compatibility,
       gptOptions: gptOutput.options,
       configured,
@@ -1110,6 +1167,8 @@ async function runMiMoHeaderHookProbe() {
       expectedOther: mimoSessionIdFor("ses_other"),
       expectedGlm: mimoSessionIdFor("ses_glm_same"),
       expectedGlmOther: mimoSessionIdFor("ses_glm_other"),
+      telemetry: readFileSync(process.env.CACHE_ENGINE_METRICS_FILE, "utf8")
+        .trim().split("\\n").filter(Boolean).map((line) => JSON.parse(line)),
     }
     assert.equal(configured.headers["x-session-id"], undefined)
     assert.equal(earlierPlugin.headers["X-SESSION-ID"], "earlier-plugin-value")
@@ -1185,4 +1244,75 @@ test("OpenAI GPT retains its existing chat.params cache options without affinity
   const result = await miMoHeaderResults()
   assert.equal(typeof result.gptOptions.promptCacheKey, "string")
   assert.deepEqual(result.gptOptions.promptCacheOptions, { mode: "implicit", ttl: "30m" })
+})
+
+test("affinity telemetry classifies eligible, attached, preexisting, bypassed, and missing-provider requests", async () => {
+  const result = await miMoHeaderResults()
+  const events = result.telemetry.filter((event) => event.reason?.startsWith("openrouter_affinity_"))
+  const eventFor = (sid, policy) => events.find((event) => event.sid === sid && event.policy === policy)
+
+  for (const [sid, policy] of [
+    ["ses_same", POLICY_MIMO26],
+    ["ses_glm_same", POLICY_GLM53],
+  ]) {
+    const event = eventFor(sid, policy)
+    assert.equal(event.reason, "openrouter_affinity_eligible")
+    assert.equal(event.eligible, true)
+    assert.equal(event.provider, "openrouter")
+    assert.equal(event.headerPresent, true)
+    assert.equal(event.headerAttached, true)
+    assert.equal(event.headerSource, "cache_engine")
+  }
+
+  const configured = eventFor("ses_configured", POLICY_MIMO26)
+  assert.equal(configured.reason, "openrouter_affinity_eligible")
+  assert.equal(configured.headerPresent, true)
+  assert.equal(configured.headerAttached, false)
+  assert.equal(configured.headerSource, "preexisting")
+
+  for (const [sid, policy, provider] of [
+    ["ses_direct", POLICY_MIMO26, "xiaomi"],
+    ["ses_glm_direct", POLICY_GLM53, "zai"],
+    ["ses_unknown", POLICY_MIMO26, "unknown-provider"],
+  ]) {
+    const event = eventFor(sid, policy)
+    assert.equal(event.reason, "openrouter_affinity_bypassed_non_openrouter")
+    assert.equal(event.eligible, false)
+    assert.equal(event.provider, provider)
+    assert.equal(event.headerAttached, false)
+  }
+
+  const missing = eventFor("ses_missing_provider", POLICY_MIMO26)
+  assert.equal(missing.reason, "openrouter_affinity_bypassed_provider_missing_or_unknown")
+  assert.equal(missing.providerIdentityKnown, false)
+  assert.equal(missing.provider, null)
+  assert.equal(missing.headerAttached, false)
+
+  // New affinity-observation records contain classifications, never the
+  // generated or pre-existing x-session-id value.
+  for (const event of events) {
+    assert.equal(Object.hasOwn(event, "x-session-id"), false)
+    assert.equal(Object.hasOwn(event, "headerValue"), false)
+  }
+  const serializedAffinityEvents = JSON.stringify(events)
+  assert.equal(serializedAffinityEvents.includes(result.expectedSame), false)
+  assert.equal(serializedAffinityEvents.includes(result.expectedGlm), false)
+})
+
+test("affinity telemetry preserves non-OpenRouter families and reports provider changes", async () => {
+  const result = await miMoHeaderResults()
+  const events = result.telemetry
+  const affinityEvents = events.filter((event) => event.reason?.startsWith("openrouter_affinity_"))
+  assert.equal(affinityEvents.some((event) => event.policy === POLICY_DEEPSEEK), false)
+  assert.equal(affinityEvents.some((event) => event.policy === POLICY_GPT56), false)
+
+  const mimoChange = events.find((event) => event.reason === "mimo_provider_changed" && event.sid === "ses_mimo_switch")
+  assert.equal(mimoChange.from.providerID, "openrouter")
+  assert.equal(mimoChange.to.providerID, "xiaomi")
+
+  const glmChange = events.find((event) => event.reason === "glm_provider_changed" && event.sid === "ses_glm_switch")
+  assert.equal(glmChange.kind, "boundary")
+  assert.equal(glmChange.from.providerID, "openrouter")
+  assert.equal(glmChange.to.providerID, "zai")
+  assert.equal(glmChange.policy, POLICY_GLM53)
 })
