@@ -3,6 +3,7 @@ import type { Event, Message, Part } from "@opencode-ai/sdk"
 import {
   DEFAULT_CONFIG_PATH,
   DIGEST_TEMPLATE,
+  affinityTelemetryFields,
   POLICY_GLM53,
   POLICY_GPT56,
   POLICY_MIMO26,
@@ -127,6 +128,7 @@ type SessionState = {
   reasoningSeen: Map<string, number>
   reasoningLastSeq: string[] | null
   mimoProvider: { providerID: string; modelID: string } | null
+  glmProvider: { providerID: string; modelID: string } | null
 }
 
 const emptyShape = (): Shape => ({
@@ -175,6 +177,7 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
         reasoningSeen: new Map(),
         reasoningLastSeq: null,
         mimoProvider: null,
+        glmProvider: null,
       }
       sessions.set(sid, s)
     }
@@ -493,14 +496,37 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
         const model = input.model as unknown as ChatParamsModel
         const providerID = String(model?.providerID ?? "")
         const family = detectPolicy(model)
-        if (providerID !== "openrouter" || (family !== POLICY_MIMO26 && family !== POLICY_GLM53)) return
+        if (family !== POLICY_MIMO26 && family !== POLICY_GLM53) return
 
         const hasSessionIDHeader = (headers?: Record<string, string>) =>
           Object.keys(headers ?? {}).some((name) => name.toLowerCase() === "x-session-id")
-        if (hasSessionIDHeader(model?.headers) || hasSessionIDHeader(output.headers)) return
+        let headerSource = "not_applicable"
+        if (providerID === "openrouter") {
+          if (hasSessionIDHeader(model?.headers) || hasSessionIDHeader(output.headers)) {
+            headerSource = "preexisting"
+          } else {
+            const sessionID = mimoSessionIdFor(input.sessionID)
+            if (sessionID) {
+              output.headers["x-session-id"] = sessionID
+              headerSource = "cache_engine"
+            } else {
+              headerSource = "unavailable"
+            }
+          }
+        }
 
-        const sessionID = mimoSessionIdFor(input.sessionID)
-        if (sessionID) output.headers["x-session-id"] = sessionID
+        const telemetry = affinityTelemetryFields(family, providerID, headerSource)
+        if (telemetry) {
+          rec.record({
+            kind: "boundary",
+            sid: input.sessionID,
+            ts: Date.now(),
+            policy: family,
+            provider: telemetry.provider,
+            model: String(model?.api?.id ?? model?.id ?? "") || null,
+            ...telemetry,
+          })
+        }
       } catch (e) {
         rec.record({ kind: "telemetry-error", ts: Date.now(), error: String(e) })
       }
@@ -548,6 +574,33 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
               })
             }
             s.mimoProvider = cur
+          }
+          return
+        }
+
+        // ---- GLM-5.3 provider identity observation (telemetry only) ----------
+        if (family === POLICY_GLM53 && policyEnabled(cfg, POLICY_GLM53) && info) {
+          const live = input.model as unknown as ChatParamsModel
+          const cur = {
+            providerID: String(live?.providerID ?? ""),
+            modelID: String(live?.api?.id ?? live?.id ?? ""),
+          }
+          if (cur.providerID) {
+            const s = get(input.sessionID)
+            const ev = providerChangeEvent(s.glmProvider, cur)
+            if (ev.changed) {
+              rec.record({
+                kind: "boundary",
+                sid: input.sessionID,
+                ts: Date.now(),
+                reason: "glm_provider_changed",
+                policy: POLICY_GLM53,
+                from: ev.from,
+                to: ev.to,
+                note: "OpenCode providerID changed; provider-specific upstream routing is not plugin-visible",
+              })
+            }
+            s.glmProvider = cur
           }
           return
         }

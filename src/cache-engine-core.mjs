@@ -500,14 +500,51 @@ export function isOpenRouterAffinityEligible(policyFamily, providerID) {
   )
 }
 
+// Produce safe telemetry fields for one affinity-capable request. Provider
+// identity is observable and recorded; header values are deliberately not.
+// A supplied non-OpenRouter identity is classified from the observed value
+// rather than guessed against a provider allowlist.
+export function affinityTelemetryFields(policyFamily, providerID, headerSource) {
+  if (policyFamily !== POLICY_MIMO26 && policyFamily !== POLICY_GLM53) return null
+
+  const identity = typeof providerID === "string" && providerID.length > 0 ? providerID : null
+  const eligible = isOpenRouterAffinityEligible(policyFamily, identity)
+  if (!eligible) {
+    return {
+      reason: identity
+        ? "openrouter_affinity_bypassed_non_openrouter"
+        : "openrouter_affinity_bypassed_provider_missing_or_unknown",
+      eligible: false,
+      providerIdentityKnown: identity !== null,
+      provider: identity,
+      headerPresent: false,
+      headerAttached: false,
+      headerSource: "not_applicable",
+    }
+  }
+
+  const source = ["cache_engine", "preexisting", "unavailable"].includes(headerSource)
+    ? headerSource
+    : "unavailable"
+  const headerPresent = source === "cache_engine" || source === "preexisting"
+  return {
+    reason: "openrouter_affinity_eligible",
+    eligible: true,
+    providerIdentityKnown: true,
+    provider: identity,
+    headerPresent,
+    headerAttached: source === "cache_engine",
+    headerSource: source,
+  }
+}
+
 // Derive a stable, session-scoped identifier suitable for OpenRouter's
 // documented `session_id` sticky-routing key. Pure function of the OpenCode
 // session id only: identical sessions map to identical ids, distinct sessions
-// map to distinct ids, and transient request contents cannot influence it.
-// The value is printable, contains no whitespace, and is far below the 256-char
-// cap (25 chars). NOTE: this runtime's OpenRouter request adapter does not emit
-// a top-level `session_id` (it forwards only usage/reasoning/prompt_cache_key),
-// so this id is currently recorded as telemetry only and is never injected.
+// map to distinct ids, and transient request contents cannot influence it. The
+// value is printable, contains no whitespace, and is far below the 256-char cap
+// (25 chars). The plugin uses it as the existing OpenRouter x-session-id header
+// value for eligible MiMo/GLM requests.
 export function mimoSessionIdFor(sessionID) {
   if (typeof sessionID !== "string" || sessionID.length === 0) return null
   return `mimo-ses-${shorthash(sessionID)}`
