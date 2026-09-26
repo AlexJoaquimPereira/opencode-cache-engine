@@ -18,6 +18,11 @@ plugin under `~/.config/opencode/plugins/`. For released installs where
 reproducibility matters, pin an exact package version rather than relying on
 `@latest` resolution or a moving cache entry; see [Installation](#installation).
 
+Quick Installation (TUI): 
+``` text
+opencode plugin opencode-cache-engine
+```
+
 `CacheEngine` is an OpenCode plugin designed for long-running agent sessions where prompt-cache efficiency affects both latency and cost. It keeps the harness conservative for providers whose cache behavior is already automatic, while applying provider-specific optimizations where the provider exposes useful cache controls or where prompt structure can be safely improved.
 
 The plugin currently has four cache-policy families:
