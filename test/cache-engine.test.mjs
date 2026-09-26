@@ -55,6 +55,7 @@ import {
   POLICY_REGISTRY,
   resolveLegacyFamily,
   resolvePolicy,
+  resolveRuntimePolicy,
 } from "../src/cache-policy-core.mjs"
 
 const asst = (id, read, write) => ({
@@ -1549,5 +1550,194 @@ test("registry is traceable and internally consistent", () => {
   for (const [id, alias] of Object.entries(MODEL_ALIASES)) {
     assert.ok(alias.inventoryRef, `alias ${id} must cite the inventory`)
     assert.ok(alias.family)
+  }
+})
+
+// ===========================================================================
+// v0.4.1 runtime policy migration (behavior preservation)
+//
+// The runtime now classifies via resolveRuntimePolicy(). These tests prove the
+// resolved policy equals the legacy detectPolicy() string for every supported
+// model, and that the hook-observable behavior (GPT cache options, <env>
+// relocation, OpenRouter affinity) is unchanged. Newer/unknown models must
+// gain no mutation.
+// ===========================================================================
+
+const policyCoreURL = new URL("../src/cache-policy-core.mjs", import.meta.url).href
+
+test("v0.4.1: resolveRuntimePolicy.policy matches detectPolicy across a broad matrix", () => {
+  const samples = [
+    M("openai", "gpt-5.6"),
+    M("openai", "gpt-5.6-sol"),
+    M("openrouter", "openai/gpt-5.6-luna"),
+    M("openai-compatible", "gpt-5.6"),
+    M("openai", "gpt-6-astra"),
+    M("openai", "gpt-5.5"),
+    M("openai", "gpt-daybreak-blue-latest"),
+    M("openai", "gpt-daybreak-red-latest"),
+    M("zai", "glm-5.3"),
+    M("zai", "glm-5.3-flash"),
+    M("zai", "glm-5.2"),
+    M("xiaomi", "mimo-v2.6-flash"),
+    M("xiaomi", "mimo-v2.6-pro"),
+    M("xiaomi", "mimo-v2.6-pro-ultraspeed"),
+    M("xiaomi", "mimo-v2.5"),
+    M("deepseek", "deepseek-v4-pro"),
+    M("deepseek", "deepseek-flash"),
+    M("deepseek", "deepseek-v4-flash"),
+    M("deepseek", "deepseek-chat"),
+    M("openrouter", "x-ai/grok-4"),
+    {},
+    null,
+    undefined,
+    42,
+  ]
+  for (const m of samples) {
+    assert.equal(resolveRuntimePolicy(m).policy, detectPolicy(m))
+  }
+})
+
+test("v0.4.1: GPT-5.6 alias keeps the overlay but a newer alias stays runtime-neutral", () => {
+  // Legacy alias: gpt-5.6 -> gpt-5.6-sol (was matched by the old regex).
+  const legacy = resolveRuntimePolicy(M("openai", "gpt-5.6"))
+  assert.equal(legacy.policy, "gpt56")
+  assert.equal(legacy.gptCacheMetadata, true)
+  // Newer documented alias that the old classifier did NOT match: no mutation.
+  const newer = resolveRuntimePolicy(M("openai", "gpt-daybreak-blue-latest"))
+  assert.equal(newer.policy, "neutral")
+  assert.equal(newer.gptCacheMetadata, false)
+  assert.equal(resolvePolicy(M("openai", "gpt-daybreak-blue-latest")).family, "gpt-5.6")
+})
+
+async function runPolicyMigrationProbe() {
+  const home = mkdtempSync(join(tmpdir(), "ce-policy-migration-"))
+  const pluginURL = new URL("../src/cache-engine.ts", import.meta.url).href
+  const coreURL = new URL("../src/cache-engine-core.mjs", import.meta.url).href
+  const script = `
+    import assert from "node:assert/strict"
+    process.env.CACHE_ENGINE_METRICS_FILE = process.env.HOME + "/policy-migration.jsonl"
+    const { CacheEngine } = await import(${JSON.stringify(pluginURL)})
+    const { detectPolicy } = await import(${JSON.stringify(coreURL)})
+    const { resolvePolicy, resolveRuntimePolicy } = await import(${JSON.stringify(policyCoreURL)})
+    const client = {
+      app: { log: async () => ({}) },
+      session: { get: async () => ({ data: { parentID: null } }) },
+      tool: { list: async () => ({ data: [] }) },
+    }
+    const hooks = await CacheEngine({ client, directory: process.env.HOME })
+    assert.equal(typeof hooks["chat.params"], "function")
+    assert.equal(typeof hooks["chat.headers"], "function")
+    assert.equal(typeof hooks["experimental.chat.system.transform"], "function")
+    const SYS = ["A: keep1", "B: You are powered by the model named x. The exact model ID is acme/x", "C: <env>", "D: Today's date: 2026-08-17", "E: </env>", "F: keep2"].join("\\n")
+    const CASES = [
+      { name: "gpt-5.6", model: { providerID: "openai", id: "gpt-5.6", api: { id: "gpt-5.6", npm: "@ai-sdk/openai" } }, expect: { policy: "gpt56", env: false, gpt: true, header: false } },
+      { name: "gpt-5.6-openrouter", model: { providerID: "openrouter", id: "openai/gpt-5.6-sol", api: { id: "openai/gpt-5.6-sol" } }, expect: { policy: "gpt56", env: false, gpt: true, header: false } },
+      { name: "gpt-6-astra", model: { providerID: "openai", id: "gpt-6-astra", api: { id: "gpt-6-astra", npm: "@ai-sdk/openai" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
+      { name: "gpt-5.5", model: { providerID: "openai", id: "gpt-5.5", api: { id: "gpt-5.5", npm: "@ai-sdk/openai" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
+      { name: "gpt-daybreak-alias", model: { providerID: "openai", id: "gpt-daybreak-blue-latest", api: { id: "gpt-daybreak-blue-latest", npm: "@ai-sdk/openai" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
+      { name: "deepseek-v4-pro", model: { providerID: "deepseek", id: "deepseek-v4-pro", api: { id: "deepseek-v4-pro" } }, expect: { policy: "deepseek", env: false, gpt: false, header: false } },
+      { name: "deepseek-flash", model: { providerID: "deepseek", id: "deepseek-flash", api: { id: "deepseek-flash" } }, expect: { policy: "deepseek", env: false, gpt: false, header: false } },
+      { name: "glm-5.3-direct", model: { providerID: "zai", id: "glm-5.3", api: { id: "glm-5.3" } }, expect: { policy: "glm53", env: true, gpt: false, header: false } },
+      { name: "glm-5.3-openrouter", model: { providerID: "openrouter", id: "z-ai/glm-5.3-flash", api: { id: "z-ai/glm-5.3-flash" } }, expect: { policy: "glm53", env: true, gpt: false, header: true } },
+      { name: "glm-5.2", model: { providerID: "zai", id: "glm-5.2", api: { id: "glm-5.2" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
+      { name: "mimo-v2.6-flash-direct", model: { providerID: "xiaomi", id: "mimo-v2.6-flash", api: { id: "mimo-v2.6-flash" } }, expect: { policy: "mimo26", env: true, gpt: false, header: false } },
+      { name: "mimo-v2.6-pro-openrouter", model: { providerID: "openrouter", id: "xiaomi/mimo-v2.6-pro", api: { id: "xiaomi/mimo-v2.6-pro" } }, expect: { policy: "mimo26", env: true, gpt: false, header: true } },
+      { name: "mimo-v2.6-pro-ultraspeed", model: { providerID: "xiaomi", id: "mimo-v2.6-pro-ultraspeed", api: { id: "mimo-v2.6-pro-ultraspeed" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
+      { name: "mimo-v2.5", model: { providerID: "xiaomi", id: "mimo-v2.5", api: { id: "mimo-v2.5" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
+      { name: "unknown-provider", model: { providerID: "mystery-provider", id: "xiaomi/mimo-v2.6-flash", api: { id: "xiaomi/mimo-v2.6-flash" } }, expect: { policy: "mimo26", env: true, gpt: false, header: false } },
+      { name: "unknown-openrouter", model: { providerID: "openrouter", id: "acme/mystery-9", api: { id: "acme/mystery-9" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
+    ]
+    const results = []
+    for (const c of CASES) {
+      const model = c.model
+      const sid = "ses_" + c.name
+      const provider = { source: "config", info: { id: String(model.providerID ?? "") }, options: {} }
+      const existing = { "User-Agent": "preserve", "x-custom": "preserve" }
+      const paramsOut = { options: {} }
+      const headersOut = { headers: { ...existing } }
+      const sysOut = { system: [SYS] }
+      await hooks["chat.params"]({ sessionID: sid, agent: "build", model, provider, message: { id: "msg-" + c.name, sessionID: sid, role: "user", content: "probe" } }, paramsOut)
+      await hooks["experimental.chat.system.transform"]({ sessionID: sid, model, provider }, sysOut)
+      await hooks["chat.headers"]({ sessionID: sid, agent: "build", model, provider, message: { id: "msg-" + c.name, sessionID: sid, role: "user", content: "probe" } }, headersOut)
+      const rt = resolveRuntimePolicy(model)
+      const existingHeadersPreserved = Object.entries(existing).every(([k, v]) => headersOut.headers[k] === v)
+      results.push({
+        name: c.name,
+        runtimePolicy: rt.policy,
+        detectPolicy: detectPolicy(model),
+        richFamily: resolvePolicy(model).family,
+        overlays: resolvePolicy(model).overlays.map((o) => o.id),
+        systemRelocated: sysOut.system[0] !== SYS,
+        gptOptionInjected: paramsOut.options.promptCacheKey !== undefined,
+        gptOptions: paramsOut.options.promptCacheOptions ?? null,
+        affinityHeaderAttached: headersOut.headers["x-session-id"] !== undefined,
+        existingHeadersPreserved,
+        expect: c.expect,
+      })
+    }
+    process.stdout.write(JSON.stringify({ results }))
+  `
+  const stdout = execFileSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], {
+    cwd: process.cwd(),
+    env: { ...process.env, HOME: home },
+    encoding: "utf8",
+  })
+  return JSON.parse(stdout.trim())
+}
+
+let policyMigrationProbe
+const policyMigrationResults = async () => (policyMigrationProbe ??= runPolicyMigrationProbe())
+
+test("v0.4.1: runtime policy is the resolver's and stays equal to detectPolicy (hook path)", async () => {
+  const { results } = await policyMigrationResults()
+  assert.ok(results.length >= 15)
+  for (const r of results) {
+    assert.equal(r.runtimePolicy, r.detectPolicy, `${r.name}: resolver policy must equal legacy detectPolicy`)
+    assert.equal(r.runtimePolicy, r.expect.policy, `${r.name}: unexpected policy`)
+  }
+})
+
+test("v0.4.1: every supported model keeps its pre-migration hook behavior", async () => {
+  const { results } = await policyMigrationResults()
+  for (const r of results) {
+    assert.equal(r.systemRelocated, r.expect.env, `${r.name}: <env> relocation`)
+    assert.equal(r.gptOptionInjected, r.expect.gpt, `${r.name}: GPT cache-options injection`)
+    assert.equal(r.affinityHeaderAttached, r.expect.header, `${r.name}: OpenRouter affinity header`)
+    // No provider in the matrix mutates or drops pre-existing headers.
+    assert.equal(r.existingHeadersPreserved, true, `${r.name}: existing headers preserved`)
+  }
+})
+
+test("v0.4.1: GPT-5.6 keeps promptCacheOptions implicit/30m through the resolver", async () => {
+  const { results } = await policyMigrationResults()
+  const gpt = results.find((r) => r.name === "gpt-5.6")
+  assert.deepEqual(gpt.gptOptions, { mode: "implicit", ttl: "30m" })
+})
+
+test("v0.4.1: future-looking and unknown models gain no mutation", async () => {
+  const { results } = await policyMigrationResults()
+  const noMutation = [
+    "gpt-6-astra",
+    "gpt-daybreak-alias",
+    "gpt-5.5",
+    "glm-5.2",
+    "mimo-v2.6-pro-ultraspeed",
+    "mimo-v2.5",
+    "unknown-openrouter",
+  ]
+  for (const name of noMutation) {
+    const r = results.find((x) => x.name === name)
+    assert.ok(r, `${name} present`)
+    assert.equal(r.gptOptionInjected, false, `${name}: no GPT options`)
+    assert.equal(r.systemRelocated, false, `${name}: no <env> relocation`)
+    assert.equal(r.affinityHeaderAttached, false, `${name}: no affinity header`)
+  }
+})
+
+test("v0.4.1: non-OpenRouter models never receive the OpenRouter header", async () => {
+  const { results } = await policyMigrationResults()
+  for (const name of ["glm-5.3-direct", "mimo-v2.6-flash-direct", "unknown-provider", "gpt-5.6", "deepseek-v4-pro"]) {
+    const r = results.find((x) => x.name === name)
+    assert.equal(r.affinityHeaderAttached, false, `${name}: no affinity header off OpenRouter`)
   }
 })
