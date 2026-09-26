@@ -17,8 +17,10 @@
 // `inventoryRef`. Inheritance is always explicit (`inheritsFrom`); "newer means
 // same behavior" is never an unconditional rule.
 //
-// This release does not wire the resolver into runtime hooks. detectPolicy()
-// remains the compatibility classifier until wiring is approved.
+// As of v0.4.1 the runtime hook layer (cache-engine.ts) consumes
+// resolveRuntimePolicy() as its single source of policy classification.
+// detectPolicy() is retained as the compatibility classifier for the legacy
+// POLICY_* strings.
 
 // ---------------------------------------------------------------------------
 // Model normalization (shared with the legacy classifier)
@@ -207,6 +209,36 @@ function resolveTransport(s) {
 }
 
 // ---------------------------------------------------------------------------
+// Runtime capability descriptors
+//
+// The runtime consumes `resolvePolicy(...).runtime` for gating. `policy` is the
+// legacy telemetry/state string, so telemetry stays byte-identical. Every
+// capability is explicit per registry entry: classification into a creator or
+// family never implies a mutation. `legacy: false` entries always resolve to
+// NEUTRAL_RUNTIME, so a future-looking model gains nothing until the registry
+// explicitly says so.
+// ---------------------------------------------------------------------------
+
+const NEUTRAL_RUNTIME = Object.freeze({
+  policy: "neutral",
+  isNeutral: true,
+  gptCacheMetadata: false,
+  envRelocation: null,
+  thinkingIntegrity: false,
+  cacheRatio: null,
+  providerChange: null,
+  prefixDiagnostics: false,
+  openRouterAffinity: false,
+})
+
+const rt = (policy, overrides = {}) => ({
+  ...NEUTRAL_RUNTIME,
+  ...overrides,
+  policy,
+  isNeutral: policy === "neutral",
+})
+
+// ---------------------------------------------------------------------------
 // Registry
 //
 // Entries are evaluated in array order, which encodes detection priority and
@@ -229,6 +261,7 @@ export const POLICY_REGISTRY = [
     baseline: "openai.gpt56.cache",
     overlays: ["gpt56.prompt-cache-options"],
     legacy: true,
+    runtime: rt("gpt56", { gptCacheMetadata: true }),
     inventoryRef: "§1 OpenAI",
   },
   {
@@ -243,7 +276,8 @@ export const POLICY_REGISTRY = [
     inheritsFrom: "gpt-5.6",
     overlays: [],
     legacy: false,
-    note: "Documented inheritance of the GPT-5.6-and-later baseline. No CacheEngine overlay is registered for gpt-6 yet.",
+    runtime: rt("neutral"),
+    note: "Documented inheritance of the GPT-5.6-and-later baseline. No CacheEngine overlay is registered for gpt-6 yet, so the runtime stays neutral.",
     inventoryRef: "§1 OpenAI",
   },
   {
@@ -256,6 +290,13 @@ export const POLICY_REGISTRY = [
     baseline: "zai.implicit-cache",
     overlays: ["glm53.env-relocation"],
     legacy: true,
+    runtime: rt("glm53", {
+      envRelocation: "glm",
+      thinkingIntegrity: true,
+      cacheRatio: "glm",
+      providerChange: "glm",
+      openRouterAffinity: true,
+    }),
     inventoryRef: "§3 Z.AI GLM",
   },
   {
@@ -268,6 +309,13 @@ export const POLICY_REGISTRY = [
     baseline: "xiaomi.implicit-cache",
     overlays: ["mimo26.env-relocation"],
     legacy: true,
+    runtime: rt("mimo26", {
+      envRelocation: "mimo",
+      cacheRatio: "mimo",
+      providerChange: "mimo",
+      prefixDiagnostics: true,
+      openRouterAffinity: true,
+    }),
     inventoryRef: "§4 Xiaomi MiMo",
   },
   {
@@ -279,6 +327,7 @@ export const POLICY_REGISTRY = [
     baseline: "xiaomi.implicit-cache",
     overlays: [],
     legacy: false,
+    runtime: rt("neutral"),
     policyStatus: "documented-series-member-without-registered-overlay",
     note: "Documented as a Pro mode in the same V2.6 series, but the inventory does not establish identical cache controls and CacheEngine registers no overlay for it.",
     inventoryRef: "§4 Xiaomi MiMo",
@@ -293,6 +342,7 @@ export const POLICY_REGISTRY = [
     baseline: "deepseek.kv-cache",
     overlays: [],
     legacy: true,
+    runtime: rt("deepseek"),
     inventoryRef: "§2 DeepSeek",
   },
 ]
@@ -301,13 +351,16 @@ export const POLICY_REGISTRY = [
 // Explicit aliases identified by the inventory
 // ---------------------------------------------------------------------------
 
+// `legacy` records whether the pre-v0.4.0 classifier already matched this alias.
+// Only legacy aliases carry runtime capabilities; newer documented aliases are
+// resolved for information but stay runtime-neutral (no new optimization).
 export const MODEL_ALIASES = {
-  "gpt-5.6": { canonicalId: "gpt-5.6-sol", family: "gpt-5.6", creator: "openai", inventoryRef: "§1 OpenAI" },
-  "gpt-daybreak-blue-latest": { canonicalId: "gpt-5.6-sol", family: "gpt-5.6", creator: "openai", inventoryRef: "§1 OpenAI" },
-  "gpt-daybreak-red-latest": { canonicalId: "gpt-5.6-cyber", family: "gpt-5.6", creator: "openai", inventoryRef: "§1 OpenAI" },
-  "deepseek-v4-flash": { canonicalId: "deepseek-flash", family: "deepseek", creator: "deepseek", status: "retired-legacy-id", inventoryRef: "§2 DeepSeek" },
-  "deepseek-chat": { canonicalId: null, family: "deepseek", creator: "deepseek", status: "retired", inventoryRef: "§2 DeepSeek" },
-  "deepseek-reasoner": { canonicalId: null, family: "deepseek", creator: "deepseek", status: "retired", inventoryRef: "§2 DeepSeek" },
+  "gpt-5.6": { canonicalId: "gpt-5.6-sol", family: "gpt-5.6", creator: "openai", legacy: true, inventoryRef: "§1 OpenAI" },
+  "gpt-daybreak-blue-latest": { canonicalId: "gpt-5.6-sol", family: "gpt-5.6", creator: "openai", legacy: false, inventoryRef: "§1 OpenAI" },
+  "gpt-daybreak-red-latest": { canonicalId: "gpt-5.6-cyber", family: "gpt-5.6", creator: "openai", legacy: false, inventoryRef: "§1 OpenAI" },
+  "deepseek-v4-flash": { canonicalId: "deepseek-flash", family: "deepseek", creator: "deepseek", legacy: true, status: "retired-legacy-id", inventoryRef: "§2 DeepSeek" },
+  "deepseek-chat": { canonicalId: null, family: "deepseek", creator: "deepseek", legacy: true, status: "retired", inventoryRef: "§2 DeepSeek" },
+  "deepseek-reasoner": { canonicalId: null, family: "deepseek", creator: "deepseek", legacy: true, status: "retired", inventoryRef: "§2 DeepSeek" },
 }
 
 // ---------------------------------------------------------------------------
@@ -320,6 +373,7 @@ function neutralResult(reason, transport) {
     family: "neutral",
     baseline: BASELINES["neutral.none"],
     overlays: [],
+    runtime: NEUTRAL_RUNTIME,
     transport,
     matchType: "neutral",
     matchReason: reason,
@@ -333,12 +387,19 @@ function overlaysFor(ids) {
   return (ids ?? []).map((id) => OVERLAYS[id]).filter(Boolean)
 }
 
+// Only legacy entries carry runtime capabilities. A non-legacy entry (gpt-6,
+// Pro UltraSpeed) resolves for information but stays neutral at runtime.
+function runtimeForEntry(entry) {
+  return entry.legacy === false ? NEUTRAL_RUNTIME : entry.runtime ?? NEUTRAL_RUNTIME
+}
+
 function resultFromEntry(entry, matchType, matchReason, matchedId, transport) {
   return {
     creator: entry.creator,
     family: entry.family,
     baseline: BASELINES[entry.baseline] ?? null,
     overlays: overlaysFor(entry.overlays),
+    runtime: runtimeForEntry(entry),
     transport,
     matchType,
     matchReason,
@@ -348,13 +409,17 @@ function resultFromEntry(entry, matchType, matchReason, matchedId, transport) {
   }
 }
 
-function resultFromFamily(family, creator, matchType, matchReason, matchedId, inventoryRef, note, transport) {
+function resultFromFamily(family, creator, matchType, matchReason, matchedId, inventoryRef, note, transport, aliasLegacy) {
   const entry = POLICY_REGISTRY.find((e) => e.family === family && e.kind !== "exact")
+  // An alias is runtime-active only when both the alias and its target family
+  // were recognized before v0.4.0.
+  const active = aliasLegacy !== false && (!entry || entry.legacy !== false)
   return {
     creator,
     family,
     baseline: entry ? BASELINES[entry.baseline] ?? null : null,
     overlays: entry ? overlaysFor(entry.overlays) : [],
+    runtime: active && entry ? entry.runtime ?? NEUTRAL_RUNTIME : NEUTRAL_RUNTIME,
     transport,
     matchType,
     matchReason,
@@ -386,7 +451,7 @@ export function resolvePolicy(model) {
     const familyEntry = POLICY_REGISTRY.find((e) => e.family === alias.family && e.kind !== "exact")
     if (familyEntry?.requiresOpenAIish && !isOpenAIish(s)) continue
     const reason = `alias:${id}->${alias.canonicalId ?? alias.family}`
-    return resultFromFamily(alias.family, alias.creator, "exact", reason, id, alias.inventoryRef, alias.status ?? null, transport)
+    return resultFromFamily(alias.family, alias.creator, "exact", reason, id, alias.inventoryRef, alias.status ?? null, transport, alias.legacy)
   }
 
   // 2. Exact model ids (documented models).
@@ -413,6 +478,13 @@ export function resolvePolicy(model) {
   }
 
   return neutralResult("neutral:no-match", transport)
+}
+
+// Convenience accessor for the runtime: the legacy policy string + explicit
+// capability flags. This is the single source the runtime gates on; it is
+// guaranteed equal to the pre-v0.4.0 detectPolicy() classification.
+export function resolveRuntimePolicy(model) {
+  return resolvePolicy(model).runtime
 }
 
 // Compatibility classification used by detectPolicy(). Reproduces the
