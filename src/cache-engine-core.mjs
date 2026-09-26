@@ -20,6 +20,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
 import { createHash } from "node:crypto"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
+import { resolveLegacyFamily } from "./cache-policy-core.mjs"
 
 export const CONFIG_FILENAME = "cache-engine.json"
 export const DEFAULT_CONFIG_PATH = join(homedir(), ".config/opencode", CONFIG_FILENAME)
@@ -205,61 +206,26 @@ export function canonicalStringify(value) {
 
 // ---------------------------------------------------------------------------
 // Model detection -> cache-policy family
+//
+// Classification now lives in the structured registry/resolver in
+// cache-policy-core.mjs (traceable to docs/cache-policy-inventory.md).
+// detectPolicy() remains a compatibility wrapper over resolveLegacyFamily() so
+// runtime behavior is unchanged until the resolver is wired in a later release.
 // ---------------------------------------------------------------------------
 
-// Normalize a model-like object into a searchable haystack. Accepts both the
-// full OpenCode Model ({providerID, id, api:{id,npm}, name}) and slim test
-// objects ({providerID, modelID/apiID}).
-function modelSignals(model) {
-  const m = model && typeof model === "object" ? model : {}
-  const api = m.api && typeof m.api === "object" ? m.api : {}
-  const providerID = String(m.providerID ?? m.provider ?? "")
-  const apiID = String(m.modelID ?? api.id ?? m.id ?? m.apiID ?? "")
-  const modelID = String(m.id ?? "")
-  const npm = String(api.npm ?? m.npm ?? "")
-  const name = String(m.name ?? "")
-  const slug = `${apiID} ${modelID}`.trim()
-  return { providerID, apiID, modelID, npm, name, slug: slug.toLowerCase() }
+const LEGACY_FAMILY_TO_POLICY = {
+  "gpt-5.6": POLICY_GPT56,
+  "glm-5.3": POLICY_GLM53,
+  "mimo-v2.6": POLICY_MIMO26,
+  deepseek: POLICY_DEEPSEEK,
 }
-
-// OpenAI-ish context is required before we apply GPT-5.6 options, so we never
-// send GPT-5.6-only fields to a non-OpenAI endpoint merely because a model
-// string contains "gpt-5.6". A slug that explicitly starts with openai/ or
-// azure/ (typical for openrouter/azure/openai-compatible routes) also counts
-// because the upstream IS OpenAI. A bare openai-compatible provider with no
-// such slug does NOT count: we must not guess.
-function isOpenAIish(s) {
-  const { providerID, slug, npm } = s
-  const p = providerID.toLowerCase()
-  if (p === "openai" || p === "azure") return true
-  if (slug.startsWith("openai/") || slug.startsWith("azure/")) return true
-  if (/@ai-sdk\/openai|@ai-sdk\/azure/.test(npm)) return true
-  return false
-}
-
-// The gpt-5.6 family, tolerating OpenCode's variants: gpt-5.6, gpt-5.6-luna,
-// gpt-5.6-luna:flex, gpt-5.6-luna-pro:flex, gpt-5.6-<anything>.
-// A trailing digit guard avoids matching hypothetical "gpt-5.60" etc.
-const GPT56_RE = /gpt-5\.6(?![\d.])/i
-// GLM 5.3 family only (not glm-4.x / glm-4.6 etc).
-const GLM53_RE = /glm-5\.3(?![\d.])/i
-// Xiaomi MiMo V2.6 explicitly targets Flash + Pro only. The trailing
-// (?![\w-]) guard prevents matching a hypothetical "mimo-v2.6-pro-ultraspeed"
-// or "mimo-v2.6-flashx", and the v2\.6 literal excludes V2.5 / V2.
-const MIMO26_RE = /mimo-v2\.6-(flash|pro)(?![\w-])/i
-const DEEPSEEK_RE = /deepseek/i
 
 // Pure classifier. Returns one of the POLICY_* keys. `model` may be a full
-// OpenCode Model, or {providerID, modelID|apiID|id}.
+// OpenCode Model, or {providerID, modelID|apiID|id}. Newer generations (e.g.
+// gpt-6) and intra-family exact overlays intentionally resolve to neutral here,
+// exactly as before v0.4.0; use resolvePolicy() for the richer structured result.
 export function detectPolicy(model) {
-  if (!model || typeof model !== "object") return POLICY_NEUTRAL
-  const s = modelSignals(model)
-  if (!s.slug) return POLICY_NEUTRAL
-  if (GPT56_RE.test(s.slug) && isOpenAIish(s)) return POLICY_GPT56
-  if (GLM53_RE.test(s.slug)) return POLICY_GLM53
-  if (MIMO26_RE.test(s.slug)) return POLICY_MIMO26
-  if (DEEPSEEK_RE.test(s.slug) || DEEPSEEK_RE.test(s.providerID)) return POLICY_DEEPSEEK
-  return POLICY_NEUTRAL
+  return LEGACY_FAMILY_TO_POLICY[resolveLegacyFamily(model)] ?? POLICY_NEUTRAL
 }
 
 export function policyEnabled(cfg, family) {
