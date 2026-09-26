@@ -4,12 +4,7 @@ import {
   DEFAULT_CONFIG_PATH,
   DIGEST_TEMPLATE,
   affinityTelemetryFields,
-  POLICY_GLM53,
-  POLICY_GPT56,
-  POLICY_MIMO26,
-  POLICY_NEUTRAL,
   createRecorder,
-  detectPolicy,
   detectReasoningIssues,
   digestDecision,
   ensureMetricsDir,
@@ -37,6 +32,7 @@ import {
   toolFingerprint,
   toolWireFingerprint,
 } from "./cache-engine-core.mjs"
+import { resolveRuntimePolicy } from "./cache-policy-core.mjs"
 
 // ---------------------------------------------------------------------------
 // cache-engine
@@ -101,7 +97,21 @@ type Shape = {
   toolCount: number | null
 }
 
-type ModelInfo = { family: string; providerID: string; modelID: string }
+// Resolved runtime policy (the registry's runtime descriptor). `policy` is the
+// legacy telemetry/state string emitted by the pre-v0.4.0 classifier.
+type PolicyRuntime = {
+  policy: string
+  isNeutral: boolean
+  gptCacheMetadata: boolean
+  envRelocation: "glm" | "mimo" | null
+  thinkingIntegrity: boolean
+  cacheRatio: "glm" | "mimo" | null
+  providerChange: "glm" | "mimo" | null
+  prefixDiagnostics: boolean
+  openRouterAffinity: boolean
+}
+
+type ModelInfo = { family: string; providerID: string; modelID: string; caps: PolicyRuntime }
 
 type ToolCache = { semanticToolsHash: string | null; wireToolsHash: string | null }
 
@@ -258,19 +268,21 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
   // gpt56/glm53/deepseek classification once established.
   const rememberModel = (sid: string, model: ChatParamsModel | undefined): ModelInfo | null => {
     if (!model) return null
-    const family = detectPolicy(model)
+    // Single runtime source of policy classification: the registry resolver.
+    const caps = resolveRuntimePolicy(model) as PolicyRuntime
     const s = get(sid)
     const info: ModelInfo = {
-      family,
+      family: caps.policy,
       providerID: String(model.providerID ?? ""),
       modelID: String(model.api?.id ?? model.id ?? ""),
+      caps,
     }
-    if (s.modelInfo == null || (s.modelInfo.family === POLICY_NEUTRAL && family !== POLICY_NEUTRAL)) {
+    if (s.modelInfo == null || (s.modelInfo.caps.isNeutral && !caps.isNeutral)) {
       s.modelInfo = info
       // A title/summary request (neutral small model) may have established the
       // system baseline first. Its "powered by the model named ..." env line
       // differs from the real model's, so re-baseline on upgrade.
-      if (s.baselineSystem !== null && s.modelInfo.family !== POLICY_NEUTRAL) {
+      if (s.baselineSystem !== null && !caps.isNeutral) {
         s.baselineSystem = null
         s.shape = null
       }
@@ -350,11 +362,11 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
 
       s.lastProcessedMessageID = nextProcessedCursor(firstPage, startCursor)
 
-      const family = s.modelInfo?.family
+      const caps = s.modelInfo?.caps
       const glmIntegrity =
-        family === POLICY_GLM53 &&
-        policyEnabled(cfg, POLICY_GLM53) &&
-        cfg.policies?.[POLICY_GLM53]?.preserveThinkingIntegrity === true
+        caps?.thinkingIntegrity === true &&
+        policyEnabled(cfg, caps.policy) &&
+        cfg.policies?.[caps.policy]?.preserveThinkingIntegrity === true
 
       if (glmIntegrity && reasoningNewestFirst.length > 0) {
         // messages arrive newest-first; process oldest->newest so `seen` grows
@@ -417,11 +429,11 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
           recFields.model = s.modelInfo.modelID
           recFields.policy = s.modelInfo.family
         }
-        if (family === POLICY_GLM53) {
+        if (caps?.cacheRatio === "glm") {
           recFields.promptTokens = read + write + input
           recFields.glmHitRate = glmHitRatio(read, write, input)
         }
-        if (family === POLICY_MIMO26) {
+        if (caps?.cacheRatio === "mimo") {
           // Provider-reported cached tokens / total prompt tokens. The runtime's
           // `input` is the non-cached prompt input and `cache.read` is the
           // cached prompt input, so total prompt tokens are derived as read +
@@ -431,7 +443,7 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
           recFields.promptTokens = promptTokens
           recFields.cachedTokens = read
           recFields.cacheHitRate = mimoHitRate(read, promptTokens)
-          if (cfg.policies?.[POLICY_MIMO26]?.stickySession === true) {
+          if (cfg.policies?.[caps.policy]?.stickySession === true) {
             recFields.stickySessionId = mimoSessionIdFor(sid)
           }
           // Prefer the latest live provider identity over the latched one.
@@ -440,10 +452,10 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
             recFields.model = s.mimoProvider.modelID
           }
         }
-        if (family === POLICY_GPT56 && s.gptInjected) {
+        if (caps?.gptCacheMetadata === true && s.gptInjected) {
           recFields.keyStrategy = "session"
-          recFields.mode = cfg.policies?.[POLICY_GPT56]?.mode
-          recFields.ttl = cfg.policies?.[POLICY_GPT56]?.ttl
+          recFields.mode = cfg.policies?.[caps.policy]?.mode
+          recFields.ttl = cfg.policies?.[caps.policy]?.ttl
         }
         rec.record(recFields)
       } else {
@@ -495,8 +507,9 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
       try {
         const model = input.model as unknown as ChatParamsModel
         const providerID = String(model?.providerID ?? "")
-        const family = detectPolicy(model)
-        if (family !== POLICY_MIMO26 && family !== POLICY_GLM53) return
+        const caps = resolveRuntimePolicy(model) as PolicyRuntime
+        if (!caps.openRouterAffinity) return
+        const family = caps.policy
 
         const hasSessionIDHeader = (headers?: Record<string, string>) =>
           Object.keys(headers ?? {}).some((name) => name.toLowerCase() === "x-session-id")
@@ -536,6 +549,7 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
       try {
         const info = rememberModel(input.sessionID, input.model as unknown as ChatParamsModel)
         const family = info?.family
+        const caps = info?.caps
 
         // ---- MiMo-V2.6: provider-switch diagnostics (telemetry only) ---------
         // MiMo cache lives at the provider side, so a provider change within one
@@ -545,7 +559,7 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
         // NOTE: OpenRouter's *upstream* provider selection (e.g. xiaomi/fp8) is
         // not exposed to plugins; only the OpenCode providerID/modelID are
         // observable here.
-        if (family === POLICY_MIMO26 && policyEnabled(cfg, POLICY_MIMO26) && info) {
+        if (caps?.providerChange === "mimo" && policyEnabled(cfg, caps.policy) && info) {
           // Use the LIVE model identity (not the latched one) so a provider
           // switch within the session is actually observable.
           const live = input.model as unknown as ChatParamsModel
@@ -558,7 +572,7 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
             const ev = providerChangeEvent(s.mimoProvider, cur)
             if (ev.changed) {
               const sticky =
-                cfg.policies?.[POLICY_MIMO26]?.stickySession === true
+                cfg.policies?.[caps.policy]?.stickySession === true
                   ? { stickySessionId: mimoSessionIdFor(input.sessionID) }
                   : {}
               rec.record({
@@ -566,7 +580,7 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
                 sid: input.sessionID,
                 ts: Date.now(),
                 reason: "mimo_provider_changed",
-                policy: POLICY_MIMO26,
+                policy: caps.policy,
                 from: ev.from,
                 to: ev.to,
                 ...sticky,
@@ -579,7 +593,7 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
         }
 
         // ---- GLM-5.3 provider identity observation (telemetry only) ----------
-        if (family === POLICY_GLM53 && policyEnabled(cfg, POLICY_GLM53) && info) {
+        if (caps?.providerChange === "glm" && policyEnabled(cfg, caps.policy) && info) {
           const live = input.model as unknown as ChatParamsModel
           const cur = {
             providerID: String(live?.providerID ?? ""),
@@ -594,7 +608,7 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
                 sid: input.sessionID,
                 ts: Date.now(),
                 reason: "glm_provider_changed",
-                policy: POLICY_GLM53,
+                policy: caps.policy,
                 from: ev.from,
                 to: ev.to,
                 note: "OpenCode providerID changed; provider-specific upstream routing is not plugin-visible",
@@ -605,12 +619,12 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
           return
         }
 
-        if (!(family === POLICY_GPT56 && policyEnabled(cfg, POLICY_GPT56))) {
+        if (!(caps?.gptCacheMetadata === true && policyEnabled(cfg, caps.policy))) {
           // DeepSeek / GLM / neutral: nothing to inject. GLM has no cache-key API;
           // DeepSeek caching is fully passive; we never mutate requests for them.
           return
         }
-        const gpol = cfg.policies?.[POLICY_GPT56]
+        const gpol = cfg.policies?.[caps.policy]
         const applyRoot = gpol?.cacheRootKey !== false
         const compaction = input.agent === "compaction"
         const isolated = compaction && gpol?.compactionCacheIsolation === true
@@ -678,7 +692,7 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
             kind: "cache-options",
             sid: input.sessionID,
             ts: Date.now(),
-            policy: POLICY_GPT56,
+            policy: caps.policy,
             provider: info.providerID,
             model: info.modelID,
             keyStrategy: applyRoot ? "cache-root" : "session",
@@ -784,43 +798,40 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
         const model = input.model as unknown as ChatParamsModel
         rememberModel(sid, model)
         const s = get(sid)
-        const family = s.modelInfo?.family
+        const caps = s.modelInfo?.caps
 
         // ---- GLM-5.3 / MiMo-V2.6 input-shape stabilization ------------------
         // Relocate the identifiable volatile env block (per-day date) to the
         // tail of the single system string, content-preserving, ONLY when the
-        // family opts into system stabilization and the block markers are
-        // present exactly. Never touches other content/order; never applied to
-        // other families. The runtime passes a single-element system array
-        // (verified against the installed runtime), so no generic reordering is
-        // involved.
+        // resolved runtime policy opts into system stabilization and the block
+        // markers are present exactly. Never touches other content/order; never
+        // applied to other families. The runtime passes a single-element system
+        // array (verified against the installed runtime), so no generic
+        // reordering is involved.
         //
         // In-place mutation note: request.ts keeps using its own local `system`
         // array after the hook (the trigger's returned output is ignored), so
         // reassigning `output.system = [...]` would be lost. We rewrite the
         // single element in place instead.
         let systemText = output.system.join("\n")
-        const glmStabilize =
-          family === POLICY_GLM53 &&
-          policyEnabled(cfg, POLICY_GLM53) &&
-          cfg.policies?.[POLICY_GLM53]?.stabilizeSystem === true
-        const mimoStabilize =
-          family === POLICY_MIMO26 &&
-          policyEnabled(cfg, POLICY_MIMO26) &&
-          cfg.policies?.[POLICY_MIMO26]?.stabilizeSystem === true
-        if ((glmStabilize || mimoStabilize) && output.system.length === 1) {
+        const envVariant = caps?.envRelocation ?? null
+        const stabilize =
+          envVariant !== null &&
+          policyEnabled(cfg, caps!.policy) &&
+          cfg.policies?.[caps!.policy]?.stabilizeSystem === true
+        if (stabilize && output.system.length === 1) {
           const rel = relocateVolatileEnvBlock(output.system[0])
           if (rel.changed) {
             output.system[0] = rel.text
             systemText = rel.text
-            if (family === POLICY_MIMO26) {
+            if (envVariant === "mimo") {
               log("debug", "mimo system env block relocated to suffix", { sid })
               rec.record({
                 kind: "boundary",
                 sid,
                 ts: Date.now(),
                 reason: "mimo_system_env_relocated",
-                policy: POLICY_MIMO26,
+                policy: caps!.policy,
                 provider: s.modelInfo?.providerID,
                 model: s.modelInfo?.modelID,
               })
@@ -906,13 +917,13 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
           // MiMo-specific explicit diagnostic: the STABLE prefix changed (not
           // just the relocated volatile env suffix). Reported only; the new
           // content is never overwritten with a stale snapshot.
-          if (family === POLICY_MIMO26 && reasons.includes("system_stable_prefix_changed")) {
+          if (caps?.prefixDiagnostics === true && reasons.includes("system_stable_prefix_changed")) {
             rec.record({
               kind: "boundary",
               sid,
               ts: Date.now(),
               reason: "mimo_system_prefix_changed",
-              policy: POLICY_MIMO26,
+              policy: caps!.policy,
               provider: s.modelInfo?.providerID,
               model: s.modelInfo?.modelID,
               changedFields: granular,
