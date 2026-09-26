@@ -48,6 +48,14 @@ import {
   toolFingerprint,
   toolWireFingerprint,
 } from "../src/cache-engine-core.mjs"
+import {
+  BASELINES,
+  MODEL_ALIASES,
+  OVERLAYS,
+  POLICY_REGISTRY,
+  resolveLegacyFamily,
+  resolvePolicy,
+} from "../src/cache-policy-core.mjs"
 
 const asst = (id, read, write) => ({
   info: { id, role: "assistant", tokens: { cache: { read, write } } },
@@ -1315,4 +1323,231 @@ test("affinity telemetry preserves non-OpenRouter families and reports provider 
   assert.equal(glmChange.from.providerID, "openrouter")
   assert.equal(glmChange.to.providerID, "zai")
   assert.equal(glmChange.policy, POLICY_GLM53)
+})
+
+// ===========================================================================
+// v0.4.0 policy registry + resolvePolicy() (research-backed, pure, unwired)
+//
+// The inventory (docs/cache-policy-inventory.md) is the authority. These tests
+// assert the structured resolution layer and that detectPolicy() remains
+// byte-compatible with its pre-v0.4.0 behavior.
+// ===========================================================================
+
+const overlayIds = (r) => r.overlays.map((o) => o.id)
+const baseId = (r) => (r.baseline ? r.baseline.id : null)
+
+test("resolvePolicy: GPT-5.6 exact + inventory aliases resolve to the gpt-5.6 family", () => {
+  const exact = resolvePolicy(M("openai", "gpt-5.6-sol"))
+  assert.equal(exact.creator, "openai")
+  assert.equal(exact.family, "gpt-5.6")
+  assert.equal(exact.matchType, "exact")
+  assert.equal(baseId(exact), "openai.gpt56.cache")
+  assert.deepEqual(overlayIds(exact), ["gpt56.prompt-cache-options"])
+  assert.equal(exact.transport.kind, "direct")
+
+  // Inventory alias: gpt-5.6 -> gpt-5.6-sol
+  const alias = resolvePolicy(M("openai", "gpt-5.6"))
+  assert.equal(alias.family, "gpt-5.6")
+  assert.equal(alias.matchType, "exact")
+  assert.ok(alias.matchReason.startsWith("alias:gpt-5.6"))
+  assert.deepEqual(overlayIds(alias), ["gpt56.prompt-cache-options"])
+
+  // OpenRouter-prefixed documented variant resolves by exact id (prefix stripped)
+  const orVariant = resolvePolicy(M("openrouter", "openai/gpt-5.6-luna"))
+  assert.equal(orVariant.family, "gpt-5.6")
+  assert.equal(orVariant.matchType, "exact")
+})
+
+test("resolvePolicy: GPT-6 resolves via explicit documented inheritance, with no overlay", () => {
+  const r = resolvePolicy(M("openrouter", "openai/gpt-6-luna"))
+  assert.equal(r.creator, "openai")
+  assert.equal(r.family, "gpt-6")
+  assert.equal(baseId(r), "openai.gpt56.cache")
+  assert.deepEqual(overlayIds(r), [])
+  assert.equal(resolvePolicy(M("openai", "gpt-6-astra")).family, "gpt-6")
+
+  // Inheritance is explicit, not "newer means same": the registry records it.
+  const gpt6 = POLICY_REGISTRY.find((e) => e.family === "gpt-6")
+  assert.equal(gpt6.inheritsFrom, "gpt-5.6")
+  assert.ok(gpt6.inventoryRef)
+  // And no overlay is implied by that inheritance.
+  assert.deepEqual(gpt6.overlays, [])
+})
+
+test("resolvePolicy: GPT-6 is not classified by the legacy detectPolicy wrapper", () => {
+  // Intentional: the new layer knows gpt-6, the compatibility wrapper does not.
+  assert.equal(detectPolicy(M("openai", "gpt-6-astra")), POLICY_NEUTRAL)
+  assert.equal(resolvePolicy(M("openai", "gpt-6-astra")).family, "gpt-6")
+})
+
+test("resolvePolicy: pre-5.6 GPT negative controls are neutral with no overlays", () => {
+  for (const id of ["gpt-5.5", "gpt-5.4", "gpt-5.2", "gpt-5.1", "gpt-5", "gpt-4.1", "gpt-4o"]) {
+    const r = resolvePolicy(M("openai", id))
+    assert.equal(r.family, "neutral", `${id} must be neutral`)
+    assert.deepEqual(overlayIds(r), [])
+    assert.equal(r.matchType, "neutral")
+  }
+})
+
+test("resolvePolicy: DeepSeek V4 / V4.1 resolve to the creator baseline (passive, no overlay)", () => {
+  const v4 = resolvePolicy(M("deepseek", "deepseek-v4-pro"))
+  assert.equal(v4.creator, "deepseek")
+  assert.equal(v4.family, "deepseek")
+  assert.equal(v4.matchType, "creator")
+  assert.equal(baseId(v4), "deepseek.kv-cache")
+  assert.deepEqual(overlayIds(v4), [])
+
+  assert.equal(resolvePolicy(M("deepseek", "deepseek-flash")).family, "deepseek")
+
+  // Inventory alias: retired deepseek-v4-flash -> deepseek-flash
+  const legacy = resolvePolicy(M("deepseek", "deepseek-v4-flash"))
+  assert.equal(legacy.family, "deepseek")
+  assert.ok(legacy.matchReason.startsWith("alias:deepseek-v4-flash"))
+
+  // pre-V4 negative control still resolves to the creator baseline
+  assert.equal(resolvePolicy(M("deepseek", "deepseek-chat")).family, "deepseek")
+})
+
+test("resolvePolicy: GLM-5.3 + documented 5.3 variants carry the overlay; 5.2 and earlier do not", () => {
+  const r = resolvePolicy(M("zai", "glm-5.3"))
+  assert.equal(r.creator, "z.ai")
+  assert.equal(r.family, "glm-5.3")
+  assert.equal(baseId(r), "zai.implicit-cache")
+  assert.deepEqual(overlayIds(r), ["glm53.env-relocation"])
+
+  assert.equal(resolvePolicy(M("zai", "glm-5.3-flash")).family, "glm-5.3")
+  assert.equal(resolvePolicy(M("z-ai", "glm-5.3-flashx")).family, "glm-5.3")
+
+  for (const id of ["glm-5.2", "glm-5.1", "glm-5", "glm-4.7", "glm-4.6", "glm-4.5"]) {
+    const g = resolvePolicy(M("zai", id))
+    assert.equal(g.family, "neutral", `${id} must be neutral`)
+    assert.deepEqual(overlayIds(g), [])
+  }
+})
+
+test("resolvePolicy: MiMo V2.6 Flash/Pro carry the overlay; Pro UltraSpeed is an explicit no-overlay series member", () => {
+  const flash = resolvePolicy(M("xiaomi", "mimo-v2.6-flash"))
+  assert.equal(flash.creator, "xiaomi")
+  assert.equal(flash.family, "mimo-v2.6")
+  assert.equal(baseId(flash), "xiaomi.implicit-cache")
+  assert.deepEqual(overlayIds(flash), ["mimo26.env-relocation"])
+
+  const pro = resolvePolicy(M("xiaomi", "mimo-v2.6-pro"))
+  assert.equal(pro.family, "mimo-v2.6")
+  assert.deepEqual(overlayIds(pro), ["mimo26.env-relocation"])
+
+  // Documented as the same V2.6 series but with NO registered overlay.
+  const ultraspeed = resolvePolicy(M("xiaomi", "mimo-v2.6-pro-ultraspeed"))
+  assert.equal(ultraspeed.family, "mimo-v2.6")
+  assert.equal(ultraspeed.matchType, "exact")
+  assert.deepEqual(overlayIds(ultraspeed), [])
+  const uEntry = POLICY_REGISTRY.find((e) => e.id === "xiaomi.mimo-v2.6-pro-ultraspeed")
+  assert.equal(uEntry.policyStatus, "documented-series-member-without-registered-overlay")
+
+  const v25 = resolvePolicy(M("xiaomi", "mimo-v2.5"))
+  assert.equal(v25.family, "neutral")
+  assert.deepEqual(overlayIds(v25), [])
+})
+
+test("resolvePolicy: overlays are never implied by creator/family classification", () => {
+  // Being GLM/MiMo/DeepSeek does not by itself grant a transformation overlay.
+  assert.deepEqual(overlayIds(resolvePolicy(M("zai", "glm-4.6"))), [])
+  assert.deepEqual(overlayIds(resolvePolicy(M("xiaomi", "mimo-v2.5"))), [])
+  assert.deepEqual(overlayIds(resolvePolicy(M("deepseek", "deepseek-v4-pro"))), [])
+  // A hypothetical future GLM does not silently inherit the 5.3 overlay.
+  assert.deepEqual(overlayIds(resolvePolicy(M("zai", "glm-5.4"))), [])
+})
+
+test("resolvePolicy: malformed and unknown model ids resolve safely", () => {
+  for (const bad of [undefined, null, {}, 42, "gpt-5.6", [], true]) {
+    const r = resolvePolicy(bad)
+    assert.equal(r.family, "neutral")
+    assert.equal(r.matchType, "neutral")
+    assert.equal(baseId(r), "neutral.none")
+    assert.deepEqual(r.overlays, [])
+  }
+  // A provider with no model identity gets no family.
+  assert.equal(resolvePolicy({ providerID: "openai" }).family, "neutral")
+})
+
+test("resolvePolicy: unknown providers/creators do not gain policy from transport identity", () => {
+  const orUnknown = resolvePolicy(M("openrouter", "acme/mystery-model-9"))
+  assert.equal(orUnknown.family, "neutral")
+  assert.deepEqual(orUnknown.overlays, [])
+  assert.equal(orUnknown.transport.kind, "openrouter")
+  assert.equal(orUnknown.transport.sessionAffinityHeader, "x-session-id")
+
+  // gpt-5.6 on a non-OpenAI gateway stays neutral even though the id looks OpenAI
+  assert.equal(resolvePolicy(M("some-gateway", "gpt-5.6")).family, "neutral")
+  assert.equal(resolvePolicy(M("xiaomi", "not-a-mimo")).family, "neutral")
+})
+
+test("resolvePolicy: transport is computed independently from cache policy", () => {
+  const ds = resolvePolicy(M("deepseek", "deepseek-v4-pro"))
+  assert.equal(ds.transport.kind, "direct")
+  assert.equal(ds.transport.sessionAffinityHeader, null)
+
+  const or = resolvePolicy(M("openrouter", "openai/gpt-5.6-luna"))
+  assert.equal(or.family, "gpt-5.6")
+  assert.equal(or.transport.kind, "openrouter")
+  assert.equal(or.transport.sessionAffinityHeader, "x-session-id")
+
+  const zai = resolvePolicy(M("zai", "glm-5.3"))
+  assert.equal(zai.transport.kind, "direct")
+  assert.equal(zai.transport.sessionAffinityHeader, null)
+
+  const noProvider = resolvePolicy({ modelID: "gpt-6-astra" })
+  assert.equal(noProvider.transport.kind, "unknown")
+})
+
+test("resolvePolicy is pure and does not mutate its input", () => {
+  const model = Object.freeze({ providerID: "openai", modelID: "gpt-5.6-sol" })
+  const r = resolvePolicy(model)
+  assert.equal(r.family, "gpt-5.6")
+  assert.equal(model.modelID, "gpt-5.6-sol")
+})
+
+test("detectPolicy remains compatible with the legacy family resolution", () => {
+  const legacyMap = {
+    "gpt-5.6": POLICY_GPT56,
+    "glm-5.3": POLICY_GLM53,
+    "mimo-v2.6": POLICY_MIMO26,
+    deepseek: POLICY_DEEPSEEK,
+  }
+  const samples = [
+    M("openrouter", "openai/gpt-5.6-luna"),
+    M("openai", "gpt-5.6"),
+    M("openai-compatible", "gpt-5.6"),
+    M("openai", "gpt-5.5"),
+    M("zai", "glm-5.3-flash"),
+    M("zai", "glm-4.6"),
+    M("xiaomi", "mimo-v2.6-flash"),
+    M("xiaomi", "mimo-v2.6-pro-ultraspeed"),
+    M("xiaomi", "mimo-v2.5"),
+    M("deepseek", "deepseek-chat"),
+    M("openrouter", "x-ai/grok-4"),
+    M("anthropic", "claude-sonnet-4-5"),
+    {},
+    null,
+    undefined,
+    42,
+  ]
+  for (const m of samples) {
+    const expected = legacyMap[resolveLegacyFamily(m)] ?? POLICY_NEUTRAL
+    assert.equal(detectPolicy(m), expected)
+  }
+})
+
+test("registry is traceable and internally consistent", () => {
+  for (const entry of POLICY_REGISTRY) {
+    assert.ok(entry.inventoryRef, `${entry.id} must cite the inventory`)
+    assert.ok(BASELINES[entry.baseline], `${entry.id} baseline must exist`)
+    for (const overlayId of entry.overlays) {
+      assert.ok(OVERLAYS[overlayId], `${entry.id} overlay ${overlayId} must exist`)
+    }
+  }
+  for (const [id, alias] of Object.entries(MODEL_ALIASES)) {
+    assert.ok(alias.inventoryRef, `alias ${id} must cite the inventory`)
+    assert.ok(alias.family)
+  }
 })
