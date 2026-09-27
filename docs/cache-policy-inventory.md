@@ -45,9 +45,9 @@ Two guarantees follow from that migration:
 - `resolveRuntimePolicy(model).policy` equals the legacy `detectPolicy(model)`
   string, so telemetry and gating are unchanged for every model supported in
   v0.3.6.
-- Registry entries marked non-`legacy` (for example `gpt-6`) and all unknown
-  models resolve to a neutral runtime, so no documented-but-unwired model gains
-  a current model's mutation.
+- Registry entries marked non-`legacy` (for example
+  `mimo-v2.6-pro-ultraspeed`) and all unknown models resolve to a neutral
+  runtime, so no documented-but-unwired model gains a current model's mutation.
 
 The runtime reads the registry at classification time only; there are no network
 calls and no runtime documentation lookups.
@@ -62,14 +62,17 @@ source changed.
 | Family | Detection (verbatim) | Current treatment | Affinity header |
 | --- | --- | --- | --- |
 | DeepSeek | `/deepseek/i` on `${apiID} ${modelID}` or `providerID` | Passive; no mutation | none |
-| GPT-5.6 | `/gpt-5\.6(?![\d.])/i` on slug **and** `isOpenAIish` (provider `openai`/`azure`, slug `openai/`/`azure/`, or npm `@ai-sdk/openai`/`@ai-sdk/azure`) | Inject missing `promptCacheKey` + `promptCacheOptions` (`implicit`, `30m`) | none |
+| GPT-5.6 | version boundary `gpt-<major>[.<minor>] ≥ 5.6` on slug **and** `isOpenAIish` (provider `openai`/`azure`, slug `openai/`/`azure/`, or npm `@ai-sdk/openai`/`@ai-sdk/azure`); since v0.4.2 covers GPT-6 and later | Inject missing `promptCacheKey` + `promptCacheOptions` (`implicit`, `30m`) | none |
 | GLM-5.3 | `/glm-5\.3(?![\d.])/i` on slug | Relocate identifiable `<env>` block to system tail | `x-session-id` only when `providerID === "openrouter"` |
 | MiMo-V2.6 | `/mimo-v2\.6-(flash\|pro)(?![\w-])/i` on slug | Relocate identifiable `<env>` block to system tail; provider-change telemetry | `x-session-id` only when `providerID === "openrouter"` |
 | Neutral | everything else | Byte-untouched | none |
 
 Detection consequences worth stating explicitly:
 
-- `gpt-6*` / `gpt-6-*` is **not** matched → neutral. **[O]**
+- `gpt-6` / `gpt-6-*` (and any future 5.6+/6+/7+ version) is matched by the
+  documented GPT-5.6-and-later boundary → GPT policy. **[O]** (v0.4.2)
+- `gpt-5.5`, `gpt-5.2`, `gpt-4o`, and the malformed `gpt-5.60` are **not**
+  matched → neutral. **[O]**
 - `deepseek-v5` (or any future `*deepseek*` id) matches the passive DeepSeek
   branch because the regex is a bare substring test. **[O]**
 - `mimo-v2.6-pro-ultraspeed` is **not** matched: the `(?![\w-])` lookahead fails
@@ -117,8 +120,10 @@ catch-all "earlier models". [D]
 baseline: it injects only `promptCacheKey` + `promptCacheOptions{mode:implicit,
 ttl:"30m"}`, preserves runtime-supplied values, and never sets context/output
 limits. It does not use explicit breakpoints or `prewarm`, which is a subset of
-the documented capability. GPT-6 is **not** classified and therefore gets no GPT
-cache metadata — a documented-scope gap, not a documented incompatibility.
+the documented capability. Since v0.4.2 the policy resolves by the documented
+"GPT-5.6 and later" boundary, so GPT-6 (astra/sol/luna) receives the same
+baseline; no GPT-6 cache-control exception is documented (OpenAI *Prompt
+caching* guide, re-verified 2026-09-27), and none is coded.
 
 ---
 
@@ -276,7 +281,7 @@ made here); **hold** = do not inherit without first-party evidence.
 | Creator | Model / example pattern | Cache policy (documented) | CacheEngine current treatment | Recommended family inheritance | Recommended exact-model exception | Confidence | Source | Verified |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | OpenAI | `gpt-5.6`, `gpt-5.6-*` (sol/terra/luna/cyber) | "GPT-5.6 and later": implicit default, optional explicit breakpoints, min 1,024, TTL 30m, write 1.25×/read 0.1× | GPT policy: inject `promptCacheKey` + `promptCacheOptions{implicit,30m}` | keep | none documented; CacheEngine's subset is valid | High (docs) / Medium (treatment) | OpenAI *Prompt caching*; *GPT-5.6 Sol* | 2026-09-26 |
-| OpenAI | GPT-6 / current later GPT family: `gpt-6`, `gpt-6-*` (astra/sol/luna) | Inherits the GPT-5.6-and-later policy | **Not matched** → neutral (no GPT metadata) | **extend**: docs classify GPT-6 as "later", so it inherits the same policy | none documented | High (docs) / High (gap) | OpenAI *Using GPT-6*; *GPT-6 Astra*; *Prompt caching* | 2026-09-26 |
+| OpenAI | GPT-6 / current later GPT family: `gpt-6`, `gpt-6-*` (astra/sol/luna) | Inherits the GPT-5.6-and-later policy | **GPT policy** via the GPT-5.6-and-later boundary (v0.4.2) | **keep** — covered by the boundary predicate; no exact-model entry needed | none documented | High (docs) / High (treatment) | OpenAI *Using GPT-6*; *GPT-6 Astra*; *Prompt caching* | 2026-09-27 |
 | OpenAI | pre-5.6 negative controls: `gpt-5.5`, `gpt-5.4`, `gpt-5.2`, `gpt-5.1`, `gpt-5`, `gpt-4.1`, `gpt-4o` | Implicit only; different min-length class; `in_memory`/`24h` retention; `prompt_cache_key` for routing | neutral | **hold** — do not inherit 5.6 policy | n/a | High | OpenAI *Prompt caching*; *Pricing* | 2026-09-26 |
 | DeepSeek | V4: `deepseek-v4-pro`, legacy `deepseek-v4-flash` | Provider-wide automatic disk cache; implicit; prefix-unit matching; hit/miss token fields | Passive (no mutation) | keep | none | High | DeepSeek *Context Caching*; *Models & Pricing* | 2026-09-26 |
 | DeepSeek | V4.1 / current V4-family: `deepseek-flash` (MODEL VERSION "DeepSeek-V4.1-Flash") | Same provider-wide automatic policy; cache-hit pricing listed for both current models | Passive | keep (creator/family baseline) | none documented | High | DeepSeek *Models & Pricing*; *news260910* | 2026-09-26 |
@@ -342,3 +347,18 @@ a newer model inherits an older policy. They must not be resolved by guessing.
   unknown models remain neutral.
 - The v0.4.0 research statements above are unchanged; only the runtime now reads
   this registry as its single source of policy classification.
+
+### Follow-up: v0.4.2 GPT-5.6-and-later boundary
+
+- OpenAI's documented "GPT-5.6 and later" boundary was re-verified against the
+  first-party *Prompt caching* guide and *Using GPT-6* guide on **2026-09-27**.
+  GPT-6 (astra/sol/luna) is documented in the same cache regime with no
+  cache-control exception.
+- v0.4.2 replaces the exact `gpt-5.6` string match with a version-boundary
+  predicate (`gpt-<major>[.<minor>] ≥ 5.6`), still gated on the OpenAI-ish
+  provider check. GPT-6 and future 5.6+/6+/7+ models therefore need no
+  exact-model registry entry, while `gpt-5.5` and earlier and malformed ids such
+  as `gpt-5.60` stay neutral.
+- The only OpenAI cache controls injected remain `promptCacheKey` +
+  `promptCacheOptions{implicit,30m}`; no breakpoint or prewarm behavior was
+  added. DeepSeek, GLM, MiMo, and OpenRouter affinity behavior are unchanged.
