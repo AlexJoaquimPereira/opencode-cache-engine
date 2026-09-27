@@ -28,7 +28,9 @@ opencode plugin opencode-cache-engine
 The plugin currently has four cache-policy families:
 
 * **DeepSeek** — passive cache observability; request structure is preserved.
-* **GPT-5.6** — documented cache-key/options metadata, with prompt text unchanged.
+* **GPT-5.6 and later** — documented cache-key/options metadata, with prompt text
+  unchanged. GPT-6 and future 5.6+/6+/7+ versions resolve through the same
+  documented boundary.
 * **GLM-5.3** — narrow, content-preserving `<env>` relocation and diagnostics.
 * **MiMo-V2.6** — narrow, content-preserving `<env>` relocation and diagnostics.
 
@@ -62,7 +64,7 @@ It:
 3. Observes system-prompt and tool-definition stability.
 4. Records provider-reported cache token usage.
 5. Adds a deterministic compaction continuation block.
-6. Applies GPT-5.6 cache-control metadata.
+6. Applies GPT-5.6-and-later cache-control metadata.
 7. Applies the GLM-5.3 and MiMo-V2.6 volatile-environment relocation.
 8. Records diagnostics that help determine whether prompt-shape changes correlate with cache behavior.
 9. Records MiMo/GLM affinity outcomes and provider-identity changes.
@@ -128,7 +130,7 @@ DeepSeek:
 
 ### Policy: active cache control
 
-GPT-5.6 is the only current policy that actively injects cache-control request metadata.
+GPT-5.6 and later is the only policy family that actively injects cache-control request metadata.
 
 The plugin adds:
 
@@ -418,7 +420,7 @@ and are reported diagnostically; the message content is left untouched.
 | Policy family | Detection | Prompt text changed? | Cache metadata changed? | OpenRouter affinity header | Primary cache signal |
 | ------------- | --------- | ------------------- | ----------------------- | -------------------------- | -------------------- |
 | DeepSeek | `deepseek` | No | No | None | provider `cache.read` / `cache.write` |
-| GPT-5.6 | `gpt-5.6*` on OpenAI-ish endpoints | No | Yes: `prompt_cache_key` + options | None | provider cache tokens |
+| GPT-5.6 and later | version boundary `gpt-<major>[.<minor>] ≥ 5.6` on OpenAI-ish endpoints (includes GPT-6) | No | Yes: `prompt_cache_key` + options | None | provider cache tokens |
 | GLM-5.3 | `glm-5.3*` | Yes, narrowly (`<env>` tail) | No provider cache key | `x-session-id` on OpenRouter only | provider cache tokens (GLM ratio) |
 | MiMo-V2.6 | Flash / Pro only | Yes, narrowly (`<env>` tail) | No: implicit caching only | `x-session-id` on OpenRouter only | `cached_tokens / prompt_tokens` |
 
@@ -936,7 +938,7 @@ The model detector recognizes:
 * GLM-5.3 variants
 * MiMo-V2.6 Flash and Pro (`xiaomi/mimo-v2.6-flash`, `mimo-v2.6-pro`, ...)
 
-GPT-5.6 has an additional OpenAI/Azure-context check so a string containing `gpt-5.6` does not automatically cause GPT-specific fields to be sent to an unrelated endpoint.
+The GPT-5.6-and-later family has an additional OpenAI/Azure-context check, so a string containing a qualifying GPT version (for example `gpt-5.6` or `gpt-6`) does not automatically cause GPT-specific fields to be sent to an unrelated endpoint.
 
 MiMo detection targets exactly Flash and Pro: it excludes `mimo-v2.5`,
 `mimo-v2.5-pro`, and `mimo-v2.6-pro-ultraspeed`.
@@ -1038,9 +1040,12 @@ returns the runtime-facing descriptor the hooks consume: the legacy policy
 string plus explicit capability flags.
 
 Only registry entries marked `legacy` enable runtime behavior; documented but
-non-legacy entries (for example `gpt-6`) and all unknown models resolve to a
-neutral runtime. A newer or unknown model therefore never inherits a current
-model's mutation unless the registry explicitly registers it.
+non-legacy entries (for example `mimo-v2.6-pro-ultraspeed`) and all unknown
+models resolve to a neutral runtime. A newer or unknown model therefore never
+inherits a current model's mutation unless the registry explicitly registers it.
+The GPT family is a documented exception in the sense that its boundary is
+version-based (`GPT-5.6 and later`), so GPT-6 and future 5.6+/6+/7+ versions are
+covered by the registered boundary rather than by an exact-model list.
 
 Transport is kept separate from cache policy: OpenRouter affinity is a transport
 capability, not part of a creator's cache semantics. Overlays are also explicit,
@@ -1337,7 +1342,7 @@ A prefix change is a diagnostic signal, not automatic proof of a cache miss.
 
 ## GPT-5.6 cache options are missing
 
-Verify that the model is actually classified as GPT-5.6 and that the endpoint is recognized as OpenAI/Azure-compatible.
+Verify that the model is within the documented GPT-5.6-and-later boundary (for example `gpt-5.6-*` or `gpt-6-*`) and that the endpoint is recognized as OpenAI/Azure-compatible.
 
 The detector intentionally rejects ambiguous OpenAI-compatible providers rather than guessing.
 
