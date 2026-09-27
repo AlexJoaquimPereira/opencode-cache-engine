@@ -53,6 +53,7 @@ import {
   MODEL_ALIASES,
   OVERLAYS,
   POLICY_REGISTRY,
+  isDeepseekV4OrLater,
   isGpt56OrLater,
   resolveLegacyFamily,
   resolvePolicy,
@@ -1392,11 +1393,12 @@ test("resolvePolicy: pre-5.6 GPT negative controls are neutral with no overlays"
   }
 })
 
-test("resolvePolicy: DeepSeek V4 / V4.1 resolve to the creator baseline (passive, no overlay)", () => {
+test("resolvePolicy: DeepSeek V4 / V4.1 resolve to the passive baseline (no overlay)", () => {
   const v4 = resolvePolicy(M("deepseek", "deepseek-v4-pro"))
   assert.equal(v4.creator, "deepseek")
   assert.equal(v4.family, "deepseek")
-  assert.equal(v4.matchType, "creator")
+  // v0.4.3: deepseek-v4-pro is a documented canonical id, so it matches exactly.
+  assert.equal(v4.matchType, "exact")
   assert.equal(baseId(v4), "deepseek.kv-cache")
   assert.deepEqual(overlayIds(v4), [])
 
@@ -1642,6 +1644,10 @@ async function runPolicyMigrationProbe() {
       { name: "gpt-daybreak-alias", model: { providerID: "openai", id: "gpt-daybreak-blue-latest", api: { id: "gpt-daybreak-blue-latest", npm: "@ai-sdk/openai" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
       { name: "deepseek-v4-pro", model: { providerID: "deepseek", id: "deepseek-v4-pro", api: { id: "deepseek-v4-pro" } }, expect: { policy: "deepseek", env: false, gpt: false, header: false } },
       { name: "deepseek-flash", model: { providerID: "deepseek", id: "deepseek-flash", api: { id: "deepseek-flash" } }, expect: { policy: "deepseek", env: false, gpt: false, header: false } },
+      { name: "deepseek-v5-future", model: { providerID: "deepseek", id: "deepseek-v5", api: { id: "deepseek-v5" } }, expect: { policy: "deepseek", env: false, gpt: false, header: false } },
+      { name: "deepseek-v3-pre", model: { providerID: "deepseek", id: "deepseek-v3", api: { id: "deepseek-v3" } }, expect: { policy: "deepseek", env: false, gpt: false, header: false } },
+      { name: "deepseek-openrouter", model: { providerID: "openrouter", id: "deepseek/deepseek-v4-pro", api: { id: "deepseek/deepseek-v4-pro" } }, expect: { policy: "deepseek", env: false, gpt: false, header: false } },
+      { name: "deepseek-gateway", model: { providerID: "acme-gateway", id: "my-deepseek-mirror", api: { id: "my-deepseek-mirror" } }, expect: { policy: "deepseek", env: false, gpt: false, header: false } },
       { name: "glm-5.3-direct", model: { providerID: "zai", id: "glm-5.3", api: { id: "glm-5.3" } }, expect: { policy: "glm53", env: true, gpt: false, header: false } },
       { name: "glm-5.3-openrouter", model: { providerID: "openrouter", id: "z-ai/glm-5.3-flash", api: { id: "z-ai/glm-5.3-flash" } }, expect: { policy: "glm53", env: true, gpt: false, header: true } },
       { name: "glm-5.2", model: { providerID: "zai", id: "glm-5.2", api: { id: "glm-5.2" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
@@ -1817,5 +1823,95 @@ test("v0.4.2: pre-5.6 and out-of-family GPT ids get no GPT options", async () =>
     const r = results.find((x) => x.name === name)
     assert.equal(r.gptOptionInjected, false, `${name}: no GPT options`)
     assert.equal(r.runtimePolicy, "neutral", `${name}: neutral runtime`)
+  }
+})
+
+// ===========================================================================
+// v0.4.3 DeepSeek V4-and-later passive coverage
+//
+// Source: DeepSeek first-party docs re-verified 2026-09-27
+// (docs/cache-policy-inventory.md §2). Caching is provider-wide and passive:
+// no cache key/flag/breakpoint; Anthropic `cache_control` is ignored.
+// ===========================================================================
+
+test("v0.4.3: isDeepseekV4OrLater matches V4+ version tokens only", () => {
+  const inFamily = ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4.1", "deepseek-v4.5-pro", "deepseek-v5", "deepseek-v10", "deepseek/deepseek-v4-pro"]
+  for (const id of inFamily) assert.equal(isDeepseekV4OrLater(id), true, `${id} is V4+`)
+  const outOfFamily = ["deepseek-v3", "deepseek-v2", "deepseek-chat", "deepseek-reasoner", "deepseek-coder", "deepseek-flash", "my-deepseek-mirror", ""]
+  for (const id of outOfFamily) assert.equal(isDeepseekV4OrLater(id), false, `${id} is not a V4+ version token`)
+})
+
+test("v0.4.3: canonical V4 ids and aliases resolve to the passive DeepSeek family", () => {
+  for (const id of ["deepseek-flash", "deepseek-v4-pro"]) {
+    const r = resolvePolicy(M("deepseek", id))
+    assert.equal(r.creator, "deepseek")
+    assert.equal(r.family, "deepseek")
+    assert.equal(baseId(r), "deepseek.kv-cache")
+    assert.deepEqual(overlayIds(r), [])
+    const rt = resolveRuntimePolicy(M("deepseek", id))
+    assert.equal(rt.policy, "deepseek")
+    assert.equal(rt.gptCacheMetadata, false)
+    assert.equal(rt.envRelocation, null)
+    assert.equal(rt.cacheRatio, null)
+    assert.equal(rt.openRouterAffinity, false)
+  }
+  // v0.4.0 alias handling is preserved.
+  const alias = resolvePolicy(M("deepseek", "deepseek-v4-flash"))
+  assert.equal(alias.family, "deepseek")
+  assert.ok(alias.matchReason.startsWith("alias:deepseek-v4-flash"))
+  assert.equal(resolveRuntimePolicy(M("deepseek", "deepseek-v4-flash")).policy, "deepseek")
+  assert.equal(resolvePolicy(M("deepseek", "deepseek-chat")).family, "deepseek")
+})
+
+test("v0.4.3: later and unknown DeepSeek ids stay passive (no speculative mutation)", () => {
+  for (const id of ["deepseek-v5", "deepseek-v6.2", "deepseek-v4.1-pro", "deepseek-nova"]) {
+    const r = resolvePolicy(M("deepseek", id))
+    assert.equal(r.creator, "deepseek")
+    assert.equal(r.family, "deepseek")
+    assert.deepEqual(overlayIds(r), [], `${id}: no overlay`)
+    const rt = resolveRuntimePolicy(M("deepseek", id))
+    assert.equal(rt.policy, "deepseek", `${id}: passive policy`)
+    assert.equal(rt.gptCacheMetadata, false)
+    assert.equal(rt.envRelocation, null)
+    assert.equal(rt.cacheRatio, null)
+    assert.equal(rt.openRouterAffinity, false)
+  }
+})
+
+test("v0.4.3: pre-V4 DeepSeek ids remain passive and outside the V4+ family entry", () => {
+  for (const id of ["deepseek-v3", "deepseek-v2", "deepseek-coder"]) {
+    const r = resolvePolicy(M("deepseek", id))
+    assert.equal(r.family, "deepseek")
+    // handled by the safe creator fallback, not the V4+ family predicate
+    assert.equal(r.matchType, "creator", `${id}: creator fallback`)
+    assert.equal(resolveRuntimePolicy(M("deepseek", id)).policy, "deepseek")
+  }
+})
+
+test("v0.4.3: DeepSeek keeps the generic read/write ratio and no family-specific fields", () => {
+  const rt = resolveRuntimePolicy(M("deepseek", "deepseek-v4-pro"))
+  assert.equal(rt.cacheRatio, null) // generic read/(read+write) accounting is used
+  assert.equal(hitRatePct(30, 70), 30)
+})
+
+test("v0.4.3: DeepSeek never receives OpenRouter affinity or GPT/GLM/MiMo fields", async () => {
+  const { results } = await policyMigrationResults()
+  const deepseekCases = [
+    "deepseek-v4-pro",
+    "deepseek-flash",
+    "deepseek-v5-future",
+    "deepseek-v3-pre",
+    "deepseek-openrouter",
+    "deepseek-gateway",
+  ]
+  for (const name of deepseekCases) {
+    const r = results.find((x) => x.name === name)
+    assert.ok(r, `${name} present`)
+    assert.equal(r.runtimePolicy, "deepseek", `${name}: passive policy`)
+    assert.equal(r.detectPolicy, "deepseek", `${name}: detectPolicy agrees`)
+    assert.equal(r.gptOptionInjected, false, `${name}: no GPT options leak`)
+    assert.equal(r.systemRelocated, false, `${name}: no GLM/MiMo env relocation`)
+    assert.equal(r.affinityHeaderAttached, false, `${name}: no OpenRouter affinity`)
+    assert.equal(r.existingHeadersPreserved, true, `${name}: headers preserved`)
   }
 })

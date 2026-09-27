@@ -81,6 +81,27 @@ export function isGpt56OrLater(slug) {
   return false
 }
 
+// DeepSeek V4-and-later coverage (docs/cache-policy-inventory.md §2; 2026-09-27
+// first-party re-check). DeepSeek caching is provider-wide and passive: there is
+// no cache key, flag, or breakpoint, and Anthropic-style `cache_control` is
+// documented as ignored. This predicate therefore only classifies a version
+// token (`deepseek-v<major>[.<minor>]` with major >= 4) into the passive family;
+// it grants no mutation. Because the baseline is passive, matching an unknown
+// future `deepseek-v5+` id is safe by construction.
+//
+// First-party docs do NOT publish a generational naming rule, and the current
+// V4.1 codename id `deepseek-flash` carries no version token, so it is covered
+// by explicit exact ids rather than by this predicate.
+export function isDeepseekV4OrLater(slug) {
+  const text = String(slug ?? "").toLowerCase()
+  const re = /deepseek-v(\d+)(?:\.(\d+))?(?![\d.])/g
+  let m
+  while ((m = re.exec(text)) !== null) {
+    if (Number(m[1]) >= 4) return true
+  }
+  return false
+}
+
 // Candidate ids for exact/alias lookup. Includes the raw apiID/modelID, the
 // lower-cased forms, and a single stripped transport/vendor prefix
 // (e.g. "openai/gpt-5.6-luna" -> "gpt-5.6-luna", "xiaomi/mimo-v2.6-flash" ->
@@ -357,6 +378,28 @@ export const POLICY_REGISTRY = [
     inventoryRef: "§4 Xiaomi MiMo",
   },
   {
+    // v0.4.3: formalize the documented "DeepSeek V4 and later" family. Coverage
+    // is passive (no mutation, no overlays). Version ids inherit via the
+    // predicate; the V4.1 codename id `deepseek-flash` has no version token and
+    // is matched by exact id. Pre-V4 and unknown future ids fall through to the
+    // passive creator baseline below, so nothing speculative is ever applied.
+    id: "deepseek.v4-plus",
+    creator: "deepseek",
+    family: "deepseek",
+    kind: "family",
+    predicate: isDeepseekV4OrLater,
+    exactIds: ["deepseek-flash", "deepseek-v4-pro"],
+    baseline: "deepseek.kv-cache",
+    overlays: [],
+    legacy: true,
+    runtime: rt("deepseek"),
+    boundary: "DeepSeek V4 and later",
+    note: "DeepSeek caching is provider-wide and passive (no cache key, flag, breakpoint, or cache-control; Anthropic `cache_control` is ignored). Verified 2026-09-27. Canonical current ids: `deepseek-flash` (V4.1-Flash) and `deepseek-v4-pro`; `deepseek-v4-flash`/`deepseek-v4-flash-vision-exp` are accepted retired aliases.",
+    inventoryRef: "§2 DeepSeek",
+  },
+  {
+    // Safe passive fallback for any other `*deepseek*` id (pre-V4, retired, or
+    // unknown future models) so DeepSeek always fails safe to observation only.
     id: "deepseek.baseline",
     creator: "deepseek",
     family: "deepseek",
