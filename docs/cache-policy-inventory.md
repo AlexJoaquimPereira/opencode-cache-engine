@@ -75,10 +75,10 @@ Detection consequences worth stating explicitly:
   matched → neutral. **[O]**
 - `deepseek-v5` (or any future `*deepseek*` id) matches the passive DeepSeek
   branch because the regex is a bare substring test. **[O]**
-- `mimo-v2.6-pro-ultraspeed` is **not** matched: the `(?![\w-])` lookahead fails
-  on the following `-`. Test `MiMo V2.5 and Pro-UltraSpeed do NOT match MiMo policy`
-  confirms this. **[O]**
-- `mimo-v2.5*` and `glm-5.2`/`glm-4.x` are neutral. **[O]**
+- `mimo-v2.6-pro-ultraspeed` is matched by its own explicit entry since v0.4.5
+  (MiMo family baseline, no `<env>` overlay). **[O]**
+- Undocumented V2.6 variants such as `mimo-v2.6-flashx` remain neutral, and
+  `mimo-v2.5*` and `glm-5.2`/`glm-4.x` are neutral. **[O]**
 
 ---
 
@@ -292,8 +292,8 @@ made here); **hold** = do not inherit without first-party evidence.
 | Z.AI | 5.2 and earlier negative controls: `glm-5.2`, `glm-5.1`, `glm-5`, `glm-4.7`, `glm-4.6`, `glm-4.5`, `glm-4-32b-*` | Cacheable (except `glm-4-32b-0414-128k`), different cached-input pricing; no cache-semantics difference documented | neutral | hold | n/a | High | Z.AI *Pricing*; *Chat Completion* (enum) | 2026-09-26 |
 | Xiaomi | MiMo V2.6 Flash: `mimo-v2.6-flash` (OR `xiaomi/mimo-v2.6-flash`) | Provider-managed implicit caching; `cached_tokens`; no documented min/TTL/key/prefix rules | MiMo policy: `<env>` relocation; provider-change telemetry; OpenRouter `x-session-id` | keep scoped as exact-model overlay | env relocation unsupported by docs → treat as overlay | Medium | MiMo *Models*; *Pricing*; *openai-api* | 2026-09-26 |
 | Xiaomi | MiMo V2.6 Pro: `mimo-v2.6-pro` (OR `xiaomi/mimo-v2.6-pro`) | Same documented per-model implicit caching; per-model pricing | MiMo policy (same as Flash) | keep | none documented | Medium | MiMo *Models*; *Pricing* | 2026-09-26 |
-| Xiaomi | MiMo V2.6 Pro UltraSpeed: `mimo-v2.6-pro-ultraspeed` (OR `xiaomi/mimo-v2.6-pro-ultraspeed`) | Documented as a Pro **mode**, same V2.6 series; "Context Caching" listed; no documented mechanism difference from Pro | **Not matched** → neutral (`(?![\w-])` blocks it) | **extend OR document as exception** — docs treat it as the same V2.6 series, but no doc proves identical cache controls | explicit decision needed; current behavior is a de-facto exact-model exception | Medium | MiMo *news/latest/v2-6*; *Models*; *Pricing* | 2026-09-26 |
-| Xiaomi | later MiMo generations: none documented beyond V2.6; V2.5 deprecates 2026-10-21 | Not documented | neutral | hold (no docs) | n/a | High (no later gens documented) | MiMo *Models* | 2026-09-26 |
+| Xiaomi | MiMo V2.6 Pro UltraSpeed: `mimo-v2.6-pro-ultraspeed` (OR `xiaomi/mimo-v2.6-pro-ultraspeed`) | Documented as a Pro **mode**, same V2.6 series; "Context Caching" listed; no documented mechanism difference from Pro | MiMo family baseline only (cached-token telemetry, provider-change/prefix diagnostics, OpenRouter affinity); **no** `<env>` overlay (v0.4.5) | family baseline; overlay stays Flash/Pro-explicit | none — baseline only | Medium | MiMo *news/latest/v2-6*; *Models*; *Pricing* | 2026-09-27 |
+| Xiaomi | later MiMo generations: none documented beyond V2.6; V2.5 deprecates 2026-10-21 | Not documented; no inheritance rule | Passive family baseline for any future >V2.6 id (v0.4.5); no `<env>` overlay | keep passive, baseline only | none | High (no later gens documented) | MiMo *Models*; *updates/model* | 2026-09-27 |
 | Xiaomi | V2.5 negative control: `mimo-v2.5`, `mimo-v2.5-pro` | Documented as deprecated 2026-10-21; cache capability listed; no V2.6 policy inheritance claimed | neutral | hold | n/a | High | MiMo *Models*; *news/latest/v2-6* | 2026-09-26 |
 
 ---
@@ -323,9 +323,8 @@ a newer model inherits an older policy. They must not be resolved by guessing.
    undocumented.
 9. **Xiaomi V2.6 Pro UltraSpeed cache mechanism.** Documented as the same V2.6
    series and a Pro mode, but no first-party statement proves identical cache
-   controls to Pro/Flash. This is the one place where CacheEngine's current
-   non-match (`mimo-v2.6-pro-ultraspeed` → neutral) is a real scope decision
-   rather than a documented fact.
+   controls to Pro/Flash. v0.4.5 resolves this as a CacheEngine scope decision:
+   UltraSpeed gets the family **baseline only** (no `<env>` overlay).
 10. **MiMo on OpenRouter.** OpenRouter's Prompt Caching page documents no
     MiMo-specific cache section; only generic sticky-routing behavior applies.
 11. **OpenAI Chat Completions usage-field naming** (`prompt_tokens_details` vs
@@ -405,3 +404,27 @@ a newer model inherits an older policy. They must not be resolved by guessing.
 - Evidence caveat: because no later GLM generation is documented, the
   "GLM-5.3 and later" boundary is a CacheEngine inference about a passive
   baseline, not a Z.AI contract; it is safe because it introduces no mutation.
+
+### Follow-up: v0.4.5 MiMo V2.6+ baseline vs the validated MiMo overlay
+
+- Xiaomi MiMo docs were re-verified on **2026-09-27**. The V2.6 series is Pro +
+  Flash, with UltraSpeed documented as a Pro **mode** exposed as
+  `mimo-v2.6-pro-ultraspeed`. No generation newer than V2.6 is documented, and
+  no generational-inheritance rule is published. Caching is provider-managed
+  implicit with no cache-control field in any compat schema; usage fields are
+  per-protocol `cached_tokens`/`cache_read_input_tokens`. V2.5 deprecates
+  2026-10-21.
+- The `<env>` relocation has **no first-party basis** — it is a CacheEngine
+  overlay. v0.4.5 therefore separates:
+  - **Family baseline** (documented V2.6 Flash/Pro, the UltraSpeed mode entry,
+    and any future >V2.6 id via `isMimoAfterV26`): cached-token telemetry,
+    provider-change/prefix diagnostics, OpenRouter `x-session-id`. No prompt
+    rewrite.
+  - **Validated overlay**: the `<env>` relocation stays registered only on the
+    V2.6 Flash/Pro entry.
+- UltraSpeed moves from neutral to the family baseline (no overlay). V2.5 and
+  earlier stay neutral; undocumented V2.6 variants such as `mimo-v2.6-flashx`
+  also stay neutral (narrow detection preserved).
+- No MiMo cache-control field is invented. Evidence caveat: since no >V2.6
+  generation is documented, future coverage is a CacheEngine inference about a
+  passive baseline (safe: no mutation), not a Xiaomi contract.
