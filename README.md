@@ -31,7 +31,7 @@ The plugin currently has four cache-policy families:
 * **GPT-5.6 and later** — documented cache-key/options metadata, with prompt text
   unchanged. GPT-6 and future 5.6+/6+/7+ versions resolve through the same
   documented boundary.
-* **GLM-5.3** — narrow, content-preserving `<env>` relocation and diagnostics.
+* **GLM-5.3 and later** — GLM implicit-cache baseline and diagnostics; GLM-5.3 additionally uses a narrow, content-preserving `<env>` relocation overlay.
 * **MiMo-V2.6** — narrow, content-preserving `<env>` relocation and diagnostics.
 
 Family classification is not hard-coded in the runtime. A pure policy registry
@@ -42,7 +42,7 @@ the single runtime source of policy classification. The first-party research
 behind each registry entry is recorded in
 [docs/cache-policy-inventory.md](docs/cache-policy-inventory.md).
 
-For both MiMo-V2.6 and GLM-5.3, CacheEngine adds its deterministic
+For MiMo-V2.6 and the GLM-5.3-and-later family, CacheEngine adds its deterministic
 `x-session-id` request header only when OpenCode identifies the actual provider
 as `openrouter`. It does not add that OpenRouter-specific header for
 non-OpenRouter providers; direct provider endpoints retain their provider-native
@@ -204,6 +204,12 @@ This prevents a compaction-specific prompt from sharing the same GPT cache names
 GLM-5.3 and MiMo-V2.6 use the only prompt-text transformation in the current
 plugin: a narrow, content-preserving relocation of the identifiable `<env>`
 block for the eligible model family.
+
+Since v0.4.4 the GLM **family baseline** and the GLM-5.3 **overlay** are
+separate. A resolved GLM-5.3-and-later model inherits the implicit-cache baseline
+and the non-mutating GLM diagnostics/transport, but the `<env>` relocation below
+is a GLM-5.3-specific overlay and is **not** inherited by a newer GLM merely
+because its version number is higher.
 
 The plugin identifies OpenCode's volatile `<env>` section and moves it to the **tail of the system prompt**.
 
@@ -428,7 +434,7 @@ and are reported diagnostically; the message content is left untouched.
 | ------------- | --------- | ------------------- | ----------------------- | -------------------------- | -------------------- |
 | DeepSeek | `deepseek` (V4-and-later family + passive fallback) | No | No | None | provider `cache.read` / `cache.write` |
 | GPT-5.6 and later | version boundary `gpt-<major>[.<minor>] ≥ 5.6` on OpenAI-ish endpoints (includes GPT-6) | No | Yes: `prompt_cache_key` + options | None | provider cache tokens |
-| GLM-5.3 | `glm-5.3*` | Yes, narrowly (`<env>` tail) | No provider cache key | `x-session-id` on OpenRouter only | provider cache tokens (GLM ratio) |
+| GLM-5.3 and later | `glm-5.3+` | Yes, narrowly (`<env>` tail) on GLM-5.3 only | No provider cache key | `x-session-id` on OpenRouter only | provider cache tokens (GLM ratio) |
 | MiMo-V2.6 | Flash / Pro only | Yes, narrowly (`<env>` tail) | No: implicit caching only | `x-session-id` on OpenRouter only | `cached_tokens / prompt_tokens` |
 
 `x-session-id` is an HTTP affinity header, not a provider cache key or
@@ -1392,7 +1398,7 @@ not matched.
 
 ## OpenRouter affinity header is not added
 
-CacheEngine adds its `x-session-id` only for a detected MiMo-V2.6 or GLM-5.3
+CacheEngine adds its `x-session-id` only for a detected MiMo-V2.6 or GLM-5.3-and-later
 request when the actual OpenCode `providerID` is exactly `openrouter`. A direct
 provider route or missing provider identity is bypassed. If a case-insensitive
 `x-session-id` is already present in model or plugin headers, it is preserved
