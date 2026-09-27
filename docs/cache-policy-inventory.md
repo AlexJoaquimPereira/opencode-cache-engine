@@ -288,7 +288,7 @@ made here); **hold** = do not inherit without first-party evidence.
 | DeepSeek | future-looking V4+ identifiers: `deepseek-v4.1`, `deepseek-v4`, `deepseek-v5` | Not documented as request ids (`deepseek-v4.1`/`deepseek-v4` invalid or version-string only) | Passive via the V4-and-later family predicate or the safe creator fallback (v0.4.3); no mutation | keep passive; treat as unknown-friendly | none | Medium (detection) / Low (future ids) | DeepSeek *Models & Pricing*; *Chat Completions API* | 2026-09-27 |
 | DeepSeek | pre-V4 negative controls: `deepseek-chat`, `deepseek-reasoner` | Retired names (retired 2026-07-24); no separate V4+ cache policy claimed | Passive | hold | n/a | High | DeepSeek *Change Log*; *news260424* | 2026-09-26 |
 | Z.AI | GLM 5.3: `glm-5.3`, `glm-5.3-flash`, `glm-5.3-flashx` | Implicit automatic caching; `cached_tokens`; stable-prompt-first guidance; no documented min/TTL/key | GLM policy: `<env>` relocation; OpenRouter `x-session-id` | keep (env relocation is an exact overlay, not a Z.AI control) | env relocation is the overlay; keep scoped to GLM-5.3 | Medium | Z.AI *Context Caching*; *Chat Completion*; *Pricing* | 2026-09-26 |
-| Z.AI | current later GLM generations (documented): none newer than 5.3; newest below is `glm-5.2`/`glm-5.1`/`glm-5`/`glm-4.7` | Same implicit mechanism documented service-wide; cached-input price per model | neutral (only `glm-5.3` matched) | **hold** — no doc says 5.3 overlay extends upward; none newer documented | n/a | High (no later gens documented) | Z.AI *New Released*; *Pricing* | 2026-09-26 |
+| Z.AI | current later GLM generations (documented): none newer than 5.3; newest below is `glm-5.2`/`glm-5.1`/`glm-5`/`glm-4.7` | Same implicit mechanism documented service-wide; cached-input price per model | GLM-5.3 family baseline via the 5.3-and-later boundary; **no** `<env>` overlay (v0.4.4) | **baseline only** — overlay stays 5.3-explicit | none documented | High (no later gens documented) | Z.AI *New Released*; *Pricing* | 2026-09-27 |
 | Z.AI | 5.2 and earlier negative controls: `glm-5.2`, `glm-5.1`, `glm-5`, `glm-4.7`, `glm-4.6`, `glm-4.5`, `glm-4-32b-*` | Cacheable (except `glm-4-32b-0414-128k`), different cached-input pricing; no cache-semantics difference documented | neutral | hold | n/a | High | Z.AI *Pricing*; *Chat Completion* (enum) | 2026-09-26 |
 | Xiaomi | MiMo V2.6 Flash: `mimo-v2.6-flash` (OR `xiaomi/mimo-v2.6-flash`) | Provider-managed implicit caching; `cached_tokens`; no documented min/TTL/key/prefix rules | MiMo policy: `<env>` relocation; provider-change telemetry; OpenRouter `x-session-id` | keep scoped as exact-model overlay | env relocation unsupported by docs → treat as overlay | Medium | MiMo *Models*; *Pricing*; *openai-api* | 2026-09-26 |
 | Xiaomi | MiMo V2.6 Pro: `mimo-v2.6-pro` (OR `xiaomi/mimo-v2.6-pro`) | Same documented per-model implicit caching; per-model pricing | MiMo policy (same as Flash) | keep | none documented | Medium | MiMo *Models*; *Pricing* | 2026-09-26 |
@@ -384,3 +384,24 @@ a newer model inherits an older policy. They must not be resolved by guessing.
 - Evidence caveat: first-party pages conflict on whether `deepseek-v4-pro` still
   routes as a distinct model in late 2026; this does not affect the passive
   policy, which carries no mutation either way.
+
+### Follow-up: v0.4.4 GLM-5.3-and-later baseline vs GLM-5.3 overlay
+
+- Z.AI docs were re-verified on **2026-09-27**. GLM-5.3 is the newest documented
+  text generation (no `glm-5.4`/`glm-6`); GLM-5.3 is explicitly "the same base
+  model as GLM-5.2" with post-training differences. Caching is implicit with no
+  `cache_control`/`prompt_cache_key`/breakpoint/TTL field; `cached_tokens` is the
+  reported field. Z.AI publishes **no** generational-inheritance rule.
+- The `<env>` relocation has **no first-party basis** — it is a CacheEngine
+  implementation overlay. v0.4.4 therefore separates the concepts:
+  - **Family baseline** (`zai.glm-5.3-plus`, predicate `glm >= 5.3`): implicit
+    caching plus the non-mutating GLM diagnostics/transport (thinking-integrity
+    telemetry, GLM cache ratio, provider-change telemetry, OpenRouter
+    `x-session-id`). No prompt rewrite.
+  - **GLM-5.3 overlay**: the `<env>` relocation stays registered only on the
+    GLM-5.3 family entry, so a later GLM does **not** inherit it.
+- GLM-5.2 and earlier remain neutral. No new GLM cache-control field is added,
+  and GLM-5.3 behavior is unchanged.
+- Evidence caveat: because no later GLM generation is documented, the
+  "GLM-5.3 and later" boundary is a CacheEngine inference about a passive
+  baseline, not a Z.AI contract; it is safe because it introduces no mutation.
