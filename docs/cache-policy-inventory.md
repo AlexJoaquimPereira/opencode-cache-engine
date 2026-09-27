@@ -285,7 +285,7 @@ made here); **hold** = do not inherit without first-party evidence.
 | OpenAI | pre-5.6 negative controls: `gpt-5.5`, `gpt-5.4`, `gpt-5.2`, `gpt-5.1`, `gpt-5`, `gpt-4.1`, `gpt-4o` | Implicit only; different min-length class; `in_memory`/`24h` retention; `prompt_cache_key` for routing | neutral | **hold** — do not inherit 5.6 policy | n/a | High | OpenAI *Prompt caching*; *Pricing* | 2026-09-26 |
 | DeepSeek | V4: `deepseek-v4-pro`, legacy `deepseek-v4-flash` | Provider-wide automatic disk cache; implicit; prefix-unit matching; hit/miss token fields | Passive (no mutation) | keep | none | High | DeepSeek *Context Caching*; *Models & Pricing* | 2026-09-26 |
 | DeepSeek | V4.1 / current V4-family: `deepseek-flash` (MODEL VERSION "DeepSeek-V4.1-Flash") | Same provider-wide automatic policy; cache-hit pricing listed for both current models | Passive | keep (creator/family baseline) | none documented | High | DeepSeek *Models & Pricing*; *news260910* | 2026-09-26 |
-| DeepSeek | future-looking V4+ identifiers: `deepseek-v4.1`, `deepseek-v4`, `deepseek-v5` | Not documented as request ids (`deepseek-v4.1`/`deepseek-v4` invalid or version-string only) | Passive via `/deepseek/i` substring (e.g. `deepseek-v5` already passive) | keep passive; treat as unknown-friendly | none | Medium (detection) / Low (future ids) | DeepSeek *Models & Pricing*; *Chat Completions API* | 2026-09-26 |
+| DeepSeek | future-looking V4+ identifiers: `deepseek-v4.1`, `deepseek-v4`, `deepseek-v5` | Not documented as request ids (`deepseek-v4.1`/`deepseek-v4` invalid or version-string only) | Passive via the V4-and-later family predicate or the safe creator fallback (v0.4.3); no mutation | keep passive; treat as unknown-friendly | none | Medium (detection) / Low (future ids) | DeepSeek *Models & Pricing*; *Chat Completions API* | 2026-09-27 |
 | DeepSeek | pre-V4 negative controls: `deepseek-chat`, `deepseek-reasoner` | Retired names (retired 2026-07-24); no separate V4+ cache policy claimed | Passive | hold | n/a | High | DeepSeek *Change Log*; *news260424* | 2026-09-26 |
 | Z.AI | GLM 5.3: `glm-5.3`, `glm-5.3-flash`, `glm-5.3-flashx` | Implicit automatic caching; `cached_tokens`; stable-prompt-first guidance; no documented min/TTL/key | GLM policy: `<env>` relocation; OpenRouter `x-session-id` | keep (env relocation is an exact overlay, not a Z.AI control) | env relocation is the overlay; keep scoped to GLM-5.3 | Medium | Z.AI *Context Caching*; *Chat Completion*; *Pricing* | 2026-09-26 |
 | Z.AI | current later GLM generations (documented): none newer than 5.3; newest below is `glm-5.2`/`glm-5.1`/`glm-5`/`glm-4.7` | Same implicit mechanism documented service-wide; cached-input price per model | neutral (only `glm-5.3` matched) | **hold** — no doc says 5.3 overlay extends upward; none newer documented | n/a | High (no later gens documented) | Z.AI *New Released*; *Pricing* | 2026-09-26 |
@@ -362,3 +362,25 @@ a newer model inherits an older policy. They must not be resolved by guessing.
 - The only OpenAI cache controls injected remain `promptCacheKey` +
   `promptCacheOptions{implicit,30m}`; no breakpoint or prewarm behavior was
   added. DeepSeek, GLM, MiMo, and OpenRouter affinity behavior are unchanged.
+
+### Follow-up: v0.4.3 DeepSeek V4-and-later passive coverage
+
+- DeepSeek first-party docs were re-verified on **2026-09-27**. Confirmed:
+  context caching is provider-wide and passive — no `prompt_cache_key`, flag, or
+  breakpoint exists, and Anthropic-style `cache_control` is documented as
+  **ignored**. Only `user_id` is cache-relevant (KVCache isolation). Usage fields
+  are `prompt_cache_hit_tokens`, `prompt_cache_miss_tokens`, and
+  `prompt_tokens_details.cached_tokens`.
+- Canonical request ids are `deepseek-flash` (= DeepSeek-V4.1-Flash) and
+  `deepseek-v4-pro`; `deepseek-v4-flash`/`deepseek-v4-flash-vision-exp` are
+  accepted retired aliases, and `deepseek-chat`/`deepseek-reasoner` are
+  discontinued. First-party docs publish **no** generational naming rule, and the
+  V4.1 codename id `deepseek-flash` carries no version token.
+- v0.4.3 adds a passive `deepseek.v4-plus` family entry: canonical ids match by
+  exact id, `deepseek-v<major≥4>` version tokens match by predicate, and
+  pre-V4 / retired / unknown future `*deepseek*` ids fall through to the passive
+  creator baseline. No cache-control field, cache key, prompt rewrite, or
+  OpenRouter affinity is introduced for DeepSeek.
+- Evidence caveat: first-party pages conflict on whether `deepseek-v4-pro` still
+  routes as a distinct model in late 2026; this does not affect the passive
+  policy, which carries no mutation either way.
