@@ -32,10 +32,32 @@ Caching behavior is never inferred from pricing alone, from one SDK's type
 declarations, or from a third-party blog when first-party documentation exists.
 "unknown — first-party docs insufficient" is used instead of a guess.
 
+## Runtime integration
+
+This inventory is the research input for the policy registry in
+`src/cache-policy-core.mjs`. As of **v0.4.1** the runtime hooks consume
+`resolveRuntimePolicy(model)` and gate behavior on the registry's explicit
+capabilities, so the "CacheEngine current treatment" column below describes
+resolver-driven behavior.
+
+Two guarantees follow from that migration:
+
+- `resolveRuntimePolicy(model).policy` equals the legacy `detectPolicy(model)`
+  string, so telemetry and gating are unchanged for every model supported in
+  v0.3.6.
+- Registry entries marked non-`legacy` (for example `gpt-6`) and all unknown
+  models resolve to a neutral runtime, so no documented-but-unwired model gains
+  a current model's mutation.
+
+The runtime reads the registry at classification time only; there are no network
+calls and no runtime documentation lookups.
+
 ## CacheEngine current treatment (baseline for the matrix)
 
-Source: `src/cache-engine-core.mjs` (detection, transforms) and
-`src/cache-engine.ts` (hooks), revision `19b87f2`.
+Source: the pure registry/resolver (`src/cache-policy-core.mjs`) and the hook
+entry (`src/cache-engine.ts`), as wired in v0.4.1. The behavior described here is
+the same as at the pre-resolver revision `19b87f2`; only the classification
+source changed.
 
 | Family | Detection (verbatim) | Current treatment | Affinity header |
 | --- | --- | --- | --- |
@@ -311,3 +333,12 @@ a newer model inherits an older policy. They must not be resolved by guessing.
 - The existing test suite was run only to confirm the repository remains green
   (116/116).
 - This release contains research and documentation only.
+
+### Follow-up: v0.4.1 runtime integration
+
+- v0.4.0 added the registry (`src/cache-policy-core.mjs`) without wiring it.
+- v0.4.1 wired the runtime to `resolveRuntimePolicy()` and preserved behavior:
+  every model supported in v0.3.6 keeps its prior treatment, and non-legacy or
+  unknown models remain neutral.
+- The v0.4.0 research statements above are unchanged; only the runtime now reads
+  this registry as its single source of policy classification.
