@@ -74,7 +74,7 @@ The plugin deliberately avoids pretending that a local hash is proof of a provid
 
 # Provider behavior
 
-## DeepSeek V4.1 Flash
+## DeepSeek V4 and later
 
 ### Policy: passive
 
@@ -92,6 +92,13 @@ The plugin does not:
 The DeepSeek branch exists primarily to preserve a stable harness while providing observability around the prefix structure and cache usage.
 
 This is intentional. The implementation describes DeepSeek as a passive policy whose purpose is to preserve the existing high-cache-rate behavior rather than introduce new request mutations.
+
+Since v0.4.3 this is formalized as the documented **"DeepSeek V4 and later"**
+family. Canonical ids (`deepseek-flash`, `deepseek-v4-pro`) and the accepted
+`deepseek-v4-flash` aliases resolve to this passive baseline, and pre-V4 or
+unknown future `*deepseek*` ids fall back to the same passive baseline. No cache
+key, cache-control field, prompt rewrite, or OpenRouter affinity is ever added
+for DeepSeek.
 
 The plugin still observes:
 
@@ -419,7 +426,7 @@ and are reported diagnostically; the message content is left untouched.
 
 | Policy family | Detection | Prompt text changed? | Cache metadata changed? | OpenRouter affinity header | Primary cache signal |
 | ------------- | --------- | ------------------- | ----------------------- | -------------------------- | -------------------- |
-| DeepSeek | `deepseek` | No | No | None | provider `cache.read` / `cache.write` |
+| DeepSeek | `deepseek` (V4-and-later family + passive fallback) | No | No | None | provider `cache.read` / `cache.write` |
 | GPT-5.6 and later | version boundary `gpt-<major>[.<minor>] ≥ 5.6` on OpenAI-ish endpoints (includes GPT-6) | No | Yes: `prompt_cache_key` + options | None | provider cache tokens |
 | GLM-5.3 | `glm-5.3*` | Yes, narrowly (`<env>` tail) | No provider cache key | `x-session-id` on OpenRouter only | provider cache tokens (GLM ratio) |
 | MiMo-V2.6 | Flash / Pro only | Yes, narrowly (`<env>` tail) | No: implicit caching only | `x-session-id` on OpenRouter only | `cached_tokens / prompt_tokens` |
