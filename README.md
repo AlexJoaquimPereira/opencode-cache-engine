@@ -32,6 +32,14 @@ The plugin currently has four cache-policy families:
 * **GLM-5.3** — narrow, content-preserving `<env>` relocation and diagnostics.
 * **MiMo-V2.6** — narrow, content-preserving `<env>` relocation and diagnostics.
 
+Family classification is not hard-coded in the runtime. A pure policy registry
+and resolver in `src/cache-policy-core.mjs` returns a structured result
+(`creator`, `family`, `baseline`, `overlays`, `transport`, `matchType`,
+`matchReason`), and the hooks gate their behavior on that result. The registry is
+the single runtime source of policy classification. The first-party research
+behind each registry entry is recorded in
+[docs/cache-policy-inventory.md](docs/cache-policy-inventory.md).
+
 For both MiMo-V2.6 and GLM-5.3, CacheEngine adds its deterministic
 `x-session-id` request header only when OpenCode identifies the actual provider
 as `openrouter`. It does not add that OpenRouter-specific header for
@@ -49,8 +57,8 @@ The plugin operates at the OpenCode harness level rather than implementing a pro
 
 It:
 
-1. Detects the model/provider family in use.
-2. Applies only the policy appropriate for that family.
+1. Resolves the model/provider policy through the registry resolver.
+2. Applies only the mutations registered for that policy.
 3. Observes system-prompt and tool-definition stability.
 4. Records provider-reported cache token usage.
 5. Adds a deterministic compaction continuation block.
@@ -958,7 +966,8 @@ For that reason, a stable provider route is preferable when your goal is to meas
 
 # Architecture
 
-The implementation is split into two layers.
+The implementation is split across a hook entry point, a pure logic core, and a
+pure policy registry.
 
 ## `cache-engine.ts`
 
@@ -994,7 +1003,7 @@ This contains dependency-light pure logic.
 
 It owns:
 
-* provider classification
+* the legacy `detectPolicy()` compatibility wrapper (delegating to the registry)
 * configuration parsing
 * hashing
 * canonicalization
@@ -1011,6 +1020,39 @@ Keeping these functions in plain JavaScript allows the logic to be tested indepe
 
 ---
 
+## `cache-policy-core.mjs`
+
+This is the pure policy registry and resolver. It separates cache policy from
+request mutation:
+
+* creator / family classification
+* baseline cache-policy descriptors (documented facts)
+* model-specific overlays (for example GLM/MiMo `<env>` relocation)
+* transport capabilities (for example OpenRouter `x-session-id` affinity)
+* explicit, inventory-traceable inheritance (`inheritsFrom`)
+* safe neutral fallback for unknown or future models
+
+`resolvePolicy(model)` returns `creator`, `family`, `baseline`, `overlays`,
+`transport`, `matchType`, and `matchReason`. `resolveRuntimePolicy(model)`
+returns the runtime-facing descriptor the hooks consume: the legacy policy
+string plus explicit capability flags.
+
+Only registry entries marked `legacy` enable runtime behavior; documented but
+non-legacy entries (for example `gpt-6`) and all unknown models resolve to a
+neutral runtime. A newer or unknown model therefore never inherits a current
+model's mutation unless the registry explicitly registers it.
+
+Transport is kept separate from cache policy: OpenRouter affinity is a transport
+capability, not part of a creator's cache semantics. Overlays are also explicit,
+so being classified into a family does not by itself enable a prompt
+transformation.
+
+The module is pure: no network calls and no runtime documentation lookups. The
+legacy `detectPolicy()` in `cache-engine-core.mjs` remains a thin compatibility
+wrapper over the resolver's legacy path.
+
+---
+
 ## Tests
 
 The repository's test suite validates the provider-independent and provider-specific logic.
@@ -1018,6 +1060,7 @@ The repository's test suite validates the provider-independent and provider-spec
 Coverage includes:
 
 * model detection
+* policy registry resolution and runtime-policy equivalence
 * GPT cache-key stability
 * GPT cache-option defaults
 * protection against overwriting existing cache options
@@ -1181,11 +1224,14 @@ opencode-cache-engine/
 ├── src/
 │   ├── cache-engine.ts
 │   ├── cache-engine-core.mjs
+│   ├── cache-policy-core.mjs
 │   └── tui.mjs
 ├── test/
 │   └── cache-engine.test.mjs
 ├── examples/
 │   └── cache-engine.json
+├── docs/
+│   └── cache-policy-inventory.md
 ├── package.json
 ├── README.md
 └── LICENSE
@@ -1224,7 +1270,7 @@ release, use:
 ```json
 {
   "plugin": [
-    "opencode-cache-engine@0.3.6"
+    "opencode-cache-engine@0.4.1"
   ]
 }
 ```
