@@ -53,6 +53,7 @@ import {
   MODEL_ALIASES,
   OVERLAYS,
   POLICY_REGISTRY,
+  isGpt56OrLater,
   resolveLegacyFamily,
   resolvePolicy,
   resolveRuntimePolicy,
@@ -1359,26 +1360,27 @@ test("resolvePolicy: GPT-5.6 exact + inventory aliases resolve to the gpt-5.6 fa
   assert.equal(orVariant.matchType, "exact")
 })
 
-test("resolvePolicy: GPT-6 resolves via explicit documented inheritance, with no overlay", () => {
+test("v0.4.2: GPT-6 resolves through the documented GPT-5.6-and-later boundary", () => {
   const r = resolvePolicy(M("openrouter", "openai/gpt-6-luna"))
   assert.equal(r.creator, "openai")
-  assert.equal(r.family, "gpt-6")
+  assert.equal(r.family, "gpt-5.6")
   assert.equal(baseId(r), "openai.gpt56.cache")
-  assert.deepEqual(overlayIds(r), [])
-  assert.equal(resolvePolicy(M("openai", "gpt-6-astra")).family, "gpt-6")
+  // GPT-6 is documented in the same cache regime, so it gets the same overlay.
+  assert.deepEqual(overlayIds(r), ["gpt56.prompt-cache-options"])
+  assert.equal(resolvePolicy(M("openai", "gpt-6-astra")).family, "gpt-5.6")
 
-  // Inheritance is explicit, not "newer means same": the registry records it.
-  const gpt6 = POLICY_REGISTRY.find((e) => e.family === "gpt-6")
-  assert.equal(gpt6.inheritsFrom, "gpt-5.6")
-  assert.ok(gpt6.inventoryRef)
-  // And no overlay is implied by that inheritance.
-  assert.deepEqual(gpt6.overlays, [])
+  // The boundary is version-based, not an exact-model list.
+  const entry = POLICY_REGISTRY.find((e) => e.id === "openai.gpt-5.6-plus")
+  assert.equal(entry.boundary, "GPT-5.6 and later")
+  assert.equal(typeof entry.predicate, "function")
+  assert.ok(entry.inventoryRef)
 })
 
-test("resolvePolicy: GPT-6 is not classified by the legacy detectPolicy wrapper", () => {
-  // Intentional: the new layer knows gpt-6, the compatibility wrapper does not.
-  assert.equal(detectPolicy(M("openai", "gpt-6-astra")), POLICY_NEUTRAL)
-  assert.equal(resolvePolicy(M("openai", "gpt-6-astra")).family, "gpt-6")
+test("v0.4.2: the legacy detectPolicy wrapper follows the same boundary", () => {
+  assert.equal(detectPolicy(M("openai", "gpt-6-astra")), POLICY_GPT56)
+  assert.equal(detectPolicy(M("openai", "gpt-5.6")), POLICY_GPT56)
+  assert.equal(detectPolicy(M("openai", "gpt-5.5")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("openai", "gpt-5.60")), POLICY_NEUTRAL)
 })
 
 test("resolvePolicy: pre-5.6 GPT negative controls are neutral with no overlays", () => {
@@ -1632,7 +1634,10 @@ async function runPolicyMigrationProbe() {
     const CASES = [
       { name: "gpt-5.6", model: { providerID: "openai", id: "gpt-5.6", api: { id: "gpt-5.6", npm: "@ai-sdk/openai" } }, expect: { policy: "gpt56", env: false, gpt: true, header: false } },
       { name: "gpt-5.6-openrouter", model: { providerID: "openrouter", id: "openai/gpt-5.6-sol", api: { id: "openai/gpt-5.6-sol" } }, expect: { policy: "gpt56", env: false, gpt: true, header: false } },
-      { name: "gpt-6-astra", model: { providerID: "openai", id: "gpt-6-astra", api: { id: "gpt-6-astra", npm: "@ai-sdk/openai" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
+      { name: "gpt-6-astra", model: { providerID: "openai", id: "gpt-6-astra", api: { id: "gpt-6-astra", npm: "@ai-sdk/openai" } }, expect: { policy: "gpt56", env: false, gpt: true, header: false } },
+      { name: "gpt-6-openrouter", model: { providerID: "openrouter", id: "openai/gpt-6-luna", api: { id: "openai/gpt-6-luna" } }, expect: { policy: "gpt56", env: false, gpt: true, header: false } },
+      { name: "gpt-6-openai-compatible", model: { providerID: "openai-compatible", id: "gpt-6-astra", api: { id: "gpt-6-astra" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
+      { name: "gpt-5.60-malformed", model: { providerID: "openai", id: "gpt-5.60", api: { id: "gpt-5.60", npm: "@ai-sdk/openai" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
       { name: "gpt-5.5", model: { providerID: "openai", id: "gpt-5.5", api: { id: "gpt-5.5", npm: "@ai-sdk/openai" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
       { name: "gpt-daybreak-alias", model: { providerID: "openai", id: "gpt-daybreak-blue-latest", api: { id: "gpt-daybreak-blue-latest", npm: "@ai-sdk/openai" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
       { name: "deepseek-v4-pro", model: { providerID: "deepseek", id: "deepseek-v4-pro", api: { id: "deepseek-v4-pro" } }, expect: { policy: "deepseek", env: false, gpt: false, header: false } },
@@ -1717,9 +1722,10 @@ test("v0.4.1: GPT-5.6 keeps promptCacheOptions implicit/30m through the resolver
 test("v0.4.1: future-looking and unknown models gain no mutation", async () => {
   const { results } = await policyMigrationResults()
   const noMutation = [
-    "gpt-6-astra",
     "gpt-daybreak-alias",
     "gpt-5.5",
+    "gpt-6-openai-compatible",
+    "gpt-5.60-malformed",
     "glm-5.2",
     "mimo-v2.6-pro-ultraspeed",
     "mimo-v2.5",
@@ -1739,5 +1745,77 @@ test("v0.4.1: non-OpenRouter models never receive the OpenRouter header", async 
   for (const name of ["glm-5.3-direct", "mimo-v2.6-flash-direct", "unknown-provider", "gpt-5.6", "deepseek-v4-pro"]) {
     const r = results.find((x) => x.name === name)
     assert.equal(r.affinityHeaderAttached, false, `${name}: no affinity header off OpenRouter`)
+  }
+})
+
+// ===========================================================================
+// v0.4.2 GPT-5.6-and-later boundary
+//
+// Source: OpenAI *Prompt caching* guide, "GPT-5.6 and later" generation
+// boundary, re-verified 2026-09-27 (docs/cache-policy-inventory.md §1). GPT-6
+// is documented in the same regime with no cache-control exception.
+// ===========================================================================
+
+test("v0.4.2: isGpt56OrLater matches the documented boundary by version", () => {
+  const inFamily = [
+    "gpt-5.6",
+    "gpt-5.6-luna",
+    "openai/gpt-5.6-sol",
+    "gpt-6",
+    "gpt-6-astra",
+    "gpt-6-sol",
+    "gpt-6-luna",
+    "gpt-5.7",
+    "gpt-7",
+    "gpt-6.1",
+  ]
+  for (const id of inFamily) assert.equal(isGpt56OrLater(id), true, `${id} is in family`)
+  const outOfFamily = [
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.2",
+    "gpt-5.1",
+    "gpt-5",
+    "gpt-4.1",
+    "gpt-4o",
+    "gpt-5.60",
+    "gpt-5.6.1",
+    "gpt-4",
+    "claude-sonnet-4-5",
+  ]
+  for (const id of outOfFamily) assert.equal(isGpt56OrLater(id), false, `${id} is out of family`)
+})
+
+test("v0.4.2: GPT boundary respects OpenAI/provider gating", () => {
+  assert.equal(resolveRuntimePolicy(M("openai", "gpt-5.6")).gptCacheMetadata, true)
+  assert.equal(resolveRuntimePolicy(M("openai", "gpt-6-astra")).gptCacheMetadata, true)
+  assert.equal(resolveRuntimePolicy(M("azure", "gpt-6-sol")).gptCacheMetadata, true)
+  assert.equal(resolveRuntimePolicy(M("openrouter", "openai/gpt-6-luna")).gptCacheMetadata, true)
+  assert.equal(resolveRuntimePolicy(M("openai-compatible", "gpt-6-astra")).gptCacheMetadata, false)
+  assert.equal(resolveRuntimePolicy(M("llama.cpp", "gpt-5.6")).gptCacheMetadata, false)
+  assert.equal(resolveRuntimePolicy(M("openai", "gpt-5.5")).gptCacheMetadata, false)
+  assert.equal(resolveRuntimePolicy(M("openai", "gpt-5.60")).gptCacheMetadata, false)
+})
+
+test("v0.4.2: covered later GPT requests receive the same documented baseline at runtime", async () => {
+  const { results } = await policyMigrationResults()
+  const gpt6 = results.find((r) => r.name === "gpt-6-astra")
+  assert.equal(gpt6.runtimePolicy, "gpt56")
+  assert.equal(gpt6.gptOptionInjected, true)
+  assert.deepEqual(gpt6.gptOptions, { mode: "implicit", ttl: "30m" })
+  // Same baseline as GPT-5.6, no new mechanism.
+  const gpt56 = results.find((r) => r.name === "gpt-5.6")
+  assert.deepEqual(gpt6.gptOptions, gpt56.gptOptions)
+  // No prompt transformation or affinity was introduced for gpt-6.
+  assert.equal(gpt6.systemRelocated, false)
+  assert.equal(gpt6.affinityHeaderAttached, false)
+})
+
+test("v0.4.2: pre-5.6 and out-of-family GPT ids get no GPT options", async () => {
+  const { results } = await policyMigrationResults()
+  for (const name of ["gpt-5.5", "gpt-5.60-malformed", "gpt-6-openai-compatible"]) {
+    const r = results.find((x) => x.name === name)
+    assert.equal(r.gptOptionInjected, false, `${name}: no GPT options`)
+    assert.equal(r.runtimePolicy, "neutral", `${name}: neutral runtime`)
   }
 })

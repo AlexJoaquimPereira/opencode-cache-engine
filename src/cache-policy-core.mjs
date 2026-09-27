@@ -56,6 +56,31 @@ export function isOpenAIish(s) {
   return false
 }
 
+// The documented OpenAI cache-policy boundary is the generation phrase
+// "GPT-5.6 and later" (docs/cache-policy-inventory.md §1; OpenAI *Prompt
+// caching* guide, re-verified 2026-09-27). This matcher expresses that boundary
+// by version rather than by an exact-model string, so future 5.6+/6+/7+ models
+// need no registry entry:
+//   - major > 5                      -> in family
+//   - major === 5 && minor >= 6      -> in family
+//   - everything else                -> out
+// The token must be followed by a non-digit/non-dot boundary, so malformed ids
+// such as "gpt-5.60" and "gpt-5.6.1" do not match (same guard as pre-v0.4.2).
+// OpenAI minor versions are single-digit, so a multi-digit minor is treated as
+// malformed rather than as a higher version.
+export function isGpt56OrLater(slug) {
+  const text = String(slug ?? "").toLowerCase()
+  const re = /gpt-(\d{1,3})(?:\.(\d))?(?![\d.])/g
+  let m
+  while ((m = re.exec(text)) !== null) {
+    const major = Number(m[1])
+    const minor = m[2] === undefined ? 0 : Number(m[2])
+    if (major > 5) return true
+    if (major === 5 && minor >= 6) return true
+  }
+  return false
+}
+
 // Candidate ids for exact/alias lookup. Includes the raw apiID/modelID, the
 // lower-cased forms, and a single stripped transport/vendor prefix
 // (e.g. "openai/gpt-5.6-luna" -> "gpt-5.6-luna", "xiaomi/mimo-v2.6-flash" ->
@@ -251,33 +276,32 @@ const rt = (policy, overrides = {}) => ({
 
 export const POLICY_REGISTRY = [
   {
-    id: "openai.gpt-5.6",
+    // v0.4.2: one documented GPT-5.6-and-later family, matched by the version
+    // boundary rather than an exact model string. GPT-6 (astra/sol/luna) is
+    // documented in the same regime with no cache-control exception, so it
+    // inherits this baseline and overlay. Future 5.6+/6+/7+ models resolve here
+    // without a new registry entry.
+    id: "openai.gpt-5.6-plus",
     creator: "openai",
     family: "gpt-5.6",
     kind: "family",
-    pattern: /gpt-5\.6(?![\d.])/i,
+    predicate: isGpt56OrLater,
     requiresOpenAIish: true,
-    exactIds: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-cyber"],
+    exactIds: [
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-5.6-cyber",
+      "gpt-6-astra",
+      "gpt-6-sol",
+      "gpt-6-luna",
+    ],
     baseline: "openai.gpt56.cache",
     overlays: ["gpt56.prompt-cache-options"],
     legacy: true,
     runtime: rt("gpt56", { gptCacheMetadata: true }),
-    inventoryRef: "§1 OpenAI",
-  },
-  {
-    id: "openai.gpt-6",
-    creator: "openai",
-    family: "gpt-6",
-    kind: "family",
-    pattern: /gpt-6(?![\d.])/i,
-    requiresOpenAIish: true,
-    exactIds: ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"],
-    baseline: "openai.gpt56.cache",
-    inheritsFrom: "gpt-5.6",
-    overlays: [],
-    legacy: false,
-    runtime: rt("neutral"),
-    note: "Documented inheritance of the GPT-5.6-and-later baseline. No CacheEngine overlay is registered for gpt-6 yet, so the runtime stays neutral.",
+    boundary: "GPT-5.6 and later",
+    note: "Documented boundary 'GPT-5.6 and later' (OpenAI Prompt caching guide, re-verified 2026-09-27) includes GPT-6 with no documented cache-control exception. No explicit breakpoint or prewarm behavior is registered.",
     inventoryRef: "§1 OpenAI",
   },
   {
@@ -387,6 +411,12 @@ function overlaysFor(ids) {
   return (ids ?? []).map((id) => OVERLAYS[id]).filter(Boolean)
 }
 
+// A family entry matches by regex `pattern` or by a pure `predicate(slug)`.
+function familyMatches(entry, slug) {
+  if (typeof entry.predicate === "function") return entry.predicate(slug)
+  return entry.pattern ? entry.pattern.test(slug) : false
+}
+
 // Only legacy entries carry runtime capabilities. A non-legacy entry (gpt-6,
 // Pro UltraSpeed) resolves for information but stays neutral at runtime.
 function runtimeForEntry(entry) {
@@ -454,17 +484,20 @@ export function resolvePolicy(model) {
     return resultFromFamily(alias.family, alias.creator, "exact", reason, id, alias.inventoryRef, alias.status ?? null, transport, alias.legacy)
   }
 
-  // 2. Exact model ids (documented models).
+  // 2. Exact model ids (documented models). The entry's context gate still
+  // applies, so an exact OpenAI id on a non-OpenAI endpoint is never guessed.
   for (const entry of POLICY_REGISTRY) {
     if (!entry.exactIds || entry.exactIds.length === 0) continue
     const hit = ids.find((id) => entry.exactIds.includes(id))
-    if (hit) return resultFromEntry(entry, "exact", `exact-id:${hit}`, hit, transport)
+    if (!hit) continue
+    if (entry.requiresOpenAIish && !isOpenAIish(s)) continue
+    return resultFromEntry(entry, "exact", `exact-id:${hit}`, hit, transport)
   }
 
-  // 3. Model family / range patterns.
+  // 3. Model family / range matchers (regex pattern or version predicate).
   for (const entry of POLICY_REGISTRY) {
-    if (entry.kind !== "family" || !entry.pattern) continue
-    if (!entry.pattern.test(s.slug)) continue
+    if (entry.kind !== "family") continue
+    if (!familyMatches(entry, s.slug)) continue
     if (entry.requiresOpenAIish && !isOpenAIish(s)) continue
     return resultFromEntry(entry, "family", `family-pattern:${entry.id}`, null, transport)
   }
@@ -498,7 +531,7 @@ export function resolveLegacyFamily(model) {
   for (const entry of POLICY_REGISTRY) {
     if (!entry.legacy) continue
     if (entry.kind === "family") {
-      if (!entry.pattern.test(s.slug)) continue
+      if (!familyMatches(entry, s.slug)) continue
       if (entry.requiresOpenAIish && !isOpenAIish(s)) continue
       return entry.family
     }
