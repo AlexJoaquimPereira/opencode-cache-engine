@@ -32,7 +32,7 @@ The plugin currently has four cache-policy families:
   unchanged. GPT-6 and future 5.6+/6+/7+ versions resolve through the same
   documented boundary.
 * **GLM-5.3 and later** — GLM implicit-cache baseline and diagnostics; GLM-5.3 additionally uses a narrow, content-preserving `<env>` relocation overlay.
-* **MiMo-V2.6** — narrow, content-preserving `<env>` relocation and diagnostics.
+* **MiMo V2.6 and later** — MiMo implicit-cache baseline and diagnostics; MiMo V2.6 Flash/Pro additionally use a narrow, content-preserving `<env>` relocation overlay.
 
 Family classification is not hard-coded in the runtime. A pure policy registry
 and resolver in `src/cache-policy-core.mjs` returns a structured result
@@ -42,7 +42,7 @@ the single runtime source of policy classification. The first-party research
 behind each registry entry is recorded in
 [docs/cache-policy-inventory.md](docs/cache-policy-inventory.md).
 
-For MiMo-V2.6 and the GLM-5.3-and-later family, CacheEngine adds its deterministic
+For the MiMo V2.6-and-later family and the GLM-5.3-and-later family, CacheEngine adds its deterministic
 `x-session-id` request header only when OpenCode identifies the actual provider
 as `openrouter`. It does not add that OpenRouter-specific header for
 non-OpenRouter providers; direct provider endpoints retain their provider-native
@@ -286,19 +286,33 @@ whether a header was already present or added, and provider-identity changes
 (`glm_provider_changed`). They do not record the header value.
 
 
-## MiMo-V2.6 (Flash / Pro)
+## MiMo V2.6 and later
 
 ### Policy: prefix stability + OpenRouter session affinity
 
-MiMo-V2.6 is Xiaomi's current model family. The plugin targets exactly two
-identifiers:
+MiMo-V2.6 is Xiaomi's current model family. Since v0.4.5 the plugin separates
+three concerns:
+
+* **Family baseline** — the implicit-cache baseline plus cached-token telemetry,
+  provider-change/prefix diagnostics, and OpenRouter session affinity. This
+  applies to the documented V2.6 Flash and Pro identifiers, the
+  `mimo-v2.6-pro-ultraspeed` mode id, and any future MiMo generation after V2.6.
+* **Validated overlay** — the `<env>` relocation described below, registered only
+  for MiMo V2.6 Flash/Pro.
+* **Transport affinity** — OpenRouter `x-session-id`, gated on the actual
+  `openrouter` provider identity.
+
+The documented V2.6 identifiers are:
 
 * `xiaomi/mimo-v2.6-flash` / `mimo-v2.6-flash`
 * `xiaomi/mimo-v2.6-pro` / `mimo-v2.6-pro`
+* `xiaomi/mimo-v2.6-pro-ultraspeed` / `mimo-v2.6-pro-ultraspeed`
 
 Detection also tolerates `provider/model` shapes where `api.id` contains those
-slugs. It deliberately does **not** match `mimo-v2.5`, `mimo-v2.5-pro`,
-`mimo-v2.6-pro-ultraspeed`, or unrelated MiMo models.
+slugs. Future generations after V2.6 (for example `mimo-v2.7-*`) resolve to the
+family baseline so a new model remains usable even when its exact id is unknown.
+`mimo-v2.5`, `mimo-v2.5-pro`, `mimo-v2`, and undocumented V2.6 variants such as
+`mimo-v2.6-flashx` remain neutral.
 
 ### Implicit context caching
 
@@ -313,9 +327,9 @@ Implicit caching is the default assumption.
 
 ### Environment-block stabilization
 
-MiMo uses the same narrow, content-preserving transformation as GLM-5.3: the
-identifiable volatile `<env>` block is relocated to the **tail** of the single
-system string. Contents are preserved byte-for-byte; only position changes. This
+MiMo V2.6 Flash/Pro use the same narrow, content-preserving transformation as
+GLM-5.3: the identifiable volatile `<env>` block is relocated to the **tail** of
+the single system string. Contents are preserved byte-for-byte; only position changes. This
 keeps the large reusable prefix stable when only the environment/date changes.
 
 The transformation is applied only when:
@@ -349,12 +363,13 @@ Explicit telemetry events:
 
 ### OpenRouter session affinity
 
-For MiMo-V2.6 requests whose actual OpenCode provider identity is `openrouter`,
-CacheEngine adds its existing deterministic, session-scoped `x-session-id`
-request header. If a case-insensitive `x-session-id` already exists in model or
-plugin headers, CacheEngine preserves it and does not replace it. Eligibility
-uses both the MiMo-V2.6 family and the actual provider identity; a matching model
-slug on another endpoint is not enough.
+For MiMo V2.6-and-later requests whose actual OpenCode provider identity is
+`openrouter`, CacheEngine adds its existing deterministic, session-scoped
+`x-session-id` request header. If a case-insensitive `x-session-id` already
+exists in model or plugin headers, CacheEngine preserves it and does not replace
+it. Eligibility uses both the MiMo V2.6-and-later family and the actual provider
+identity; a matching model slug on another endpoint is not enough. This is
+transport affinity, separate from the V2.6 Flash/Pro `<env>` overlay.
 
 For Xiaomi's direct endpoint and every other non-OpenRouter provider, CacheEngine
 does not add its OpenRouter-specific `x-session-id`. Direct provider endpoints
@@ -435,7 +450,7 @@ and are reported diagnostically; the message content is left untouched.
 | DeepSeek | `deepseek` (V4-and-later family + passive fallback) | No | No | None | provider `cache.read` / `cache.write` |
 | GPT-5.6 and later | version boundary `gpt-<major>[.<minor>] ≥ 5.6` on OpenAI-ish endpoints (includes GPT-6) | No | Yes: `prompt_cache_key` + options | None | provider cache tokens |
 | GLM-5.3 and later | `glm-5.3+` | Yes, narrowly (`<env>` tail) on GLM-5.3 only | No provider cache key | `x-session-id` on OpenRouter only | provider cache tokens (GLM ratio) |
-| MiMo-V2.6 | Flash / Pro only | Yes, narrowly (`<env>` tail) | No: implicit caching only | `x-session-id` on OpenRouter only | `cached_tokens / prompt_tokens` |
+| MiMo V2.6 and later | `mimo-v2.6+` (family) | Yes, narrowly (`<env>` tail) on V2.6 Flash/Pro only | No: implicit caching only | `x-session-id` on OpenRouter only | `cached_tokens / prompt_tokens` |
 
 `x-session-id` is an HTTP affinity header, not a provider cache key or
 cache-control field. Non-OpenRouter endpoints do not receive CacheEngine's
@@ -947,14 +962,15 @@ neutral
 The model detector recognizes:
 
 * DeepSeek model/provider identifiers
-* GPT-5.6 variants
-* GLM-5.3 variants
-* MiMo-V2.6 Flash and Pro (`xiaomi/mimo-v2.6-flash`, `mimo-v2.6-pro`, ...)
+* GPT-5.6-and-later variants
+* GLM-5.3-and-later variants
+* MiMo V2.6-and-later family (`mimo-v2.6-flash`, `mimo-v2.6-pro`, `mimo-v2.6-pro-ultraspeed`, ...)
 
 The GPT-5.6-and-later family has an additional OpenAI/Azure-context check, so a string containing a qualifying GPT version (for example `gpt-5.6` or `gpt-6`) does not automatically cause GPT-specific fields to be sent to an unrelated endpoint.
 
-MiMo detection targets exactly Flash and Pro: it excludes `mimo-v2.5`,
-`mimo-v2.5-pro`, and `mimo-v2.6-pro-ultraspeed`.
+MiMo detection keeps the documented V2.6 ids and covers future generations after
+V2.6; it excludes `mimo-v2.5`, `mimo-v2.5-pro`, `mimo-v2`, and undocumented V2.6
+variants such as `mimo-v2.6-flashx`.
 
 Unknown models use the neutral policy.
 
@@ -1053,7 +1069,7 @@ returns the runtime-facing descriptor the hooks consume: the legacy policy
 string plus explicit capability flags.
 
 Only registry entries marked `legacy` enable runtime behavior; documented but
-non-legacy entries (for example `mimo-v2.6-pro-ultraspeed`) and all unknown
+non-legacy aliases (for example `gpt-daybreak-blue-latest`) and all unknown
 models resolve to a neutral runtime. A newer or unknown model therefore never
 inherits a current model's mutation unless the registry explicitly registers it.
 The GPT family is a documented exception in the sense that its boundary is
@@ -1288,7 +1304,7 @@ release, use:
 ```json
 {
   "plugin": [
-    "opencode-cache-engine@0.4.1"
+    "opencode-cache-engine@0.4.5"
   ]
 }
 ```
@@ -1391,14 +1407,14 @@ xiaomi/mimo-v2.6-flash
 xiaomi/mimo-v2.6-pro
 ```
 
-`mimo-v2.5`, `mimo-v2.5-pro`, and `mimo-v2.6-pro-ultraspeed` are intentionally
-not matched.
+`mimo-v2.5`, `mimo-v2.5-pro`, `mimo-v2`, and undocumented V2.6 variants such as
+`mimo-v2.6-flashx` are intentionally not matched.
 
 ---
 
 ## OpenRouter affinity header is not added
 
-CacheEngine adds its `x-session-id` only for a detected MiMo-V2.6 or GLM-5.3-and-later
+CacheEngine adds its `x-session-id` only for a detected MiMo V2.6-and-later or GLM-5.3-and-later
 request when the actual OpenCode `providerID` is exactly `openrouter`. A direct
 provider route or missing provider identity is bypassed. If a case-insensitive
 `x-session-id` is already present in model or plugin headers, it is preserved
@@ -1429,10 +1445,10 @@ A telemetry failure is intentionally swallowed so it does not break model execut
 The current implementation is intentionally conservative:
 
 ```text
-DeepSeek  -> preserve and measure
-GPT-5.6   -> documented cache key/options; user/harness controls the 272K pricing boundary
-GLM-5.3   -> preserve-content <env> relocation + OpenRouter affinity header
-MiMo-V2.6 -> preserve-content <env> relocation + OpenRouter affinity header
+DeepSeek    -> preserve and measure
+GPT-5.6+    -> documented cache key/options; user/harness controls the 272K pricing boundary
+GLM-5.3+    -> family baseline; GLM-5.3 only: preserve-content <env> relocation + OpenRouter affinity header
+MiMo V2.6+  -> family baseline; V2.6 Flash/Pro only: preserve-content <env> relocation (+ OpenRouter affinity header)
 ```
 
 That separation is the core design of the project.
