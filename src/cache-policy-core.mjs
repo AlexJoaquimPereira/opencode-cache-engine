@@ -121,6 +121,30 @@ export function isGlm53OrLater(slug) {
   return false
 }
 
+// MiMo generations strictly newer than V2.6 (docs/cache-policy-inventory.md §4;
+// Xiaomi docs re-verified 2026-09-27). The documented V2.6 ids (Flash/Pro and
+// the Pro UltraSpeed mode) are matched by their explicit entries; this predicate
+// covers a future V2.7+/V3+ generation that CacheEngine has never seen, granting
+// only the passive baseline (telemetry + transport) and never the `<env>`
+// relocation overlay, so it is safe by construction. V2.5 and earlier stay
+// neutral.
+//
+// It intentionally does NOT match the existing V2.6 literal, so undocumented
+// V2.6 variants (for example `mimo-v2.6-flashx`) stay neutral per the narrow
+// MiMo detection rule.
+export function isMimoAfterV26(slug) {
+  const text = String(slug ?? "").toLowerCase()
+  const re = /mimo-v(\d+)(?:\.(\d+))?(?![\d.])/g
+  let m
+  while ((m = re.exec(text)) !== null) {
+    const major = Number(m[1])
+    const minor = m[2] === undefined ? 0 : Number(m[2])
+    if (major > 2) return true
+    if (major === 2 && minor > 6) return true
+  }
+  return false
+}
+
 // Candidate ids for exact/alias lookup. Includes the raw apiID/modelID, the
 // lower-cased forms, and a single stripped transport/vendor prefix
 // (e.g. "openai/gpt-5.6-luna" -> "gpt-5.6-luna", "xiaomi/mimo-v2.6-flash" ->
@@ -409,14 +433,42 @@ export const POLICY_REGISTRY = [
     id: "xiaomi.mimo-v2.6-pro-ultraspeed",
     creator: "xiaomi",
     family: "mimo-v2.6",
-    kind: "exact",
+    kind: "family",
+    pattern: /mimo-v2\.6-pro-ultraspeed/i,
     exactIds: ["mimo-v2.6-pro-ultraspeed"],
     baseline: "xiaomi.implicit-cache",
     overlays: [],
-    legacy: false,
-    runtime: rt("neutral"),
-    policyStatus: "documented-series-member-without-registered-overlay",
-    note: "Documented as a Pro mode in the same V2.6 series, but the inventory does not establish identical cache controls and CacheEngine registers no overlay for it.",
+    legacy: true,
+    runtime: rt("mimo26", {
+      cacheRatio: "mimo",
+      providerChange: "mimo",
+      prefixDiagnostics: true,
+      openRouterAffinity: true,
+    }),
+    policyStatus: "documented-series-member-baseline-only",
+    note: "v0.4.5: documented as a Pro mode in the same V2.6 series. It gets the MiMo family baseline (cached-token telemetry, provider-change/prefix diagnostics, OpenRouter affinity) but NOT the validated `<env>` relocation overlay.",
+    inventoryRef: "§4 Xiaomi MiMo",
+  },
+  {
+    // v0.4.5: "MiMo V2.6 and later" family baseline. A future 2.6+ model gets
+    // the passive baseline and its non-mutating diagnostics/transport, but never
+    // the `<env>` overlay, which stays explicit to the validated Flash/Pro entry.
+    id: "xiaomi.mimo-v2.6-plus",
+    creator: "xiaomi",
+    family: "mimo-v2.6",
+    kind: "family",
+    predicate: isMimoAfterV26,
+    baseline: "xiaomi.implicit-cache",
+    overlays: [],
+    legacy: true,
+    runtime: rt("mimo26", {
+      cacheRatio: "mimo",
+      providerChange: "mimo",
+      prefixDiagnostics: true,
+      openRouterAffinity: true,
+    }),
+    boundary: "MiMo V2.6 and later",
+    note: "Xiaomi documents implicit caching with no cache-control field and no generational-inheritance rule; the `<env>` relocation is a CacheEngine overlay with no first-party basis and is not inherited.",
     inventoryRef: "§4 Xiaomi MiMo",
   },
   {

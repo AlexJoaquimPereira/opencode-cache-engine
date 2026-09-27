@@ -56,6 +56,7 @@ import {
   isDeepseekV4OrLater,
   isGlm53OrLater,
   isGpt56OrLater,
+  isMimoAfterV26,
   resolveLegacyFamily,
   resolvePolicy,
   resolveRuntimePolicy,
@@ -325,11 +326,13 @@ test("MiMo V2.6 Flash/Pro match MiMo policy (openrouter + direct)", () => {
   )
 })
 
-test("MiMo V2.5 and Pro-UltraSpeed do NOT match MiMo policy", () => {
+test("MiMo V2.5 stays neutral; V2.6 Pro UltraSpeed now resolves (v0.4.5)", () => {
   assert.equal(detectPolicy(M("openrouter", "xiaomi/mimo-v2.5")), POLICY_NEUTRAL)
   assert.equal(detectPolicy(M("openrouter", "xiaomi/mimo-v2.5-pro")), POLICY_NEUTRAL)
   assert.equal(detectPolicy(M("xiaomi", "mimo-v2.5")), POLICY_NEUTRAL)
-  assert.equal(detectPolicy(M("xiaomi", "mimo-v2.6-pro-ultraspeed")), POLICY_NEUTRAL)
+  // v0.4.5: UltraSpeed is a documented V2.6 series member (baseline only).
+  assert.equal(detectPolicy(M("xiaomi", "mimo-v2.6-pro-ultraspeed")), POLICY_MIMO26)
+  // Undocumented V2.6 variants remain neutral (narrow detection preserved).
   assert.equal(detectPolicy(M("xiaomi", "mimo-v2.6-flashx")), POLICY_NEUTRAL)
 })
 
@@ -1448,7 +1451,7 @@ test("resolvePolicy: MiMo V2.6 Flash/Pro carry the overlay; Pro UltraSpeed is an
   assert.equal(ultraspeed.matchType, "exact")
   assert.deepEqual(overlayIds(ultraspeed), [])
   const uEntry = POLICY_REGISTRY.find((e) => e.id === "xiaomi.mimo-v2.6-pro-ultraspeed")
-  assert.equal(uEntry.policyStatus, "documented-series-member-without-registered-overlay")
+  assert.equal(uEntry.policyStatus, "documented-series-member-baseline-only")
 
   const v25 = resolvePolicy(M("xiaomi", "mimo-v2.5"))
   assert.equal(v25.family, "neutral")
@@ -1656,7 +1659,10 @@ async function runPolicyMigrationProbe() {
       { name: "glm-5.2", model: { providerID: "zai", id: "glm-5.2", api: { id: "glm-5.2" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
       { name: "mimo-v2.6-flash-direct", model: { providerID: "xiaomi", id: "mimo-v2.6-flash", api: { id: "mimo-v2.6-flash" } }, expect: { policy: "mimo26", env: true, gpt: false, header: false } },
       { name: "mimo-v2.6-pro-openrouter", model: { providerID: "openrouter", id: "xiaomi/mimo-v2.6-pro", api: { id: "xiaomi/mimo-v2.6-pro" } }, expect: { policy: "mimo26", env: true, gpt: false, header: true } },
-      { name: "mimo-v2.6-pro-ultraspeed", model: { providerID: "xiaomi", id: "mimo-v2.6-pro-ultraspeed", api: { id: "mimo-v2.6-pro-ultraspeed" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
+      { name: "mimo-v2.6-pro-ultraspeed", model: { providerID: "xiaomi", id: "mimo-v2.6-pro-ultraspeed", api: { id: "mimo-v2.6-pro-ultraspeed" } }, expect: { policy: "mimo26", env: false, gpt: false, header: false } },
+      { name: "mimo-v2.7-future", model: { providerID: "xiaomi", id: "mimo-v2.7-flash", api: { id: "mimo-v2.7-flash" } }, expect: { policy: "mimo26", env: false, gpt: false, header: false } },
+      { name: "mimo-v2.7-openrouter", model: { providerID: "openrouter", id: "xiaomi/mimo-v2.7-flash", api: { id: "xiaomi/mimo-v2.7-flash" } }, expect: { policy: "mimo26", env: false, gpt: false, header: true } },
+      { name: "mimo-v2.6-pro-ultraspeed-openrouter", model: { providerID: "openrouter", id: "xiaomi/mimo-v2.6-pro-ultraspeed", api: { id: "xiaomi/mimo-v2.6-pro-ultraspeed" } }, expect: { policy: "mimo26", env: false, gpt: false, header: true } },
       { name: "mimo-v2.5", model: { providerID: "xiaomi", id: "mimo-v2.5", api: { id: "mimo-v2.5" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
       { name: "unknown-provider", model: { providerID: "mystery-provider", id: "xiaomi/mimo-v2.6-flash", api: { id: "xiaomi/mimo-v2.6-flash" } }, expect: { policy: "mimo26", env: true, gpt: false, header: false } },
       { name: "unknown-openrouter", model: { providerID: "openrouter", id: "acme/mystery-9", api: { id: "acme/mystery-9" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
@@ -2009,4 +2015,103 @@ test("v0.4.4: GLM OpenRouter affinity is transport-gated for later GLM too", asy
   assert.equal(direct.affinityHeaderAttached, false)
   assert.equal(or.existingHeadersPreserved, true)
   assert.equal(direct.existingHeadersPreserved, true)
+})
+
+// ===========================================================================
+// v0.4.5 MiMo V2.6+ family baseline vs the validated MiMo overlay
+//
+// Source: Xiaomi MiMo docs re-verified 2026-09-27
+// (docs/cache-policy-inventory.md §4). Caching is provider-managed/implicit with
+// no cache-control field; the `<env>` relocation is a CacheEngine overlay with
+// no first-party basis; V2.5 deprecates 2026-10-21. No V2.7+/inheritance rule is
+// documented, so future coverage is a safe passive baseline only.
+// ===========================================================================
+
+test("v0.4.5: isMimoAfterV26 matches generations strictly after V2.6", () => {
+  const inFamily = ["mimo-v2.7-flash", "mimo-v2.7", "mimo-v2.8-pro", "mimo-v3", "mimo-v3.1-flash", "xiaomi/mimo-v2.7-flash"]
+  for (const id of inFamily) assert.equal(isMimoAfterV26(id), true, `${id} is after V2.6`)
+  const outOfFamily = ["mimo-v2.6-flash", "mimo-v2.6-pro", "mimo-v2.6-pro-ultraspeed", "mimo-v2.6-flashx", "mimo-v2.5", "mimo-v2.5-pro", "mimo-v2-flash", ""]
+  for (const id of outOfFamily) assert.equal(isMimoAfterV26(id), false, `${id} is not after V2.6`)
+})
+
+test("v0.4.5: Flash/Pro keep the overlay; UltraSpeed and later get the baseline only", () => {
+  const flash = resolvePolicy(M("xiaomi", "mimo-v2.6-flash"))
+  assert.equal(flash.family, "mimo-v2.6")
+  assert.equal(baseId(flash), "xiaomi.implicit-cache")
+  assert.deepEqual(overlayIds(flash), ["mimo26.env-relocation"])
+  assert.deepEqual(overlayIds(resolvePolicy(M("xiaomi", "mimo-v2.6-pro"))), ["mimo26.env-relocation"])
+
+  for (const id of ["mimo-v2.6-pro-ultraspeed", "mimo-v2.7-flash"]) {
+    const r = resolvePolicy(M("xiaomi", id))
+    assert.equal(r.family, "mimo-v2.6", `${id}: family`)
+    assert.equal(baseId(r), "xiaomi.implicit-cache", `${id}: same baseline`)
+    assert.deepEqual(overlayIds(r), [], `${id}: no overlay`)
+    const c = resolveRuntimePolicy(M("xiaomi", id))
+    assert.equal(c.policy, "mimo26", `${id}: policy`)
+    assert.equal(c.envRelocation, null, `${id}: no prompt rewrite`)
+    assert.equal(c.cacheRatio, "mimo", `${id}: cached-token ratio`)
+    assert.equal(c.providerChange, "mimo", `${id}: provider diagnostics`)
+    assert.equal(c.openRouterAffinity, true, `${id}: affinity capability`)
+    assert.equal(c.gptCacheMetadata, false, `${id}: no leak`)
+  }
+
+  // Same baseline object family for the overlay and non-overlay members.
+  assert.equal(baseId(resolvePolicy(M("xiaomi", "mimo-v2.7-flash"))), baseId(flash))
+})
+
+test("v0.4.5: MiMo V2.5 and earlier stay neutral", () => {
+  for (const id of ["mimo-v2.5", "mimo-v2.5-pro", "mimo-v2-flash", "mimo-v2"]) {
+    const r = resolvePolicy(M("xiaomi", id))
+    assert.equal(r.family, "neutral", `${id}: neutral`)
+    assert.deepEqual(overlayIds(r), [], `${id}: no overlay`)
+    assert.equal(resolveRuntimePolicy(M("xiaomi", id)).policy, "neutral", `${id}: neutral runtime`)
+  }
+})
+
+test("v0.4.5: legacy detectPolicy follows the MiMo V2.6+ boundary", () => {
+  assert.equal(detectPolicy(M("xiaomi", "mimo-v2.6-flash")), POLICY_MIMO26)
+  assert.equal(detectPolicy(M("xiaomi", "mimo-v2.6-pro-ultraspeed")), POLICY_MIMO26)
+  assert.equal(detectPolicy(M("xiaomi", "mimo-v2.7-flash")), POLICY_MIMO26)
+  assert.equal(detectPolicy(M("xiaomi", "mimo-v2.5")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("xiaomi", "mimo-v2.6-flashx")), POLICY_NEUTRAL)
+})
+
+test("v0.4.5: <env> absent is a no-op for MiMo transforms", () => {
+  const plain = "Stable MiMo instructions.\nNo environment block."
+  const r = relocateVolatileEnvBlock(plain)
+  assert.equal(r.changed, false)
+  assert.equal(r.text, plain)
+})
+
+test("v0.4.5: later MiMo inherits the baseline but never the <env> overlay (runtime)", async () => {
+  const { results } = await policyMigrationResults()
+  const flash = results.find((r) => r.name === "mimo-v2.6-flash-direct")
+  const ultra = results.find((r) => r.name === "mimo-v2.6-pro-ultraspeed")
+  const future = results.find((r) => r.name === "mimo-v2.7-future")
+  assert.ok(flash && ultra && future)
+  // Identical system text with a valid <env> block present in every case.
+  assert.equal(flash.systemRelocated, true) // validated Flash overlay fires
+  assert.equal(ultra.systemRelocated, false) // UltraSpeed: baseline only
+  assert.equal(future.systemRelocated, false) // future model: baseline only
+  assert.equal(ultra.runtimePolicy, "mimo26")
+  assert.equal(future.runtimePolicy, "mimo26")
+})
+
+test("v0.4.5: MiMo OpenRouter affinity stays transport-gated", async () => {
+  const { results } = await policyMigrationResults()
+  const orFuture = results.find((r) => r.name === "mimo-v2.7-openrouter")
+  const orUltra = results.find((r) => r.name === "mimo-v2.6-pro-ultraspeed-openrouter")
+  const direct = results.find((r) => r.name === "mimo-v2.7-future")
+  assert.equal(orFuture.affinityHeaderAttached, true)
+  assert.equal(orUltra.affinityHeaderAttached, true)
+  assert.equal(direct.affinityHeaderAttached, false)
+  assert.equal(orFuture.systemRelocated, false) // affinity is transport, not the overlay
+})
+
+test("v0.4.5: MiMo baseline invents no cache fields and keeps cached-token telemetry", () => {
+  const c = resolveRuntimePolicy(M("xiaomi", "mimo-v2.7-flash"))
+  assert.equal(c.gptCacheMetadata, false)
+  assert.equal(c.envRelocation, null)
+  assert.equal(c.cacheRatio, "mimo") // cachedTokens / promptTokens
+  assert.equal(mimoHitRate(75, 100), 75)
 })
