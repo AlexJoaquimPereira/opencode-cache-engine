@@ -54,6 +54,7 @@ import {
   OVERLAYS,
   POLICY_REGISTRY,
   isDeepseekV4OrLater,
+  isGlm53OrLater,
   isGpt56OrLater,
   resolveLegacyFamily,
   resolvePolicy,
@@ -1650,6 +1651,8 @@ async function runPolicyMigrationProbe() {
       { name: "deepseek-gateway", model: { providerID: "acme-gateway", id: "my-deepseek-mirror", api: { id: "my-deepseek-mirror" } }, expect: { policy: "deepseek", env: false, gpt: false, header: false } },
       { name: "glm-5.3-direct", model: { providerID: "zai", id: "glm-5.3", api: { id: "glm-5.3" } }, expect: { policy: "glm53", env: true, gpt: false, header: false } },
       { name: "glm-5.3-openrouter", model: { providerID: "openrouter", id: "z-ai/glm-5.3-flash", api: { id: "z-ai/glm-5.3-flash" } }, expect: { policy: "glm53", env: true, gpt: false, header: true } },
+      { name: "glm-5.4-direct", model: { providerID: "zai", id: "glm-5.4", api: { id: "glm-5.4" } }, expect: { policy: "glm53", env: false, gpt: false, header: false } },
+      { name: "glm-5.4-openrouter", model: { providerID: "openrouter", id: "z-ai/glm-5.4", api: { id: "z-ai/glm-5.4" } }, expect: { policy: "glm53", env: false, gpt: false, header: true } },
       { name: "glm-5.2", model: { providerID: "zai", id: "glm-5.2", api: { id: "glm-5.2" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
       { name: "mimo-v2.6-flash-direct", model: { providerID: "xiaomi", id: "mimo-v2.6-flash", api: { id: "mimo-v2.6-flash" } }, expect: { policy: "mimo26", env: true, gpt: false, header: false } },
       { name: "mimo-v2.6-pro-openrouter", model: { providerID: "openrouter", id: "xiaomi/mimo-v2.6-pro", api: { id: "xiaomi/mimo-v2.6-pro" } }, expect: { policy: "mimo26", env: true, gpt: false, header: true } },
@@ -1914,4 +1917,96 @@ test("v0.4.3: DeepSeek never receives OpenRouter affinity or GPT/GLM/MiMo fields
     assert.equal(r.affinityHeaderAttached, false, `${name}: no OpenRouter affinity`)
     assert.equal(r.existingHeadersPreserved, true, `${name}: headers preserved`)
   }
+})
+
+// ===========================================================================
+// v0.4.4 GLM-5.3-and-later family baseline vs the GLM-5.3-specific overlay
+//
+// Source: Z.AI docs re-verified 2026-09-27 (docs/cache-policy-inventory.md §3).
+// Z.AI documents implicit caching (no cache control) and publishes no
+// generational-inheritance rule; the `<env>` relocation is a CacheEngine overlay
+// with no first-party basis. GLM-5.2 and earlier stay neutral.
+// ===========================================================================
+
+test("v0.4.4: isGlm53OrLater matches GLM-5.3+ version tokens only", () => {
+  const inFamily = ["glm-5.3", "glm-5.3-flash", "glm-5.3-flashx", "glm-5.4", "glm-5.9", "glm-6", "z-ai/glm-5.3-flash"]
+  for (const id of inFamily) assert.equal(isGlm53OrLater(id), true, `${id} is 5.3+`)
+  const outOfFamily = ["glm-5.2", "glm-5.1", "glm-5", "glm-4.7", "glm-4.6", "glm-4.5", "glm-4.5-air", "glm-4-32b-0414-128k", ""]
+  for (const id of outOfFamily) assert.equal(isGlm53OrLater(id), false, `${id} is pre-5.3`)
+})
+
+test("v0.4.4: GLM-5.3 keeps its overlay; a later GLM gets the baseline only", () => {
+  const g53 = resolvePolicy(M("zai", "glm-5.3"))
+  assert.equal(g53.family, "glm-5.3")
+  assert.equal(baseId(g53), "zai.implicit-cache")
+  assert.deepEqual(overlayIds(g53), ["glm53.env-relocation"])
+
+  const g54 = resolvePolicy(M("zai", "glm-5.4"))
+  assert.equal(g54.creator, "z.ai")
+  assert.equal(g54.family, "glm-5.3")
+  assert.equal(baseId(g54), "zai.implicit-cache") // same family baseline
+  assert.deepEqual(overlayIds(g54), []) // overlay is NOT inherited
+
+  // Runtime capability separation: baseline diagnostics/transport yes, prompt rewrite no.
+  const c53 = resolveRuntimePolicy(M("zai", "glm-5.3"))
+  const c54 = resolveRuntimePolicy(M("zai", "glm-5.4"))
+  assert.equal(c54.policy, "glm53")
+  assert.equal(c54.envRelocation, null)
+  assert.equal(c54.thinkingIntegrity, true)
+  assert.equal(c54.cacheRatio, "glm")
+  assert.equal(c54.providerChange, "glm")
+  assert.equal(c54.openRouterAffinity, true)
+  assert.equal(c53.envRelocation, "glm")
+
+  // Boundary metadata is traceable and the overlay is registered separately.
+  const plus = POLICY_REGISTRY.find((e) => e.id === "zai.glm-5.3-plus")
+  assert.equal(plus.boundary, "GLM-5.3 and later")
+  assert.deepEqual(plus.overlays, [])
+  assert.ok(plus.inventoryRef)
+})
+
+test("v0.4.4: GLM-5.2 and earlier stay neutral", () => {
+  for (const id of ["glm-5.2", "glm-5.1", "glm-5", "glm-4.7", "glm-4.6", "glm-4.5"]) {
+    const r = resolvePolicy(M("zai", id))
+    assert.equal(r.family, "neutral", `${id} neutral`)
+    assert.deepEqual(overlayIds(r), [])
+    assert.equal(resolveRuntimePolicy(M("zai", id)).policy, "neutral")
+  }
+})
+
+test("v0.4.4: legacy detectPolicy follows the GLM-5.3-and-later boundary", () => {
+  assert.equal(detectPolicy(M("zai", "glm-5.3-flash")), POLICY_GLM53)
+  assert.equal(detectPolicy(M("zai", "glm-5.4")), POLICY_GLM53)
+  assert.equal(detectPolicy(M("zai", "glm-5.2")), POLICY_NEUTRAL)
+})
+
+test("v0.4.4: <env> absent leaves system content unchanged", () => {
+  const plain = "Stable instructions only.\nNo environment block here."
+  const r = relocateVolatileEnvBlock(plain)
+  assert.equal(r.changed, false)
+  assert.equal(r.text, plain)
+})
+
+test("v0.4.4: later GLM inherits the baseline but never the <env> rewrite (runtime)", async () => {
+  const { results } = await policyMigrationResults()
+  const g53 = results.find((r) => r.name === "glm-5.3-direct")
+  const g54 = results.find((r) => r.name === "glm-5.4-direct")
+  assert.ok(g53 && g54)
+  // Identical system text with a valid <env> block present in both cases.
+  assert.equal(g53.systemRelocated, true) // 5.3 overlay fires
+  assert.equal(g54.systemRelocated, false) // later GLM does NOT inherit it
+  assert.equal(g54.runtimePolicy, "glm53") // but the family baseline applies
+  assert.equal(g54.gptOptionInjected, false)
+  assert.equal(g54.affinityHeaderAttached, false)
+})
+
+test("v0.4.4: GLM OpenRouter affinity is transport-gated for later GLM too", async () => {
+  const { results } = await policyMigrationResults()
+  const or = results.find((r) => r.name === "glm-5.4-openrouter")
+  const direct = results.find((r) => r.name === "glm-5.4-direct")
+  assert.equal(or.affinityHeaderAttached, true)
+  assert.equal(or.systemRelocated, false)
+  assert.equal(direct.affinityHeaderAttached, false)
+  assert.equal(or.existingHeadersPreserved, true)
+  assert.equal(direct.existingHeadersPreserved, true)
 })

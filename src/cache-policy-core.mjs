@@ -102,6 +102,25 @@ export function isDeepseekV4OrLater(slug) {
   return false
 }
 
+// GLM-5.3-and-later family baseline (docs/cache-policy-inventory.md §3; Z.AI
+// docs re-verified 2026-09-27). Z.AI publishes no generational-inheritance rule
+// and no explicit cache control, so this is a CacheEngine inference about a
+// passive/implicit baseline; it is safe because it grants no mutation. The
+// GLM-5.3 `<env>` relocation is a separate, explicit overlay and is NOT granted
+// by this predicate. GLM-5.2 and earlier stay outside this family.
+export function isGlm53OrLater(slug) {
+  const text = String(slug ?? "").toLowerCase()
+  const re = /glm-(\d{1,3})(?:\.(\d))?(?![\d.])/g
+  let m
+  while ((m = re.exec(text)) !== null) {
+    const major = Number(m[1])
+    const minor = m[2] === undefined ? 0 : Number(m[2])
+    if (major > 5) return true
+    if (major === 5 && minor >= 3) return true
+  }
+  return false
+}
+
 // Candidate ids for exact/alias lookup. Includes the raw apiID/modelID, the
 // lower-cased forms, and a single stripped transport/vendor prefix
 // (e.g. "openai/gpt-5.6-luna" -> "gpt-5.6-luna", "xiaomi/mimo-v2.6-flash" ->
@@ -342,6 +361,29 @@ export const POLICY_REGISTRY = [
       providerChange: "glm",
       openRouterAffinity: true,
     }),
+    inventoryRef: "§3 Z.AI GLM",
+  },
+  {
+    // v0.4.4: "GLM-5.3 and later" family baseline. A future 5.3+ model inherits
+    // the implicit-cache baseline and its non-mutating diagnostics/transport,
+    // but NOT the GLM-5.3-specific `<env>` relocation overlay (`overlays: []`
+    // and no `envRelocation` capability). GLM-5.2 and earlier stay neutral.
+    id: "zai.glm-5.3-plus",
+    creator: "z.ai",
+    family: "glm-5.3",
+    kind: "family",
+    predicate: isGlm53OrLater,
+    baseline: "zai.implicit-cache",
+    overlays: [],
+    legacy: true,
+    runtime: rt("glm53", {
+      thinkingIntegrity: true,
+      cacheRatio: "glm",
+      providerChange: "glm",
+      openRouterAffinity: true,
+    }),
+    boundary: "GLM-5.3 and later",
+    note: "Z.AI publishes no generational-inheritance rule and no explicit cache control. The baseline is implicit caching; the `<env>` relocation is a GLM-5.3-only CacheEngine overlay and is intentionally not inherited. No cache-control field is invented.",
     inventoryRef: "§3 Z.AI GLM",
   },
   {
