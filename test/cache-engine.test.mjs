@@ -57,6 +57,7 @@ import {
   isGlm53OrLater,
   isGpt56OrLater,
   isMimoAfterV26,
+  explainPolicyResolution,
   resolveLegacyFamily,
   resolvePolicy,
   resolveRuntimePolicy,
@@ -1623,6 +1624,7 @@ async function runPolicyMigrationProbe() {
   const coreURL = new URL("../src/cache-engine-core.mjs", import.meta.url).href
   const script = `
     import assert from "node:assert/strict"
+    import { readFileSync } from "node:fs"
     process.env.CACHE_ENGINE_METRICS_FILE = process.env.HOME + "/policy-migration.jsonl"
     const { CacheEngine } = await import(${JSON.stringify(pluginURL)})
     const { detectPolicy } = await import(${JSON.stringify(coreURL)})
@@ -1666,6 +1668,16 @@ async function runPolicyMigrationProbe() {
       { name: "mimo-v2.5", model: { providerID: "xiaomi", id: "mimo-v2.5", api: { id: "mimo-v2.5" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
       { name: "unknown-provider", model: { providerID: "mystery-provider", id: "xiaomi/mimo-v2.6-flash", api: { id: "xiaomi/mimo-v2.6-flash" } }, expect: { policy: "mimo26", env: true, gpt: false, header: false } },
       { name: "unknown-openrouter", model: { providerID: "openrouter", id: "acme/mystery-9", api: { id: "acme/mystery-9" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
+      { name: "gpt-7-future-openai", model: { providerID: "openai", id: "gpt-7-codex", api: { id: "gpt-7-codex", npm: "@ai-sdk/openai" } }, expect: { policy: "gpt56", env: false, gpt: true, header: false } },
+      { name: "gpt-7-future-nonopenai-gateway", model: { providerID: "acme-gateway", id: "gpt-7-codex", api: { id: "gpt-7-codex" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
+      { name: "deepseek-v9-future", model: { providerID: "deepseek", id: "deepseek-v9", api: { id: "deepseek-v9" } }, expect: { policy: "deepseek", env: false, gpt: false, header: false } },
+      { name: "deepseek-v9-future-openrouter", model: { providerID: "openrouter", id: "deepseek/deepseek-v9", api: { id: "deepseek/deepseek-v9" } }, expect: { policy: "deepseek", env: false, gpt: false, header: false } },
+      { name: "glm-6-future", model: { providerID: "zai", id: "glm-6", api: { id: "glm-6" } }, expect: { policy: "glm53", env: false, gpt: false, header: false } },
+      { name: "glm-6-future-openrouter", model: { providerID: "openrouter", id: "z-ai/glm-6", api: { id: "z-ai/glm-6" } }, expect: { policy: "glm53", env: false, gpt: false, header: true } },
+      { name: "mimo-v3-future", model: { providerID: "xiaomi", id: "mimo-v3-flash", api: { id: "mimo-v3-flash" } }, expect: { policy: "mimo26", env: false, gpt: false, header: false } },
+      { name: "mimo-v3-future-openrouter", model: { providerID: "openrouter", id: "xiaomi/mimo-v3-flash", api: { id: "xiaomi/mimo-v3-flash" } }, expect: { policy: "mimo26", env: false, gpt: false, header: true } },
+      { name: "unknown-vendor-model", model: { providerID: "acme", id: "acme/nova-9", api: { id: "acme/nova-9" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
+      { name: "missing-provider-identity", model: { id: "acme/nova-9", api: { id: "acme/nova-9" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
     ]
     const results = []
     for (const c of CASES) {
@@ -1695,7 +1707,33 @@ async function runPolicyMigrationProbe() {
         expect: c.expect,
       })
     }
-    process.stdout.write(JSON.stringify({ results }))
+    // Repeat the first case in its own session: the resolution record must not
+    // be re-emitted for an unchanged resolution (observability, not per-request
+    // noise).
+    const repeat = CASES[0]
+    const repeatSid = "ses_" + repeat.name
+    const repeatProvider = { source: "config", info: { id: String(repeat.model.providerID ?? "") }, options: {} }
+    await hooks["chat.params"]({ sessionID: repeatSid, agent: "build", model: repeat.model, provider: repeatProvider, message: { id: "msg-repeat", sessionID: repeatSid, role: "user", content: "probe" } }, { options: {} })
+    await hooks["chat.params"]({ sessionID: repeatSid, agent: "build", model: repeat.model, provider: repeatProvider, message: { id: "msg-repeat-2", sessionID: repeatSid, role: "user", content: "probe" } }, { options: {} })
+
+    // A session that alternates between two models (the main model plus a small
+    // title/summary model) must record each distinct resolution once, not once
+    // per request.
+    const alternationSid = "ses_alternating"
+    const altA = { providerID: "openai", id: "gpt-5.6", api: { id: "gpt-5.6", npm: "@ai-sdk/openai" } }
+    const altB = { providerID: "openai", id: "gpt-4.1-mini", api: { id: "gpt-4.1-mini", npm: "@ai-sdk/openai" } }
+    for (let i = 0; i < 5; i++) {
+      const m = i % 2 === 0 ? altA : altB
+      const p = { source: "config", info: { id: m.providerID }, options: {} }
+      await hooks["chat.params"]({ sessionID: alternationSid, agent: "build", model: m, provider: p, message: { id: "msg-alt-" + i, sessionID: alternationSid, role: "user", content: "probe" } }, { options: {} })
+    }
+
+    const lines = readFileSync(process.env.CACHE_ENGINE_METRICS_FILE, "utf8").trim().split("\\n")
+    const records = lines.map((l) => JSON.parse(l))
+    const resolutions = records.filter((r) => r.kind === "policy-resolution")
+    const repeatEmission = resolutions.filter((r) => r.sid === repeatSid).length
+    const alternationEmission = resolutions.filter((r) => r.sid === alternationSid).length
+    process.stdout.write(JSON.stringify({ results, resolutions, repeatEmission, alternationEmission, allKinds: [...new Set(records.map((r) => r.kind))].sort() }))
   `
   const stdout = execFileSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], {
     cwd: process.cwd(),
@@ -2114,4 +2152,318 @@ test("v0.4.5: MiMo baseline invents no cache fields and keeps cached-token telem
   assert.equal(c.envRelocation, null)
   assert.equal(c.cacheRatio, "mimo") // cachedTokens / promptTokens
   assert.equal(mimoHitRate(75, 100), 75)
+})
+
+// ===========================================================================
+// v0.4.6 unknown / future model safety + policy-match telemetry
+//
+// Synthetic future identifiers only. No network calls. The resolver must stay
+// deterministic and total, must never invent cache controls, and must never
+// apply a model-specific prompt overlay without an explicit registry entry.
+// ===========================================================================
+
+test("v0.4.6: explainPolicyResolution classifies every match category", () => {
+  // exact documented model id
+  const exact = explainPolicyResolution(M("openai", "gpt-5.6-sol"))
+  assert.equal(exact.matchCategory, "exact-id")
+  assert.equal(exact.matchKind, "exact-id")
+  assert.equal(exact.family, "gpt-5.6")
+  assert.equal(exact.policy, "gpt56")
+  assert.equal(exact.matchedId, "gpt-5.6-sol")
+
+  // documented alias
+  const alias = explainPolicyResolution(M("openai", "gpt-5.6"))
+  assert.equal(alias.matchCategory, "alias")
+  assert.equal(alias.matchKind, "alias")
+
+  // family pattern match (no version predicate, and not a registered exact id)
+  const pattern = explainPolicyResolution(M("zai", "glm-5.3-preview"))
+  assert.equal(pattern.matchCategory, "family")
+  assert.equal(pattern.matchKind, "pattern")
+
+  // family version-range match
+  const range = explainPolicyResolution(M("openai", "gpt-7-codex"))
+  assert.equal(range.matchCategory, "family")
+  assert.equal(range.matchKind, "version-range")
+
+  // creator baseline
+  const creator = explainPolicyResolution(M("acme-gateway", "my-deepseek-mirror"))
+  assert.equal(creator.matchCategory, "creator")
+  assert.equal(creator.matchKind, "creator-baseline")
+  assert.equal(creator.family, "deepseek")
+
+  // neutral / unknown
+  const neutral = explainPolicyResolution(M("acme", "acme/nova-9"))
+  assert.equal(neutral.matchCategory, "neutral")
+  assert.equal(neutral.matchKind, "unknown")
+  assert.equal(neutral.isNeutral, true)
+  assert.equal(neutral.family, "neutral")
+})
+
+test("v0.4.6: overlay application is reported, and unvalidated overlays are explicit", () => {
+  const validated = explainPolicyResolution(M("zai", "glm-5.3"))
+  assert.equal(validated.overlayApplied, true)
+  assert.deepEqual(validated.overlays, ["glm53.env-relocation"])
+  assert.equal(validated.overlaySkipped, false)
+  assert.equal(validated.overlaySkippedReason, null)
+
+  // Same family, not a validated model: baseline only, overlay explicitly skipped.
+  const future = explainPolicyResolution(M("zai", "glm-6"))
+  assert.equal(future.family, "glm-5.3")
+  assert.equal(future.policy, "glm53")
+  assert.equal(future.overlayApplied, false)
+  assert.equal(future.overlaySkipped, true)
+  assert.equal(future.overlaySkippedReason, "overlay-not-validated-for-model")
+  assert.deepEqual(future.overlaySkippedCandidates, ["glm53.env-relocation"])
+
+  const mimoFuture = explainPolicyResolution(M("xiaomi", "mimo-v3-flash"))
+  assert.equal(mimoFuture.family, "mimo-v2.6")
+  assert.equal(mimoFuture.overlayApplied, false)
+  assert.equal(mimoFuture.overlaySkippedReason, "overlay-not-validated-for-model")
+
+  // A family with no registered overlay is not reported as "skipped".
+  const deepseekFuture = explainPolicyResolution(M("deepseek", "deepseek-v9"))
+  assert.equal(deepseekFuture.overlayApplied, false)
+  assert.equal(deepseekFuture.overlaySkipped, false)
+  assert.equal(deepseekFuture.overlaySkippedReason, null)
+
+  // A registered overlay on an entry whose runtime is neutral is NOT applied and
+  // must not be reported as applied. A non-runtime-active alias is the real case.
+  const inactiveAlias = explainPolicyResolution(M("openai", "gpt-daybreak-blue-latest"))
+  assert.deepEqual(inactiveAlias.overlays, ["gpt56.prompt-cache-options"])
+  assert.equal(inactiveAlias.isNeutral, true)
+  assert.equal(inactiveAlias.policy, "neutral")
+  assert.equal(inactiveAlias.overlayApplied, false, "must not claim an unapplied overlay")
+  assert.equal(inactiveAlias.overlaySkipped, true)
+  assert.equal(inactiveAlias.overlaySkippedReason, "registry-entry-not-runtime-active")
+  assert.deepEqual(inactiveAlias.overlaySkippedCandidates, ["gpt56.prompt-cache-options"])
+})
+
+test("v0.4.6: provider identity is reported, never guessed", () => {
+  const known = explainPolicyResolution(M("openrouter", "z-ai/glm-6"))
+  assert.equal(known.providerIdentityKnown, true)
+  assert.equal(known.provider, "openrouter")
+  assert.equal(known.transportKind, "openrouter")
+
+  const direct = explainPolicyResolution(M("zai", "glm-6"))
+  assert.equal(direct.providerIdentityKnown, true)
+  assert.equal(direct.transportKind, "direct")
+  assert.equal(direct.sessionAffinityHeader, null)
+
+  // No provider identity at all: unknown, and no affinity capability claimed.
+  const missing = explainPolicyResolution({ id: "acme/nova-9", api: { id: "acme/nova-9" } })
+  assert.equal(missing.providerIdentityKnown, false)
+  assert.equal(missing.provider, null)
+  assert.equal(missing.transportKind, "unknown")
+  assert.equal(missing.sessionAffinityHeader, null)
+  assert.equal(missing.matchCategory, "neutral")
+})
+
+test("v0.4.6: the resolver is total and deterministic for synthetic future ids", () => {
+  const futureIds = [
+    ["openai", "gpt-9-ultra"],
+    ["azure", "gpt-12-reasoner"],
+    ["deepseek", "deepseek-v12"],
+    ["zai", "glm-9.9"],
+    ["xiaomi", "mimo-v4-pro"],
+    ["acme", "acme/nova-9"],
+  ]
+  for (const [providerID, id] of futureIds) {
+    const model = M(providerID, id)
+    let first
+    assert.doesNotThrow(() => {
+      first = explainPolicyResolution(model)
+    }, `${id} must not throw`)
+    // Deterministic: same input, same explanation.
+    assert.deepEqual(explainPolicyResolution(model), first, `${id} must be deterministic`)
+    // Always usable: a well-formed result with a known policy string.
+    assert.equal(typeof first.policy, "string", `${id} must resolve a policy`)
+    assert.equal(typeof first.matchCategory, "string", `${id} must report a category`)
+  }
+  // Garbage input is neutral, never a throw.
+  for (const bad of [null, undefined, {}, { providerID: "" }, { providerID: 42 }, "nope", 7]) {
+    let r
+    assert.doesNotThrow(() => {
+      r = explainPolicyResolution(bad)
+    })
+    assert.equal(r.isNeutral, true, `${JSON.stringify(bad)} must be neutral`)
+  }
+  // No provider identity at all is reported as unknown, not invented.
+  for (const bad of [null, undefined, {}, { providerID: "" }, "nope", 7]) {
+    assert.equal(explainPolicyResolution(bad).providerIdentityKnown, false)
+  }
+})
+
+test("v0.4.6: future models inherit a baseline only where the registry says so", () => {
+  // OpenAI documents a "GPT-5.6 and later" class, so a future GPT generation on
+  // an OpenAI-context endpoint inherits the documented cache metadata.
+  const gpt = explainPolicyResolution(M("openai", "gpt-9-ultra"))
+  assert.equal(gpt.family, "gpt-5.6")
+  assert.equal(gpt.policy, "gpt56")
+  assert.equal(resolveRuntimePolicy(M("openai", "gpt-9-ultra")).gptCacheMetadata, true)
+
+  // The same id on a non-OpenAI endpoint must not gain GPT-specific fields.
+  const leak = explainPolicyResolution(M("acme-gateway", "gpt-9-ultra"))
+  assert.equal(leak.isNeutral, true)
+  assert.equal(leak.policy, "neutral")
+  assert.equal(resolveRuntimePolicy(M("acme-gateway", "gpt-9-ultra")).gptCacheMetadata, false)
+
+  // DeepSeek stays passive: baseline telemetry only, no cache fields.
+  const ds = resolveRuntimePolicy(M("deepseek", "deepseek-v12"))
+  assert.equal(ds.policy, "deepseek")
+  assert.equal(ds.gptCacheMetadata, false)
+  assert.equal(ds.envRelocation, null)
+
+  // GLM/MiMo future models keep the family baseline but lose the prompt overlay.
+  for (const [providerID, id] of [["zai", "glm-9.9"], ["xiaomi", "mimo-v4-pro"]]) {
+    const caps = resolveRuntimePolicy(M(providerID, id))
+    assert.equal(caps.envRelocation, null, `${id} must not relocate the prompt`)
+    assert.equal(caps.gptCacheMetadata, false, `${id} must not gain GPT options`)
+    assert.equal(caps.openRouterAffinity, true, `${id} keeps transport affinity`)
+  }
+
+  // An unknown vendor is fully neutral: no guessed cache controls at all.
+  const unknown = resolveRuntimePolicy(M("acme", "acme/nova-9"))
+  assert.equal(unknown.policy, "neutral")
+  assert.equal(unknown.isNeutral, true)
+  assert.equal(unknown.gptCacheMetadata, false)
+  assert.equal(unknown.envRelocation, null)
+  assert.equal(unknown.openRouterAffinity, false)
+})
+
+test("v0.4.6: unknown/future hooks stay safe end to end (no model calls)", async () => {
+  const { results } = await policyMigrationResults()
+  const futureCases = [
+    "gpt-7-future-openai", "gpt-7-future-nonopenai-gateway", "deepseek-v9-future",
+    "deepseek-v9-future-openrouter", "glm-6-future", "glm-6-future-openrouter",
+    "mimo-v3-future", "mimo-v3-future-openrouter", "unknown-vendor-model",
+    "missing-provider-identity",
+  ]
+  for (const name of futureCases) {
+    const r = results.find((x) => x.name === name)
+    assert.ok(r, `${name} must be in the probe matrix`)
+    // No unvalidated prompt transformation anywhere.
+    assert.equal(r.systemRelocated, false, `${name} must not transform the prompt`)
+    // GPT options only for the OpenAI-context future GPT case, and never any
+    // other provider option.
+    assert.equal(r.gptOptionInjected, r.expect.gpt, `${name} gpt option leak`)
+    if (r.expect.gpt) assert.deepEqual(r.gptOptions, { mode: "implicit", ttl: "30m" }, `${name} gpt options`)
+    else assert.equal(r.gptOptions, null, `${name} must not add promptCacheOptions`)
+    // Pre-existing headers are always preserved.
+    assert.equal(r.existingHeadersPreserved, true, `${name} must preserve headers`)
+    // Resolver and legacy classification agree.
+    assert.equal(r.runtimePolicy, r.detectPolicy, `${name} classification agreement`)
+  }
+})
+
+test("v0.4.6: OpenRouter affinity still requires a real OpenRouter identity", async () => {
+  const { results } = await policyMigrationResults()
+  const byName = (n) => results.find((x) => x.name === n)
+  // Same future model id, different provider identity -> different transport.
+  assert.equal(byName("glm-6-future-openrouter").affinityHeaderAttached, true)
+  assert.equal(byName("glm-6-future").affinityHeaderAttached, false)
+  assert.equal(byName("mimo-v3-future-openrouter").affinityHeaderAttached, true)
+  assert.equal(byName("mimo-v3-future").affinityHeaderAttached, false)
+  // DeepSeek is never an affinity family, even on OpenRouter.
+  assert.equal(byName("deepseek-v9-future-openrouter").affinityHeaderAttached, false)
+  // A future GPT on OpenRouter is not an affinity family either.
+  assert.equal(byName("gpt-7-future-openai").affinityHeaderAttached, false)
+  // Missing provider identity never gets the header.
+  assert.equal(byName("missing-provider-identity").affinityHeaderAttached, false)
+})
+
+test("v0.4.6: policy-match telemetry records the resolution reason and nothing sensitive", async () => {
+  const { resolutions, repeatEmission, alternationEmission, allKinds } = await policyMigrationResults()
+
+  // Every probe session produced exactly one resolution record.
+  assert.ok(resolutions.length >= 35, "one policy-resolution record per probe session")
+  // Repeating an unchanged resolution in the same session does not re-emit.
+  assert.equal(repeatEmission, 1, "resolution telemetry must be deduplicated per session")
+  // Alternating between two models records each distinct resolution once, not
+  // once per request. This is the real title/summary pattern.
+  assert.equal(alternationEmission, 2, "alternating models must dedupe per distinct resolution")
+  assert.ok(allKinds.includes("policy-resolution"))
+  // One record per session per distinct resolution, no duplicates.
+  const keys = resolutions.map((r) => `${r.sid}|${r.matchCategory}|${r.matchKind}|${r.family}|${r.matchReason}|${r.provider}|${r.model}`)
+  assert.equal(new Set(keys).size, keys.length)
+
+  const bySidPrefix = (prefix) => resolutions.find((r) => r.sid === "ses_" + prefix)
+  const pick = (r) => ({ category: r.matchCategory, kind: r.matchKind, family: r.family, policy: r.policy, overlayApplied: r.overlayApplied, overlaySkipped: r.overlaySkipped, known: r.providerIdentityKnown, provider: r.provider, isNeutral: r.isNeutral })
+
+  // documented alias resolution
+  const gpt = pick(bySidPrefix("gpt-5.6"))
+  assert.equal(gpt.category, "alias")
+  assert.equal(gpt.family, "gpt-5.6")
+  assert.equal(gpt.policy, "gpt56")
+
+  // exact documented model id
+  assert.equal(pick(bySidPrefix("deepseek-flash")).category, "exact-id")
+
+  // version-range match for a future GPT generation on an OpenAI endpoint
+  const gptFuture = pick(bySidPrefix("gpt-7-future-openai"))
+  assert.equal(gptFuture.category, "family")
+  assert.equal(gptFuture.kind, "version-range")
+  assert.equal(gptFuture.overlayApplied, true)
+
+  // GPT options must not leak to a non-OpenAI endpoint
+  const gptLeak = pick(bySidPrefix("gpt-7-future-nonopenai-gateway"))
+  assert.equal(gptLeak.category, "neutral")
+  assert.equal(gptLeak.isNeutral, true)
+
+  // DeepSeek future generation: passive family baseline, no overlay concept
+  const dsFuture = pick(bySidPrefix("deepseek-v9-future"))
+  assert.equal(dsFuture.category, "family")
+  assert.equal(dsFuture.family, "deepseek")
+  assert.equal(dsFuture.overlayApplied, false)
+  assert.equal(dsFuture.overlaySkipped, false)
+
+  // creator baseline match (mirror slug on a third-party gateway)
+  const creator = pick(bySidPrefix("deepseek-gateway"))
+  assert.equal(creator.category, "creator")
+
+  // GLM/MiMo future generations: baseline with the overlay explicitly skipped
+  for (const prefix of ["glm-6-future", "mimo-v3-future"]) {
+    const r = bySidPrefix(prefix)
+    assert.equal(r.overlayApplied, false, prefix)
+    assert.equal(r.overlaySkipped, true, prefix)
+    assert.equal(r.overlaySkippedReason, "overlay-not-validated-for-model", prefix)
+  }
+
+  // unknown vendor -> neutral
+  const unknown = pick(bySidPrefix("unknown-vendor-model"))
+  assert.equal(unknown.category, "neutral")
+  assert.equal(unknown.provider, "acme")
+
+  // A resolved-but-inactive alias must not claim its overlay was applied, and
+  // the withheld overlay is named so a reviewer can act on it.
+  const aliasRec = bySidPrefix("gpt-daybreak-alias")
+  assert.equal(aliasRec.overlayApplied, false, "inactive alias must not claim an applied overlay")
+  assert.equal(aliasRec.overlaySkipped, true)
+  assert.equal(aliasRec.overlaySkippedReason, "registry-entry-not-runtime-active")
+  assert.deepEqual(aliasRec.overlaySkippedCandidates, ["gpt56.prompt-cache-options"])
+  assert.equal(aliasRec.isNeutral, true)
+
+  // The withheld-overlay detail is present on the record, not just in the helper.
+  const glmFutureRec = bySidPrefix("glm-6-future")
+  assert.deepEqual(glmFutureRec.overlaySkippedCandidates, ["glm53.env-relocation"])
+
+  // missing provider identity is reported, not guessed
+  const missing = pick(bySidPrefix("missing-provider-identity"))
+  assert.equal(missing.known, false)
+  assert.equal(missing.provider, null)
+  assert.equal(missing.isNeutral, true)
+
+  // Never log prompt/system/tool content, credentials, authorization headers, or
+  // the raw x-session-id value. Registry identifiers and the model id are fine
+  // (the model id is what makes a new model reviewable).
+  const forbiddenKey = /^(system|prompt|prompts|tool|tools|content|apiKey|api_key|authorization|auth|headers?|x-session-id|sessionId)$/i
+  const forbiddenValue = /today's date|keep1|keep2|powered by|api[-_ ]?key|authorization|bearer|x-session-id|mimo-ses-|oc-ses-/i
+  for (const r of resolutions) {
+    for (const k of Object.keys(r)) assert.ok(!forbiddenKey.test(k), `forbidden telemetry key: ${k}`)
+    for (const v of Object.values(r)) {
+      if (typeof v === "string") assert.ok(!forbiddenValue.test(v), `forbidden telemetry value: ${v}`)
+    }
+    // The derived session id is never recorded.
+    assert.equal(r.stickySessionId, undefined)
+  }
 })

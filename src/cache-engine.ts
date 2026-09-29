@@ -32,7 +32,7 @@ import {
   toolFingerprint,
   toolWireFingerprint,
 } from "./cache-engine-core.mjs"
-import { resolveRuntimePolicy } from "./cache-policy-core.mjs"
+import { explainPolicyResolution, resolveRuntimePolicy } from "./cache-policy-core.mjs"
 
 // ---------------------------------------------------------------------------
 // cache-engine
@@ -79,6 +79,9 @@ const PAGE_SIZE = 100
 const REASONING_SEEN_CAP = 5000
 const ROOT_HOPS_MAX = 16
 const ROOT_CACHE_TTL_MS = 30_000
+// Upper bound on remembered policy resolutions per session, so alternation
+// between models cannot grow the set (or the telemetry file) without limit.
+const RESOLUTION_KEYS_CAP = 16
 
 // The runtime plugin client accepts these options even though the v1 SDK type
 // only declares `path.id`/`query`; the empirical call shape is sessionID-based.
@@ -139,6 +142,7 @@ type SessionState = {
   reasoningLastSeq: string[] | null
   mimoProvider: { providerID: string; modelID: string } | null
   glmProvider: { providerID: string; modelID: string } | null
+  resolutionKeys: Set<string>
 }
 
 const emptyShape = (): Shape => ({
@@ -188,6 +192,7 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
         reasoningLastSeq: null,
         mimoProvider: null,
         glmProvider: null,
+        resolutionKeys: new Set(),
       }
       sessions.set(sid, s)
     }
@@ -261,6 +266,58 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
     void client?.app
       ?.log({ body: { service: "cache-engine", level, message, extra } })
       .catch(() => {})
+  }
+
+  // Policy-resolution telemetry (v0.4.6). Records WHY a model resolved to the
+  // policy it did, so a newly released or renamed model becomes visible for
+  // later review instead of silently inheriting (or silently missing) behavior.
+  //
+  // It records only registry/resolver facts: match category and kind, the
+  // registry match reason, creator/family/policy, whether a model-specific
+  // overlay was applied or skipped as unvalidated, and whether the provider
+  // identity is known. It never records prompt/system/tool content, credentials,
+  // authorization headers, or the raw x-session-id value.
+  //
+  // Emitted once per distinct resolution per session (not per request), so a new
+  // model in an existing session is still reported without flooding the file.
+  // A session can legitimately alternate between models (e.g. the main model
+  // and a small title/summary model), so every distinct resolution is remembered
+  // rather than only the most recent one; the set is bounded and reset past the
+  // cap to keep memory and file size predictable.
+  const recordPolicyResolution = (sid: string, model: unknown): void => {
+    try {
+      const r = explainPolicyResolution(model as Parameters<typeof explainPolicyResolution>[0])
+      const key = `${r.matchCategory}|${r.matchKind}|${r.family}|${r.matchReason ?? ""}|${r.provider ?? ""}|${r.model ?? ""}`
+      const s = get(sid)
+      if (s.resolutionKeys.has(key)) return
+      if (s.resolutionKeys.size >= RESOLUTION_KEYS_CAP) s.resolutionKeys.clear()
+      s.resolutionKeys.add(key)
+      rec.record({
+        kind: "policy-resolution",
+        sid,
+        ts: Date.now(),
+        matchCategory: r.matchCategory,
+        matchKind: r.matchKind,
+        matchReason: r.matchReason,
+        matchedId: r.matchedId,
+        creator: r.creator,
+        family: r.family,
+        policy: r.policy,
+        isNeutral: r.isNeutral,
+        baselineId: r.baselineId,
+        overlays: r.overlays,
+        overlayApplied: r.overlayApplied,
+        overlaySkipped: r.overlaySkipped,
+        overlaySkippedReason: r.overlaySkippedReason,
+        overlaySkippedCandidates: r.overlaySkippedCandidates,
+        providerIdentityKnown: r.providerIdentityKnown,
+        provider: r.provider,
+        model: r.model,
+        transport: r.transportKind,
+      })
+    } catch (e) {
+      rec.record({ kind: "telemetry-error", ts: Date.now(), error: String(e) })
+    }
   }
 
   // Latch the first NON-neutral model observed for a session. Title/summary
@@ -548,6 +605,10 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
     "chat.params": async (input, output) => {
       try {
         const info = rememberModel(input.sessionID, input.model as unknown as ChatParamsModel)
+        // Record how this model was classified before any policy branch below.
+        // The MiMo/GLM provider-observation branches return early, so this call
+        // sits ahead of them to cover every request.
+        recordPolicyResolution(input.sessionID, input.model)
         const family = info?.family
         const caps = info?.caps
 

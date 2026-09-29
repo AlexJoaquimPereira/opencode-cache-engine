@@ -657,6 +657,103 @@ export function resolveRuntimePolicy(model) {
   return resolvePolicy(model).runtime
 }
 
+// ---------------------------------------------------------------------------
+// Resolution explanation (v0.4.6)
+//
+// A pure, total function of (model, registry) that explains WHY a model resolved
+// the way it did, so a newly released model can be spotted for later review.
+//
+// Design constraints this encodes:
+//   * Detection is never "highest numeric version wins". A future model inherits
+//     a family baseline only because a registry entry explicitly registers a
+//     version range or a creator baseline, and it inherits a model-specific
+//     overlay only when the matched entry registers that overlay.
+//   * An overlay that exists for a family but was not applied to this model is
+//     reported explicitly, so "unvalidated" is visible rather than silent.
+//   * Provider identity is reported as known/unknown without guessing it.
+//
+// It never returns prompt, system, tool, or header content.
+// ---------------------------------------------------------------------------
+
+// Overlay ids registered for a family (used to detect "overlay exists but was
+// not applied to this model").
+export function overlaysRegisteredForFamily(family) {
+  return Object.keys(OVERLAYS).filter((id) => OVERLAYS[id].family === family)
+}
+
+// Coarse match category: exact-id | alias | family | creator | neutral.
+export function policyMatchCategory(result) {
+  if (result.matchType === "exact") {
+    return String(result.matchReason ?? "").startsWith("alias:") ? "alias" : "exact-id"
+  }
+  if (result.matchType === "family") return "family"
+  if (result.matchType === "creator") return "creator"
+  return "neutral"
+}
+
+// Finer-grained explanation of HOW the match happened, for reviewers.
+function policyMatchKind(result) {
+  if (result.matchType === "exact") {
+    return String(result.matchReason ?? "").startsWith("alias:") ? "alias" : "exact-id"
+  }
+  if (result.matchType === "family") {
+    const entryId = String(result.matchReason ?? "").split(":")[1]
+    const entry = POLICY_REGISTRY.find((e) => e.id === entryId)
+    if (!entry) return "unknown"
+    return typeof entry.predicate === "function" ? "version-range" : "pattern"
+  }
+  if (result.matchType === "creator") return "creator-baseline"
+  return "unknown"
+}
+
+// Explain a resolution without mutating anything. Safe for any input, including
+// null/undefined/garbage models: those resolve to the neutral/unknown path.
+export function explainPolicyResolution(model) {
+  const result = resolvePolicy(model)
+  const s = modelSignals(model)
+  const overlayIds = (result.overlays ?? []).map((o) => o.id)
+  const provider = typeof s.providerID === "string" && s.providerID.length > 0 ? s.providerID : null
+  // A resolved overlay list is not proof of an applied overlay. A registry entry
+  // can carry overlays while its runtime is neutral (a non-runtime-active alias),
+  // in which case no hook applies anything and the honest answer is "skipped".
+  const runtimeActive = result.runtime?.isNeutral !== true
+  const overlayApplied = overlayIds.length > 0 && runtimeActive
+  // Either the family has an overlay this model was never validated for, or the
+  // matched entry is not runtime-active. Distinguish the two.
+  const unvalidated = !overlayApplied ? overlaysRegisteredForFamily(result.family) : []
+  const overlaySkipped = !overlayApplied && (unvalidated.length > 0 || overlayIds.length > 0)
+  const overlaySkippedReason = !overlayApplied
+    ? overlayIds.length > 0
+      ? "registry-entry-not-runtime-active"
+      : unvalidated.length > 0
+        ? "overlay-not-validated-for-model"
+        : null
+    : null
+  return {
+    matchCategory: policyMatchCategory(result),
+    matchKind: policyMatchKind(result),
+    matchReason: result.matchReason ?? null,
+    matchedId: result.matchedId ?? null,
+    creator: result.creator,
+    family: result.family,
+    policy: result.runtime.policy,
+    isNeutral: result.runtime.policy === "neutral",
+    baselineId: result.baseline?.id ?? null,
+    overlays: overlayIds,
+    overlayApplied,
+    // An overlay is registered for this family (or on the matched entry) but was
+    // not applied to this model, so no prompt transformation happens.
+    overlaySkipped,
+    overlaySkippedReason,
+    overlaySkippedCandidates: overlaySkipped ? unvalidated.length > 0 ? unvalidated : overlayIds : [],
+    transportKind: result.transport?.kind ?? "unknown",
+    sessionAffinityHeader: result.transport?.sessionAffinityHeader ?? null,
+    providerIdentityKnown: provider !== null,
+    provider,
+    model: String(s.apiID || s.modelID || "") || null,
+  }
+}
+
 // Compatibility classification used by detectPolicy(). Reproduces the
 // pre-v0.4.0 behavior exactly: it considers only `legacy` registry entries,
 // excludes newer-generation/alias/exact-overlay additions, and returns a family
