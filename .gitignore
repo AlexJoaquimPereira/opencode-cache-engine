@@ -18,4 +18,3 @@ coverage/
 # OpenCode specific files
 .opencode
 session-*.md
-AGENTS.md
