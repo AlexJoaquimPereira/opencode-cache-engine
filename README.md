@@ -694,11 +694,63 @@ Telemetry is intended to answer questions such as:
 * Did the MiMo provider change (`mimo_provider_changed`) or the GLM provider
   change (`glm_provider_changed`) within a session?
 * What was MiMo's provider-reported cache hit rate (`cacheHitRate`)?
+* Why was a model classified the way it was (`policy-resolution`)?
+* Which newly released model is currently resolving to a range match, a creator
+  baseline, or neutral, and therefore deserves review?
 
 Affinity observations are `boundary` records. They contain provider/model
 identity and booleans/source classification such as `eligible`,
 `headerPresent`, `headerAttached`, and `headerSource`; they do not include the
 `x-session-id` header value or full request headers.
+
+A `policy-resolution` record (since v0.4.6) explains how a model was classified.
+It is emitted once per distinct resolution per session, so a model that appears
+for the first time is reported without producing per-request noise:
+
+```json
+{
+  "kind": "policy-resolution",
+  "sid": "session-id",
+  "ts": 1750000000000,
+  "matchCategory": "family",
+  "matchKind": "version-range",
+  "matchReason": "family-pattern:zai.glm-5.3-plus",
+  "matchedId": null,
+  "creator": "z.ai",
+  "family": "glm-5.3",
+  "policy": "glm53",
+  "isNeutral": false,
+  "baselineId": "zai.implicit-cache",
+  "overlays": [],
+  "overlayApplied": false,
+  "overlaySkipped": true,
+  "overlaySkippedReason": "overlay-not-validated-for-model",
+  "overlaySkippedCandidates": ["glm53.env-relocation"],
+  "providerIdentityKnown": true,
+  "provider": "zai",
+  "model": "glm-6",
+  "transport": "direct"
+}
+```
+
+The fields are:
+
+| Field | Meaning |
+| ----- | ------- |
+| `matchCategory` | `exact-id`, `alias`, `family`, `creator`, or `neutral` |
+| `matchKind` | `exact-id`, `alias`, `version-range`, `pattern`, `creator-baseline`, or `unknown` |
+| `matchReason` | The registry match that produced the result |
+| `policy` / `family` / `creator` | The resolved policy identity |
+| `overlayApplied` | A model-specific prompt overlay actually applied to this model |
+| `overlaySkippedReason` | `overlay-not-validated-for-model` (family has an overlay, this model was never validated for it) or `registry-entry-not-runtime-active` (the entry carries an overlay but its runtime is neutral) |
+| `overlaySkippedCandidates` | Which overlay ids were withheld |
+| `providerIdentityKnown` | Whether the provider identity was actually observed; it is never guessed |
+
+`overlayApplied` is false whenever no overlay was applied, so a model that
+resolves to an inactive registry entry is never reported as optimized. These
+records contain only resolver and registry facts. They never include prompt,
+system, or tool content, credentials, authorization headers, or the raw
+`x-session-id` value.
 
 A MiMo usage record adds the provider-reported cache fields:
 
@@ -1085,6 +1137,31 @@ The module is pure: no network calls and no runtime documentation lookups. The
 legacy `detectPolicy()` in `cache-engine-core.mjs` remains a thin compatibility
 wrapper over the resolver's legacy path.
 
+### Unknown and future models
+
+`explainPolicyResolution(model)` (since v0.4.6) is a pure, total function that
+explains why a model resolved the way it did. It never throws, and it is the
+source of the `policy-resolution` telemetry record described under
+[Telemetry](#telemetry).
+
+Detection is never a "highest numeric version wins" rule. A future or unknown
+model resolves as follows:
+
+| Case | Result |
+| ---- | ------ |
+| Unknown OpenAI model at 5.6 or later, on an OpenAI/Azure-compatible endpoint | Inherits the documented `GPT-5.6 and later` baseline and cache metadata, because a registry entry registers that version range |
+| Same model id on a non-OpenAI endpoint | Neutral. GPT-specific options are never guessed outside an OpenAI context |
+| Unknown DeepSeek model | Passive. Baseline telemetry only; no cache-control field is invented |
+| Unknown GLM model at 5.3 or later | Family baseline only. The `<env>` relocation overlay is not applied unless the model is validated for it |
+| Unknown MiMo model after V2.6 | Family baseline only. The `<env>` relocation overlay is not applied unless the model is validated for it |
+| Unknown creator or provider | Fully neutral. No guessed cache controls, and no OpenRouter-specific header unless the actual provider identity is `openrouter` and the family is already eligible |
+
+Two rules follow from this. A model-specific prompt transformation always
+requires an explicit registry entry that names the overlay, so being classified
+into a family never enables a rewrite on its own. And every resolution is
+reported, so a newly released model becomes visible for review instead of
+silently inheriting or silently missing behavior.
+
 ---
 
 ## Tests
@@ -1105,6 +1182,8 @@ Coverage includes:
 * reasoning diagnostics
 * compaction isolation
 * cache-hit calculations
+* unknown and future model resolution, using synthetic identifiers
+* policy-match telemetry classification and content safety
 * configuration behavior
 * JSONL telemetry behavior
 
@@ -1304,7 +1383,7 @@ release, use:
 ```json
 {
   "plugin": [
-    "opencode-cache-engine@0.4.5"
+    "opencode-cache-engine@0.4.6"
   ]
 }
 ```
@@ -1421,6 +1500,32 @@ provider route or missing provider identity is bypassed. If a case-insensitive
 and CacheEngine does not replace it. Check the `openrouter_affinity_*` boundary
 records for eligibility, provider identity, and whether CacheEngine added the
 header; the record does not include the header value.
+
+---
+
+## A new model was released and CacheEngine does not recognize it
+
+This is expected and is safe. A model that CacheEngine has not seen resolves
+deterministically instead of guessing:
+
+* an unknown creator or provider resolves to neutral, with no cache controls and
+  no affinity header;
+* a known family inherits its baseline only when a registry entry registers that
+  version range;
+* a model-specific prompt overlay applies only when a registry entry names it for
+  that model.
+
+To see how a specific model resolved, look for its `policy-resolution` record:
+
+```bash
+grep '"kind":"policy-resolution"' ~/.cache/opencode/cache-metrics.jsonl | tail
+```
+
+`matchCategory` tells you which path it took (`exact-id`, `alias`, `family`,
+`creator`, `neutral`) and `matchReason` names the registry entry responsible. A
+`version-range` match means the model inherited a documented boundary, and
+`overlaySkippedReason` tells you whether a family overlay was deliberately not
+applied because the model is not validated for it.
 
 ---
 
