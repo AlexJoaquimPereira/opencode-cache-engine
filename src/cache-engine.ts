@@ -75,7 +75,6 @@ import { explainPolicyResolution, resolveRuntimePolicy } from "./cache-policy-co
 // ---------------------------------------------------------------------------
 
 const TOOL_FETCH_TTL_MS = 1500
-const PAGE_SIZE = 100
 const REASONING_SEEN_CAP = 5000
 const ROOT_HOPS_MAX = 16
 const ROOT_CACHE_TTL_MS = 30_000
@@ -83,11 +82,12 @@ const ROOT_CACHE_TTL_MS = 30_000
 // between models cannot grow the set (or the telemetry file) without limit.
 const RESOLUTION_KEYS_CAP = 16
 
-// The runtime plugin client accepts these options even though the v1 SDK type
-// only declares `path.id`/`query`; the empirical call shape is sessionID-based.
-type MessagesOpts = { sessionID: string; limit?: number; before?: string }
+// V1 SDK (OpenCode 1.18.33): client.session.messages takes { path: { id } } and
+// returns { data?: Array<{ info: Message; parts: Part[] }> }. There is no
+// `before` parameter and no documented cursor header; OpenCode paginates
+// internally when no limit is supplied, so a single call returns the history.
 type MessagePage = { info: Message; parts: Part[] }
-type MessagesResult = { data?: MessagePage[]; response?: Response }
+type SessionMessagesResult = { data?: MessagePage[] }
 
 type ToolDef = { id: string; description: string; parameters: unknown }
 
@@ -379,45 +379,27 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
   }
 
   // Aggregate cache tokens + reasoning-integrity signals from all messages
-  // newer than the last-processed boundary, paginating until the boundary (or
-  // the tail) is reached.
+  // newer than the last-processed boundary. One SDK call returns the history;
+  // OpenCode paginates internally when no limit is supplied.
   const collectUsage = async (sid: string): Promise<void> => {
     try {
-      const listMessages = (opts: MessagesOpts): Promise<MessagesResult> =>
-        (client.session.messages as unknown as (o: MessagesOpts) => Promise<MessagesResult>).call(client.session, opts)
+      // V1.18.33 shape: { path: { id } } -> { data?: MessagePage[] }. Methods use
+      // `this._client`, so invoke with .call() to preserve the receiver binding.
+      const listMessages = (opts: { path: { id: string } }): Promise<SessionMessagesResult> =>
+        (client.session.messages as unknown as (o: { path: { id: string } }) => Promise<SessionMessagesResult>).call(client.session, opts)
       const s = get(sid)
       const startCursor = s.lastProcessedMessageID
-      let before: string | undefined
-      let read = 0
-      let write = 0
-      let input = 0
-      let count = 0
-      let reachedStart = false
-      let firstPage: MessagePage[] | null = null
-      let lastPageSize = 0
-      const reasoningNewestFirst: { id: string; hashes: string[] }[] = []
-      let guard = 0
+      const res = await listMessages({ path: { id: sid } })
+      const messages = res?.data ?? []
+      const scanned = scanPage(messages, startCursor)
+      const read = scanned.read
+      const write = scanned.write
+      const input = scanned.input
+      const count = scanned.count
+      const reachedStart = scanned.reachedStart
+      const reasoningNewestFirst = scanned.reasoning
 
-      while (guard++ < 200) {
-        const res = await listMessages({ sessionID: sid, limit: PAGE_SIZE, before })
-        const page = res?.data ?? []
-        lastPageSize = page.length
-        if (firstPage === null && page.length > 0) firstPage = page
-        const scan = scanPage(page, startCursor)
-        read += scan.read
-        write += scan.write
-        input += scan.input
-        count += scan.count
-        reachedStart = scan.reachedStart
-        for (const r of scan.reasoning) reasoningNewestFirst.push(r)
-        if (reachedStart) break
-
-        const next = res?.response?.headers?.get("x-next-cursor")
-        if (!next || page.length === 0 || next === before) break
-        before = next
-      }
-
-      s.lastProcessedMessageID = nextProcessedCursor(firstPage, startCursor)
+      s.lastProcessedMessageID = nextProcessedCursor(messages, startCursor)
 
       const caps = s.modelInfo?.caps
       const glmIntegrity =
@@ -520,7 +502,7 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
         // deliberately do NOT emit a zero-valued usage record here.
         log("debug", "idle: no new assistant usage", {
           sid,
-          messagesScanned: lastPageSize,
+          messagesScanned: messages.length,
           newAssistantMessages: count,
           reachedBoundary: reachedStart,
         })

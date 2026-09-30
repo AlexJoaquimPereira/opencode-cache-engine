@@ -2467,3 +2467,148 @@ test("v0.4.6: policy-match telemetry records the resolution reason and nothing s
     assert.equal(r.stickySessionId, undefined)
   }
 })
+
+// ===========================================================================
+// v0.4.6 K1/K2: the usage collector must use the V1.18.33 SDK call shape and
+// must actually aggregate provider-reported cache tokens into a `usage` record.
+//
+// Regression intent: the previous collector called
+//   client.session.messages({ sessionID, limit, before })
+// which does not match the V1 SDK ({ path: { id } }) and produced no usage
+// telemetry in live use. These tests fail against the old shape.
+// ===========================================================================
+
+async function runUsageCollectionProbe() {
+  const home = mkdtempSync(join(tmpdir(), "ce-usage-"))
+  const pluginURL = new URL("../src/cache-engine.ts", import.meta.url).href
+  const script = `
+    import { readFileSync } from "node:fs"
+    process.env.CACHE_ENGINE_METRICS_FILE = process.env.HOME + "/usage-probe.jsonl"
+    const { CacheEngine } = await import(${JSON.stringify(pluginURL)})
+
+    const calls = []
+    const responses = {}
+    const fake = {
+      app: { log: async () => ({}) },
+      session: {
+        get: async () => ({ data: { parentID: null } }),
+        async messages(opts) {
+          calls.push({ opts: JSON.parse(JSON.stringify(opts)), thisIsSession: this === fake.session })
+          const id = opts && opts.path && opts.path.id
+          const r = responses[id]
+          if (r === "THROW") throw new Error("boom")
+          return r
+        },
+      },
+      tool: { list: async () => ({ data: [] }) },
+    }
+    const hooks = await CacheEngine({ client: fake, directory: process.env.HOME })
+    const tick = () => new Promise((r) => setTimeout(r, 30))
+    const mkAst = (id, read, write, input) => ({ info: { id, role: "assistant", tokens: { input, output: 1, cache: { read, write } } }, parts: [] })
+    const mkUser = (id) => ({ info: { id, role: "user" }, parts: [] })
+    const providerFor = (id) => ({ source: "config", info: { id }, options: {} })
+    const setModel = async (sid, providerID, modelID) => {
+      await hooks["chat.params"]({
+        sessionID: sid, agent: "build",
+        model: { providerID, id: modelID, api: { id: modelID } },
+        provider: providerFor(providerID),
+        message: { id: "u-" + sid, sessionID: sid, role: "user", content: "x" },
+      }, { options: {} })
+    }
+    const idle = async (sid) => { await hooks.event({ event: { type: "session.idle", properties: { sessionID: sid } } }); await tick() }
+
+    const SID_BASIC = "ses_usage_basic"
+    responses[SID_BASIC] = { data: [mkAst("a1", 3000, 500, 1000)] }
+    await setModel(SID_BASIC, "deepseek", "deepseek-flash")
+    await idle(SID_BASIC)
+
+    const SID_MULTI = "ses_usage_multi"
+    responses[SID_MULTI] = { data: [mkAst("m3", 100, 0, 10), mkUser("m2"), mkAst("m1", 50, 5, 5)] }
+    await setModel(SID_MULTI, "deepseek", "deepseek-flash")
+    await idle(SID_MULTI)
+    await idle(SID_MULTI)
+
+    const SID_EMPTY = "ses_usage_empty"
+    responses[SID_EMPTY] = { data: [] }
+    await idle(SID_EMPTY)
+
+    const SID_UNDEF = "ses_usage_undef"
+    responses[SID_UNDEF] = undefined
+    await idle(SID_UNDEF)
+
+    const SID_THROW = "ses_usage_throw"
+    responses[SID_THROW] = "THROW"
+    await idle(SID_THROW)
+
+    const lines = readFileSync(process.env.CACHE_ENGINE_METRICS_FILE, "utf8").trim().split("\\n")
+    const records = lines.map((l) => JSON.parse(l))
+    process.stdout.write(JSON.stringify({ calls, records }))
+  `
+  const stdout = execFileSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], {
+    cwd: process.cwd(),
+    env: { ...process.env, HOME: home },
+    encoding: "utf8",
+  })
+  return JSON.parse(stdout.trim())
+}
+
+let usageProbe
+const usageResults = async () => (usageProbe ??= runUsageCollectionProbe())
+
+test("v0.4.6 K2: session.messages is called with the V1 SDK shape and a bound receiver", async () => {
+  const { calls } = await usageResults()
+  assert.ok(calls.length >= 5, "collector should call session.messages per idle")
+  const sids = ["ses_usage_basic", "ses_usage_multi", "ses_usage_empty", "ses_usage_undef", "ses_usage_throw"]
+  for (const c of calls) {
+    // exactly { path: { id } }, nothing else
+    assert.deepEqual(Object.keys(c.opts), ["path"])
+    assert.deepEqual(Object.keys(c.opts.path), ["id"])
+    assert.ok(sids.includes(c.opts.path.id), "path.id must be the session id")
+    // no top-level sessionID, limit, or before, and no invented cursor field
+    assert.equal(c.opts.sessionID, undefined)
+    assert.equal(c.opts.limit, undefined)
+    assert.equal(c.opts.before, undefined)
+    // receiver binding preserved (methods use this._client)
+    assert.equal(c.thisIsSession, true)
+  }
+})
+
+test("v0.4.6 K1: idle aggregation emits a usage record with exact semantics", async () => {
+  const { records } = await usageResults()
+  const usage = records.filter((r) => r.kind === "usage")
+  const basic = usage.find((r) => r.sid === "ses_usage_basic")
+  assert.ok(basic, "a usage record must be produced for a session with cache tokens")
+  assert.equal(basic.read, 3000)
+  assert.equal(basic.write, 500)
+  assert.equal(basic.input, 1000)
+  assert.equal(basic.messages, 1)
+  assert.equal(basic.sampleHitRate, 86) // round(100*3000/3500)
+  assert.deepEqual(basic.cumulative, { read: 3000, write: 500 })
+  assert.equal(basic.cumulativeHitRate, 86)
+  assert.equal(basic.cursor, "a1")
+  assert.equal(basic.provider, "deepseek")
+  assert.equal(basic.model, "deepseek-flash")
+  assert.equal(basic.policy, "deepseek")
+})
+
+test("v0.4.6 K1: multi-message aggregation counts only assistant cache data, once", async () => {
+  const { records } = await usageResults()
+  const usage = records.filter((r) => r.kind === "usage" && r.sid === "ses_usage_multi")
+  assert.equal(usage.length, 1, "second idle must not re-aggregate the same messages")
+  const u = usage[0]
+  assert.equal(u.read, 150) // 100 + 50
+  assert.equal(u.write, 5)
+  assert.equal(u.input, 15) // 10 + 5
+  assert.equal(u.messages, 2) // user message excluded
+  assert.equal(u.cursor, "m3")
+})
+
+test("v0.4.6 K1: empty/undefined/throwing messages fail safely without breaking the plugin", async () => {
+  const { records } = await usageResults()
+  const usageSids = records.filter((r) => r.kind === "usage").map((r) => r.sid)
+  assert.ok(!usageSids.includes("ses_usage_empty"))
+  assert.ok(!usageSids.includes("ses_usage_undef"))
+  assert.ok(!usageSids.includes("ses_usage_throw"))
+  const errs = records.filter((r) => r.kind === "telemetry-error")
+  assert.ok(errs.some((r) => /boom/.test(String(r.error))), "the throw must be recorded, not propagated")
+})
