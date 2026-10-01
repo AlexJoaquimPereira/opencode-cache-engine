@@ -18,3 +18,6 @@ coverage/
 # OpenCode specific files
 .opencode
 session-*.md
+
+# Project audits
+audit-report-*.md
