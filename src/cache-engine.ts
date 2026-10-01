@@ -804,31 +804,6 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
           })
           return
         }
-        // Diagnostic only. `session.usage.updated` is emitted by the runtime
-        // (session-cumulative totals) but is not part of the typed Event union;
-        // it is never used as the authoritative aggregation path.
-        if ((event as { type?: string }).type === "session.usage.updated") {
-          const e = event as unknown as {
-            properties?: { sessionID?: string }
-            data?: { sessionID?: string; cost?: number; tokens?: { cache?: { read: number; write: number } } }
-          }
-          const t = e?.data?.tokens
-          if (t?.cache) {
-            const sid = e?.properties?.sessionID ?? e?.data?.sessionID
-            const s = sid ? get(sid) : null
-            rec.record({
-              kind: "usage-event",
-              sid,
-              ts: Date.now(),
-              read: t.cache.read,
-              write: t.cache.write,
-              cost: e?.data?.cost,
-              ...(s?.modelInfo
-                ? { provider: s.modelInfo.providerID, model: s.modelInfo.modelID, policy: s.modelInfo.family }
-                : {}),
-            })
-          }
-        }
       } catch (e) {
         rec.record({ kind: "telemetry-error", ts: Date.now(), error: String(e) })
       }
