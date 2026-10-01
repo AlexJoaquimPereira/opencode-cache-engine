@@ -115,14 +115,11 @@ function parsePolicy(rawPolicy, defaults) {
   return out
 }
 
-// Env override is applied first, then the file may override. Invalid input
+// Precedence: defaults -> configuration file -> environment override. An
+// explicit CACHE_ENGINE_METRICS_FILE always wins over the file. Invalid input
 // falls back to defaults. Returns a fresh object; never mutates callers.
 export function parseConfig(raw, env) {
   const cfg = defaultConfig()
-  const e = env || {}
-  if (typeof e.CACHE_ENGINE_METRICS_FILE === "string" && e.CACHE_ENGINE_METRICS_FILE.length > 0) {
-    cfg.metricsFile = expandHome(e.CACHE_ENGINE_METRICS_FILE)
-  }
   if (raw && typeof raw === "object") {
     if (typeof raw.enabled === "boolean") cfg.enabled = raw.enabled
     if (typeof raw.metricsFile === "string" && raw.metricsFile.length > 0) cfg.metricsFile = expandHome(raw.metricsFile)
@@ -134,6 +131,11 @@ export function parseConfig(raw, env) {
         if (raw.policies[fam]) cfg.policies[fam] = parsePolicy(raw.policies[fam], d[fam])
       }
     }
+  }
+  // Explicit environment override applied LAST so it takes precedence.
+  const e = env || {}
+  if (typeof e.CACHE_ENGINE_METRICS_FILE === "string" && e.CACHE_ENGINE_METRICS_FILE.length > 0) {
+    cfg.metricsFile = expandHome(e.CACHE_ENGINE_METRICS_FILE)
   }
   return cfg
 }

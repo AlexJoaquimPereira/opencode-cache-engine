@@ -226,6 +226,47 @@ test("expandHome handles ~ and ~/ safely", () => {
   assert.equal(expandHome("rel/path"), "rel/path")
 })
 
+// --- v0.4.7 K-A: metricsFile precedence is defaults -> file -> env override ---
+test("v0.4.7 K-A: metricsFile precedence is defaults -> file -> env override", () => {
+  // file metricsFile only -> file path used
+  const fileOnly = parseConfig({ metricsFile: "~/file/metrics.jsonl" }, {})
+  assert.equal(fileOnly.metricsFile, join(homedir(), "file/metrics.jsonl"))
+
+  // environment only -> env path used
+  const envOnly = parseConfig(undefined, { CACHE_ENGINE_METRICS_FILE: "~/env/metrics.jsonl" })
+  assert.equal(envOnly.metricsFile, join(homedir(), "env/metrics.jsonl"))
+
+  // file + env -> env wins (regression: env used to be applied first, then the
+  // config file silently overrode it)
+  const both = parseConfig(
+    { metricsFile: "~/file/metrics.jsonl" },
+    { CACHE_ENGINE_METRICS_FILE: "~/env/metrics.jsonl" },
+  )
+  assert.equal(both.metricsFile, join(homedir(), "env/metrics.jsonl"))
+
+  // empty env -> file remains active
+  const emptyEnv = parseConfig({ metricsFile: "~/file/metrics.jsonl" }, { CACHE_ENGINE_METRICS_FILE: "" })
+  assert.equal(emptyEnv.metricsFile, join(homedir(), "file/metrics.jsonl"))
+
+  // absolute env path -> preserved, not expanded or rewritten
+  const abs = parseConfig({ metricsFile: "~/file/metrics.jsonl" }, { CACHE_ENGINE_METRICS_FILE: "/abs/metrics.jsonl" })
+  assert.equal(abs.metricsFile, "/abs/metrics.jsonl")
+
+  // unrelated values are untouched by the env override
+  const unrelated = parseConfig({ compactTemplate: false }, { CACHE_ENGINE_METRICS_FILE: "~/env/metrics.jsonl" })
+  assert.equal(unrelated.compactTemplate, false)
+  assert.equal(unrelated.metricsFile, join(homedir(), "env/metrics.jsonl"))
+})
+
+test("v0.4.7 K-A: malformed file + env still uses env (via loadConfig)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ce-"))
+  const bad = join(dir, "cache-engine.json")
+  writeFileSync(bad, "{ this is not json")
+  const cfg = loadConfig({ configPath: bad, env: { CACHE_ENGINE_METRICS_FILE: "~/env/metrics.jsonl" } })
+  assert.equal(cfg.metricsFile, join(homedir(), "env/metrics.jsonl"))
+  assert.equal(cfg.enabled, true)
+})
+
 // --- 13. telemetry write failure never throws --------------------------------
 test("recorder swallows write failures", () => {
   const rec = createRecorder("/nonexistent-dir-xyz/out.jsonl")
