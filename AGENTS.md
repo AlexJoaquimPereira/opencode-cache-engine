@@ -14,7 +14,7 @@ node --experimental-strip-types -e "import('./src/cache-engine.ts').then(m=>cons
 npm pack --dry-run
 ```
 
-- Node 22.23.2 and OpenCode 1.18.32 are the verified toolchain. Re-check runtime
+- Node 22.23.2 and OpenCode 1.18.34 are the verified toolchain. Re-check runtime
   assumptions when OpenCode changes.
 - The root package has no dependencies or build/lint/typecheck scripts. Tests
   use Node's built-in runner and import the plain-JS core; the server entry can
@@ -35,7 +35,7 @@ npm pack --dry-run
 - Hooks registered: `chat.headers`, `chat.params`,
   `experimental.chat.system.transform`, `experimental.session.compacting`, and
   `event` (notably `session.idle` usage aggregation).
-- Runtime facts (verified on OpenCode 1.18.32): `client.session.get` takes
+- Runtime facts (verified on OpenCode 1.18.34): `client.session.get` takes
   `{ path: { id } }`; SDK methods use `this._client`, so call them as members or
   bind them. `chat.params` marks compaction with `input.agent === "compaction"`.
 - The system-transform runtime passes one `output.system` element and ignores
