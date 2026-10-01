@@ -307,6 +307,32 @@ test("package exposes separate server and TUI targets", async () => {
   assert.equal(pkg.exports["./tui"], "./src/tui.mjs")
 })
 
+test("v0.4.7 P-B: package metadata is valid Node ESM and ships only runtime files", async () => {
+  const { readFileSync } = await import("node:fs")
+  const { join } = await import("node:path")
+
+  const pkg = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8"))
+
+  // Valid module type; no "main" pointing at a TypeScript source file.
+  assert.equal(pkg.type, "module")
+  assert.equal(pkg.main, undefined)
+
+  // Files whitelist ships the runtime entries and docs, but not dev material.
+  assert.ok(Array.isArray(pkg.files), "files whitelist must exist")
+  const files = pkg.files.join("\n")
+  for (const required of ["src/", "README.md", "LICENSE"]) {
+    assert.ok(files.includes(required), `files whitelist must include ${required}`)
+  }
+  for (const excluded of ["test", "docs", "AGENTS.md", ".opencode", "examples"]) {
+    assert.ok(!files.includes(excluded), `files whitelist must exclude ${excluded}`)
+  }
+
+  // Exports point inside the whitelisted src/ directory.
+  for (const entry of Object.values(pkg.exports)) {
+    assert.ok(entry.startsWith("src/") || entry.startsWith("./src/"), `export ${entry} must be under src/`)
+  }
+})
+
 
 // ===========================================================================
 // Provider-aware model detection

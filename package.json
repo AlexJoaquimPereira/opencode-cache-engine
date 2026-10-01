@@ -22,12 +22,16 @@
   },
   "license": "MIT",
   "author": "Alex Joaquim Pereira",
-  "type": "package",
-  "main": "src/cache-engine.ts",
+  "type": "module",
   "directories": {
     "example": "examples",
     "test": "test"
   },
+  "files": [
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
   "exports": {
     "./server": "./src/cache-engine.ts",
     "./tui": "./src/tui.mjs"
