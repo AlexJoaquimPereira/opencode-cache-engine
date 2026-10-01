@@ -637,12 +637,20 @@ A usage record can contain fields such as:
 
 ```json
 {
-  "kind": "usage-event",
+  "kind": "usage",
   "sid": "session-id",
   "ts": 1750000000000,
   "read": 120000,
   "write": 3000,
-  "cost": 0.0123,
+  "input": 40000,
+  "messages": 3,
+  "sampleHitRate": 97,
+  "cumulative": {
+    "read": 360000,
+    "write": 9000
+  },
+  "cumulativeHitRate": 97,
+  "cursor": "message-id",
   "provider": "z-ai",
   "model": "glm-5.3-flash",
   "policy": "glm53"
@@ -1440,7 +1448,7 @@ Inspect the telemetry for:
 
 ```text
 prefix-change
-usage-event
+usage
 compaction
 ```
 
