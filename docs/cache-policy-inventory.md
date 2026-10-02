@@ -254,21 +254,60 @@ creator's cache semantics.
 
 - OpenRouter uses **provider sticky routing** to keep follow-up requests on the
   provider that served a cached request; it activates when cache-read pricing is
-  below normal prompt pricing, and falls back if the sticky provider is
-  unavailable. [D]
+  below normal prompt pricing. **This is best-effort, not a continuity
+  guarantee**: "If the sticky provider becomes unavailable, OpenRouter
+  automatically falls back to the next-best provider", and on a provider error
+  the cache is not updated so the next request can be re-routed. No first-party
+  wording promises the same upstream provider for the session lifetime. [D]
+  (best-effort)
 - Sticky granularity is account-level, per model, per conversation. The default
   conversation key is a hash of the first system/developer message plus the first
   non-system message. [D]
 - An explicit top-level body `session_id` **or** `x-session-id` header replaces
   the derived key (body wins if both; max 256 chars). Without it, stickiness
   activates only after a cache hit. Sticky sessions expire after **10 minutes of
-  inactivity** and are disabled when manual `provider.order` is set. [D]
+  inactivity** and are disabled when manual `provider.order` is set. Whether
+  `provider.sort`/`provider.only` also disable stickiness is undocumented. [D]/[U]
+- **Xiaomi/MiMo metadata contradiction (UNKNOWN).** Every `xiaomi/mimo-v2.6-*`
+  endpoint reports `supports_implicit_caching: false`, yet every endpoint lists
+  `input_cache_read` pricing, MiMo's own docs document context caching and
+  `cached_tokens`, and live requests through OpenRouter have returned cached
+  tokens. OpenRouter's Prompt Caching page does not list Xiaomi/MiMo as a
+  caching provider and does not define the flag's exact semantics, so whether the
+  metadata is stale or merely endpoint-scoped is **UNKNOWN**. [O]/[U]
 - Source: OpenRouter, *Prompt Caching* — https://openrouter.ai/docs/features/prompt-caching
-  (consulted 2026-09-26).
+  and the model endpoints API (`/api/v1/models/xiaomi/mimo-v2.6-{pro,flash,pro-ultraspeed}/endpoints`),
+  consulted 2026-10-02 (affinity facts originally 2026-09-26).
 
-CacheEngine's `x-session-id` injection is therefore a **transport-specific**
-behavior for `providerID === "openrouter"` only, which matches OpenRouter's
-documented header name. It is not a creator-documented cache control.
+CacheEngine's `x-session-id` injection is therefore a **transport-specific,
+best-effort** behavior for `providerID === "openrouter"` only, which matches
+OpenRouter's documented header name. It is not a creator-documented cache
+control and does not guarantee provider continuity.
+
+### 5a. OpenCode usage normalization (verified 2026-10-02)
+
+OpenCode V1 (1.18.34) normalizes provider cache usage into the SDK shape
+`Message.info.tokens = { input, output, reasoning, cache: { read, write } }`.
+Bundled provider adapters parse each provider's raw fields and OpenCode's session
+layer writes `cache.read` / `cache.write`:
+
+- OpenAI Chat Completions / OpenRouter: `prompt_tokens_details.cached_tokens` →
+  `cache.read`, `prompt_tokens_details.cache_write_tokens` → `cache.write`.
+- OpenAI Responses: `input_tokens_details.cached_tokens` → `cache.read`,
+  `input_tokens_details.cache_write_tokens` → `cache.write`.
+- Anthropic: `cache_read_input_tokens` → `cache.read`,
+  `cache_creation_input_tokens` → `cache.write`.
+- DeepSeek: `prompt_cache_hit_tokens` → `cache.read`; `prompt_cache_miss_tokens`
+  is retained only in provider metadata (no normalized field), and DeepSeek has
+  no write accounting so `cache.write` is 0.
+
+`tokens.input` is **non-cached** input, so total prompt tokens =
+`input + cache.read + cache.write`. **CacheEngine therefore needs no
+provider-specific parsing**; it reads only the normalized fields.
+[DOCUMENTED BY OPENCODE + OBSERVED]
+- Sources: `@opencode-ai/sdk` types (1.18.34); OpenCode source tag `v1.18.34`
+  (`packages/opencode/src/session/llm/ai-sdk.ts`, `session/session.ts` getUsage);
+  installed `opencode` binary strings.
 
 ---
 
@@ -326,9 +365,14 @@ a newer model inherits an older policy. They must not be resolved by guessing.
    controls to Pro/Flash. v0.4.5 resolves this as a CacheEngine scope decision:
    UltraSpeed gets the family **baseline only** (no `<env>` overlay).
 10. **MiMo on OpenRouter.** OpenRouter's Prompt Caching page documents no
-    MiMo-specific cache section; only generic sticky-routing behavior applies.
-11. **OpenAI Chat Completions usage-field naming** (`prompt_tokens_details` vs
-    Responses `input_tokens_details`) was not confirmed first-party.
+    MiMo-specific cache section (only generic sticky routing), and every Xiaomi
+    endpoint reports `supports_implicit_caching: false` while still listing
+    cache-read pricing and while MiMo docs and live requests show cached tokens.
+    The metadata's exact semantics are undefined → **UNKNOWN** (see §5).
+11. **OpenAI Chat Completions usage-field naming.** Confirmed first-party: Chat
+    uses `usage.prompt_tokens_details.cached_tokens`/`cache_write_tokens`;
+    Responses uses `usage.input_tokens_details.*`. OpenCode normalizes both
+    (see §5a).
 
 ## 8. What did not change
 
@@ -428,3 +472,39 @@ a newer model inherits an older policy. They must not be resolved by guessing.
 - No MiMo cache-control field is invented. Evidence caveat: since no >V2.6
   generation is documented, future coverage is a CacheEngine inference about a
   passive baseline (safe: no mutation), not a Xiaomi contract.
+
+### Follow-up: v0.4.9 verification and OpenRouter GPT serialization fix (2026-10-02)
+
+The verification work below is documentation-only and changed no runtime
+behavior. The same release also includes one transport fix, recorded at the end
+of this section.
+
+- **P-D — OpenRouter affinity is best-effort** (was implicitly treated as
+  reliable). First-party docs state sticky routing falls back to the next-best
+  provider when the sticky provider is unavailable, and does not update the cache
+  on a provider error; nothing guarantees the same upstream for the session
+  lifetime. `provider.order` disables stickiness. CacheEngine's `x-session-id`
+  use is classified **best-effort** (supported mechanism, no continuity
+  guarantee). No code change.
+- **P-H — MiMo `supports_implicit_caching` contradiction remains UNKNOWN.**
+  All `xiaomi/mimo-v2.6-*` endpoints report `false` while listing cache-read
+  pricing; MiMo docs document context caching and `cached_tokens`; live requests
+  returned cached tokens. OpenRouter does not define the flag's semantics and
+  omits Xiaomi from its caching-provider list. Documented as contradictory, not
+  resolved. No MiMo behavior change.
+- **P-G — OpenCode normalizes cache-token fields.** OpenCode V1 (1.18.34) maps
+  OpenAI Chat/Responses, Anthropic, and DeepSeek cache-usage fields into
+  `Message.info.tokens.cache.{read,write}` (see §5a). CacheEngine reads only the
+  normalized fields, so **no provider-specific parsing is required** and no v0.5.x
+  mapping change is specified. `tokens.input` is non-cached input; DeepSeek
+  `cache.write` is 0.
+- **OpenRouter GPT prompt-cache serialization (fix).** OpenCode wraps the plugin
+  `chat.params` options under the provider SDK key, and
+  `@openrouter/ai-sdk-provider` forwards `providerOptions.openrouter` **verbatim**
+  into the request body (it does not translate camelCase). A captured request
+  body confirmed OpenRouter received `promptCacheKey` / `promptCacheOptions`,
+  which it ignores. The fix emits the snake_case wire names
+  `prompt_cache_key` / `prompt_cache_options` for OpenRouter only; direct
+  OpenAI/Azure keep the camelCase options that their SDK serializes correctly.
+  Verified against `@openrouter/ai-sdk-provider@2.9.0`, `@ai-sdk/openai@3.0.88`,
+  `@ai-sdk/azure@3.0.93`, `ai@6.0.168`.
