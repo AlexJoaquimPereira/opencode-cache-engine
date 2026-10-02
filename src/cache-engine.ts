@@ -325,7 +325,10 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
 
   // Latch the first NON-neutral model observed for a session. Title/summary
   // requests may use the small model; we never let that overwrite a real
-  // gpt56/glm53/deepseek classification once established.
+  // gpt56/glm53/deepseek classification once established. A genuine switch to a
+  // DIFFERENT non-neutral family (mid-session /model change) DOES replace the
+  // latched info, so one family's capabilities can never authorize mutations for
+  // another live model.
   const rememberModel = (sid: string, model: ChatParamsModel | undefined): ModelInfo | null => {
     if (!model) return null
     // Single runtime source of policy classification: the registry resolver.
@@ -337,11 +340,14 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
       modelID: String(model.api?.id ?? model.id ?? ""),
       caps,
     }
-    if (s.modelInfo == null || (s.modelInfo.caps.isNeutral && !caps.isNeutral)) {
+    const familyChanged =
+      s.modelInfo != null && !s.modelInfo.caps.isNeutral && !caps.isNeutral && s.modelInfo.family !== caps.policy
+    if (s.modelInfo == null || (s.modelInfo.caps.isNeutral && !caps.isNeutral) || familyChanged) {
       s.modelInfo = info
       // A title/summary request (neutral small model) may have established the
-      // system baseline first. Its "powered by the model named ..." env line
-      // differs from the real model's, so re-baseline on upgrade.
+      // system baseline first, and a family switch changes the "powered by the
+      // model named ..." env line; re-baseline whenever the new family is
+      // non-neutral. Never downgrade a known non-neutral model to neutral.
       if (s.baselineSystem !== null && !caps.isNeutral) {
         s.baselineSystem = null
         s.shape = null
@@ -592,13 +598,19 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
 
     "chat.params": async (input, output) => {
       try {
-        const info = rememberModel(input.sessionID, input.model as unknown as ChatParamsModel)
+        const liveModel = input.model as unknown as ChatParamsModel
+        const info = rememberModel(input.sessionID, liveModel)
         // Record how this model was classified before any policy branch below.
         // The MiMo/GLM provider-observation branches return early, so this call
         // sits ahead of them to cover every request.
         recordPolicyResolution(input.sessionID, input.model)
-        const family = info?.family
-        const caps = info?.caps
+        // Policy decisions follow the LIVE model and provider, so a stale latched
+        // family can never authorize a mutation (or suppress one) for a different
+        // live model. `info` stays for session continuity (baseline/usage).
+        const caps = resolveRuntimePolicy(input.model) as PolicyRuntime
+        const family = caps.policy
+        const liveProviderID = String(liveModel?.providerID ?? info?.providerID ?? "")
+        const liveModelID = String(liveModel?.api?.id ?? liveModel?.id ?? info?.modelID ?? "")
 
         // ---- MiMo-V2.6: provider-switch diagnostics (telemetry only) ---------
         // MiMo cache lives at the provider side, so a provider change within one
@@ -682,7 +694,7 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
         // verbatim into the request body and needs snake_case wire names; the
         // OpenAI/Azure SDKs expect camelCase options and serialize them.
         const fieldNames = gptCacheOptionFieldNames({
-          providerID: info.providerID,
+          providerID: liveProviderID,
           npm: (input.model as unknown as ChatParamsModel)?.api?.npm,
         })
 
@@ -704,8 +716,8 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
               sid: input.sessionID,
               ts: Date.now(),
               reason: "gpt_reasoning_effort_changed",
-              provider: info.providerID,
-              model: info.modelID,
+              provider: liveProviderID,
+              model: liveModelID,
               policy: family,
               cacheRoot: effKey,
               cacheRootSource: applyRoot ? rootRes!.source : "self",
@@ -756,8 +768,8 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
             sid: input.sessionID,
             ts: Date.now(),
             policy: caps.policy,
-            provider: info.providerID,
-            model: info.modelID,
+            provider: liveProviderID,
+            model: liveModelID,
             keyStrategy: applyRoot ? "cache-root" : "session",
             ...cacheCtxExtra,
             compaction,
@@ -772,8 +784,8 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
               sid: input.sessionID,
               ts: Date.now(),
               reason: "gpt_session_fork",
-              provider: info.providerID,
-              model: info.modelID,
+              provider: liveProviderID,
+              model: liveModelID,
               policy: family,
               ...cacheCtxExtra,
               hops: rootRes!.hops,
@@ -787,8 +799,8 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
             sid: input.sessionID,
             ts: Date.now(),
             reason: "gpt_compaction",
-            provider: info.providerID,
-            model: info.modelID,
+            provider: liveProviderID,
+            model: liveModelID,
             policy: family,
             ...cacheCtxExtra,
             namespace: isolated ? "compact" : "live",
@@ -836,7 +848,8 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
         const model = input.model as unknown as ChatParamsModel
         rememberModel(sid, model)
         const s = get(sid)
-        const caps = s.modelInfo?.caps
+        // Policy gating follows the LIVE model, never a stale latched family.
+        const caps = resolveRuntimePolicy(input.model) as PolicyRuntime
 
         // ---- GLM-5.3 / MiMo-V2.6 input-shape stabilization ------------------
         // Relocate the identifiable volatile env block (per-day date) to the
@@ -870,8 +883,8 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
                 ts: Date.now(),
                 reason: "mimo_system_env_relocated",
                 policy: caps!.policy,
-                provider: s.modelInfo?.providerID,
-                model: s.modelInfo?.modelID,
+                provider: String(model?.providerID ?? ""),
+                model: String(model?.api?.id ?? model?.id ?? ""),
               })
             } else {
               log("debug", "glm system env block relocated to suffix", { sid })
