@@ -128,16 +128,17 @@ test("toolFingerprint returns null for unusable input", () => {
 
 // --- 6. repeated session.idle never double-counts ---------------------------
 test("same assistant message counted once across idle events", () => {
+  // Oldest-first (chronological), as returned by the runtime.
   const page = [asst("m1", 100, 20), asst("m2", 50, 10), asst("m3", 25, 5)]
   const first = scanPage(page, null)
   assert.equal(first.count, 3)
   assert.equal(first.read, 175)
   assert.equal(first.write, 35)
-  // Boundary becomes the NEWEST processed message (messages append at the top).
+  // Boundary becomes the NEWEST processed message (last element, oldest-first).
   const cursor = nextProcessedCursor(page, null)
-  assert.equal(cursor, "m1")
+  assert.equal(cursor, "m3")
 
-  // Second idle: no new messages above the boundary -> nothing counted.
+  // Second idle: no new messages after the boundary -> nothing counted.
   const second = scanPage(page, cursor)
   assert.equal(second.count, 0)
   assert.equal(second.read, 0)
@@ -148,21 +149,24 @@ test("same assistant message counted once across idle events", () => {
 test("only messages newer than the cursor are aggregated", () => {
   const oldPage = [asst("m1", 100, 20), asst("m2", 50, 10)]
   const cursor = nextProcessedCursor(oldPage, null)
-  assert.equal(cursor, "m1")
+  assert.equal(cursor, "m2")
 
-  const nextPage = [asst("m0", 10, 2), asst("m1", 100, 20), asst("m2", 50, 10)]
+  // A new assistant message appends at the END (newest).
+  const nextPage = [asst("m1", 100, 20), asst("m2", 50, 10), asst("m0", 10, 2)]
   const scan = scanPage(nextPage, cursor)
   assert.equal(scan.count, 1)
   assert.equal(scan.read, 10)
   assert.equal(scan.reachedStart, true)
 })
 
-test("paginated tail (boundary not found) advances cursor to newest processed", () => {
+test("missing boundary without a watermark counts nothing and advances cursor to newest", () => {
   const page = [asst("m1", 10, 2), asst("m2", 20, 4)]
   const scan = scanPage(page, "ghost-cursor")
   assert.equal(scan.reachedStart, false)
+  // No watermark known -> safe undercount rather than a double count.
+  assert.equal(scan.count, 0)
   const cursor = nextProcessedCursor(page, "ghost-cursor")
-  assert.equal(cursor, "m1")
+  assert.equal(cursor, "m2")
 })
 
 // --- 8. no cache fields -> no fabricated event -------------------------------
@@ -2667,7 +2671,7 @@ test("v0.4.6 K1: multi-message aggregation counts only assistant cache data, onc
   assert.equal(u.write, 5)
   assert.equal(u.input, 15) // 10 + 5
   assert.equal(u.messages, 2) // user message excluded
-  assert.equal(u.cursor, "m3")
+  assert.equal(u.cursor, "m1") // newest = last element (oldest-first runtime order)
 })
 
 test("v0.4.6 K1: empty/undefined/throwing messages fail safely without breaking the plugin", async () => {
@@ -2678,4 +2682,211 @@ test("v0.4.6 K1: empty/undefined/throwing messages fail safely without breaking 
   assert.ok(!usageSids.includes("ses_usage_throw"))
   const errs = records.filter((r) => r.kind === "telemetry-error")
   assert.ok(errs.some((r) => /boom/.test(String(r.error))), "the throw must be recorded, not propagated")
+})
+
+// ===========================================================================
+// v0.4.8 P-A: compaction-safe cursor correctness.
+//
+// OpenCode V1 v1.18.34 returns client.session.messages() OLDEST-FIRST
+// (chronological); verified against the live runtime and its SQLite store during
+// this release. The collector counts assistant messages AFTER the cursor, uses
+// the newest message (last element) as the new cursor, and falls back to a
+// `time.created` watermark when the cursor message is pruned/reverted so
+// historical messages can never be recounted.
+// ===========================================================================
+
+const asstT = (id, read, write, created, input = 0) => ({
+  info: { id, role: "assistant", time: { created }, tokens: { input, cache: { read, write } } },
+})
+const userT = (id, created) => ({ info: { id, role: "user", time: { created } } })
+
+test("v0.4.8: chronological scan counts only assistant messages after the cursor", () => {
+  const page = [asstT("a1", 100, 10, 1000), userT("u1", 1100), asstT("a2", 50, 5, 1200)]
+  const first = scanPage(page, null)
+  assert.equal(first.count, 2)
+  assert.equal(first.read, 150)
+  assert.equal(first.write, 15)
+  assert.equal(nextProcessedCursor(page, null), "a2")
+
+  const next = [asstT("a1", 100, 10, 1000), userT("u1", 1100), asstT("a2", 50, 5, 1200), userT("u2", 1300), asstT("a3", 7, 1, 1400)]
+  const scan = scanPage(next, "a2")
+  assert.equal(scan.count, 1)
+  assert.equal(scan.read, 7)
+  assert.equal(scan.reachedStart, true)
+})
+
+test("v0.4.8: a pruned cursor cannot double-count (watermark bounds the scan)", () => {
+  const before = [asstT("a1", 100, 10, 1000), asstT("a2", 50, 5, 2000)]
+  const first = scanPage(before, null)
+  assert.equal(first.count, 2)
+  assert.equal(first.maxCreated, 2000)
+
+  // Compaction removed the cursor message a2; a3 is genuinely new.
+  const after = [asstT("a1", 100, 10, 1000), userT("u", 1900), asstT("a3", 30, 3, 2100)]
+  const scan = scanPage(after, "a2", 2000)
+  assert.equal(scan.reachedStart, false)
+  assert.equal(scan.count, 1, "only the genuinely new assistant message is counted")
+  assert.equal(scan.read, 30)
+  assert.equal(scan.write, 3)
+})
+
+test("v0.4.8: missing cursor + multiple new messages after compaction counted once", () => {
+  const after = [asstT("a1", 100, 10, 1000), asstT("a4", 11, 1, 2100), userT("u", 2200), asstT("a5", 22, 2, 2300)]
+  const scan = scanPage(after, "a2", 2000)
+  assert.equal(scan.count, 2)
+  assert.equal(scan.read, 33)
+  assert.equal(scan.write, 3)
+})
+
+test("v0.4.8: cursor missing with no watermark counts nothing (safe undercount)", () => {
+  const after = [asstT("a1", 100, 10, 1000), asstT("a3", 30, 3, 2100)]
+  const scan = scanPage(after, "a2", null)
+  assert.equal(scan.count, 0)
+  assert.equal(scan.read, 0)
+})
+
+test("v0.4.8: watermark is strictly-greater so timestamp ties undercount, never double-count", () => {
+  const page = [asstT("a1", 100, 10, 1000), asstT("a2", 50, 5, 2000), asstT("a3", 30, 3, 2000)]
+  const scan = scanPage(page, "ghost", 2000)
+  assert.equal(scan.count, 0, "ties at the watermark are treated as already counted")
+})
+
+test("v0.4.8: empty post-compaction history is safe", () => {
+  let scan
+  assert.doesNotThrow(() => {
+    scan = scanPage([], "a2", 2000)
+  })
+  assert.equal(scan.count, 0)
+  assert.equal(nextProcessedCursor([], "a2"), "a2")
+})
+
+test("v0.4.8: missing timestamp metadata is not fabricated", () => {
+  const page = [{ info: { id: "a1", role: "assistant", tokens: { cache: { read: 100, write: 0 } } } }]
+  const first = scanPage(page, null)
+  assert.equal(first.count, 1)
+  assert.equal(first.maxCreated, null)
+  const scan = scanPage(page, "gone", null)
+  assert.equal(scan.count, 0)
+})
+
+test("v0.4.8: repeated idles after a pruned cursor never duplicate", () => {
+  const after = [asstT("a1", 100, 10, 1000), asstT("a3", 30, 3, 2100)]
+  const scan1 = scanPage(after, "a2", 2000)
+  assert.equal(scan1.count, 1)
+  const cursor = nextProcessedCursor(after, "a2")
+  assert.equal(cursor, "a3")
+  const scan2 = scanPage(after, cursor, 2100)
+  assert.equal(scan2.count, 0)
+})
+
+test("v0.4.8: scanPage returns reasoning in chronological order", () => {
+  const page = [
+    { info: { id: "r1", role: "assistant", time: { created: 1000 }, tokens: { cache: { read: 1, write: 0 } } }, parts: [{ type: "reasoning", text: "first" }] },
+    { info: { id: "r2", role: "assistant", time: { created: 2000 }, tokens: { cache: { read: 1, write: 0 } } }, parts: [{ type: "reasoning", text: "second" }] },
+  ]
+  const scan = scanPage(page, null)
+  assert.deepEqual(scan.reasoning.map((r) => r.id), ["r1", "r2"])
+})
+
+test("v0.4.8 REGRESSION: a cursor at the newest message must not recount older messages", () => {
+  // Fails against the previous newest-first implementation (which counted m1).
+  const page = [asst("m1", 100, 20), asst("m2", 50, 10)]
+  const scan = scanPage(page, "m2")
+  assert.equal(scan.count, 0)
+  assert.equal(scan.read, 0)
+  assert.equal(scan.reachedStart, true)
+})
+
+async function runCompactionUsageProbe() {
+  const home = mkdtempSync(join(tmpdir(), "ce-pa-"))
+  const pluginURL = new URL("../src/cache-engine.ts", import.meta.url).href
+  const script = `
+    import { readFileSync } from "node:fs"
+    process.env.CACHE_ENGINE_METRICS_FILE = process.env.HOME + "/pa.jsonl"
+    const { CacheEngine } = await import(${JSON.stringify(pluginURL)})
+    const calls = []
+    const responses = {}
+    const fake = {
+      app: { log: async () => ({}) },
+      session: {
+        get: async () => ({ data: { parentID: null } }),
+        async messages(opts) {
+          calls.push(JSON.parse(JSON.stringify(opts)))
+          return responses[opts && opts.path && opts.path.id]
+        },
+      },
+      tool: { list: async () => ({ data: [] }) },
+    }
+    const hooks = await CacheEngine({ client: fake, directory: process.env.HOME })
+    const tick = () => new Promise((r) => setTimeout(r, 30))
+    const asst = (id, read, write, created) => ({ info: { id, role: "assistant", time: { created }, tokens: { input: 0, cache: { read, write } } }, parts: [] })
+    const user = (id, created) => ({ info: { id, role: "user", time: { created } }, parts: [] })
+    const setModel = (sid) => hooks["chat.params"]({ sessionID: sid, agent: "build", model: { providerID: "deepseek", id: "deepseek-flash", api: { id: "deepseek-flash" } }, provider: { source: "config", info: { id: "deepseek" }, options: {} }, message: { id: "u-"+sid, sessionID: sid, role: "user", content: "x" } }, { options: {} })
+    const idle = async (sid) => { await hooks.event({ event: { type: "session.idle", properties: { sessionID: sid } } }); await tick() }
+
+    const SID = "ses_pa"
+    responses[SID] = { data: [asst("a1", 100, 10, 1000), user("u1", 1100), asst("a2", 50, 5, 2000)] }
+    await setModel(SID)
+    await idle(SID)
+    await idle(SID)
+
+    // Simulate compaction: cursor a2 removed, new assistant a3 appended.
+    responses[SID] = { data: [asst("a1", 100, 10, 1000), user("u1", 1100), user("c", 1900), asst("a3", 30, 3, 2100)] }
+    await idle(SID)
+    await idle(SID)
+
+    const SID2 = "ses_pa_empty"
+    responses[SID2] = { data: [] }
+    await setModel(SID2)
+    await idle(SID2)
+
+    const records = readFileSync(process.env.CACHE_ENGINE_METRICS_FILE, "utf8").trim().split("\\n").map((l) => JSON.parse(l))
+    process.stdout.write(JSON.stringify({ calls, records }))
+  `
+  const stdout = execFileSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], {
+    cwd: process.cwd(),
+    env: { ...process.env, HOME: home },
+    encoding: "utf8",
+  })
+  return JSON.parse(stdout.trim())
+}
+
+let compactionProbe
+const compactionResults = async () => (compactionProbe ??= runCompactionUsageProbe())
+
+test("v0.4.8: compaction does not duplicate usage; only new messages are added", async () => {
+  const { records } = await compactionResults()
+  const usage = records.filter((r) => r.kind === "usage" && r.sid === "ses_pa")
+  assert.equal(usage.length, 2, "one usage record before compaction, one after")
+  const [before, after] = usage
+  assert.equal(before.read, 150)
+  assert.equal(before.messages, 2)
+  assert.equal(before.cumulative.read, 150)
+  // After compaction: only a3 is counted; a1 is NOT recounted.
+  assert.equal(after.read, 30)
+  assert.equal(after.messages, 1)
+  assert.equal(after.cumulative.read, 180)
+  assert.equal(after.cursor, "a3")
+})
+
+test("v0.4.8: existing usage telemetry schema and attribution are unchanged", async () => {
+  const { records } = await compactionResults()
+  const u = records.find((r) => r.kind === "usage" && r.sid === "ses_pa")
+  assert.ok(u)
+  for (const k of ["kind", "sid", "ts", "read", "write", "input", "messages", "sampleHitRate", "cumulative", "cumulativeHitRate", "cursor", "provider", "model", "policy"]) {
+    assert.ok(k in u, `usage record must contain ${k}`)
+  }
+  assert.equal(u.provider, "deepseek")
+  assert.equal(u.model, "deepseek-flash")
+  assert.equal(u.policy, "deepseek")
+})
+
+test("v0.4.8: empty post-compaction history produces no fabricated usage and does not throw", async () => {
+  const { records, calls } = await compactionResults()
+  assert.ok(!records.some((r) => r.kind === "usage" && r.sid === "ses_pa_empty"))
+  // K2 payload shape preserved end to end.
+  for (const c of calls) {
+    assert.deepEqual(Object.keys(c), ["path"])
+    assert.equal(typeof c.path.id, "string")
+  }
 })
