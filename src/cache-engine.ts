@@ -718,8 +718,14 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
         if (!enableKey || !desiredKey) return
 
         // ---- cache-root affinity + compaction isolation key injection --------
+        // Write the desired key when it is CacheEngine-owned policy: cache-root
+        // affinity (applyRoot) or compaction isolation (isolated). The runtime
+        // pre-sets promptCacheKey to the session id for direct OpenAI/Azure, so
+        // without this a compaction request would keep the live-session key and
+        // share its namespace. Live requests with cacheRootKey disabled and no
+        // root affinity still preserve an existing key.
         const already = output.options[fieldNames.key]
-        if (applyRoot && (already === undefined || already !== desiredKey)) {
+        if ((applyRoot || isolated) && (already === undefined || already !== desiredKey)) {
           output.options[fieldNames.key] = desiredKey
         }
         const optsDelta = gptCacheOptionsDelta(output.options, {
