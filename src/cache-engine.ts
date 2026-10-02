@@ -10,6 +10,7 @@ import {
   ensureMetricsDir,
   glmHitRatio,
   gptCacheKeyFor,
+  gptCacheOptionFieldNames,
   gptCacheOptionsDelta,
   hitRatePct,
   loadConfig,
@@ -677,6 +678,13 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
         const compaction = input.agent === "compaction"
         const isolated = compaction && gpol?.compactionCacheIsolation === true
         const enableKey = gpol?.promptCacheKey !== false
+        // Transport-correct field names. OpenRouter forwards providerOptions
+        // verbatim into the request body and needs snake_case wire names; the
+        // OpenAI/Azure SDKs expect camelCase options and serialize them.
+        const fieldNames = gptCacheOptionFieldNames({
+          providerID: info.providerID,
+          npm: (input.model as unknown as ChatParamsModel)?.api?.npm,
+        })
 
         // cache root resolution (only when used for key/effort baseline)
         const rootRes = applyRoot || gpol?.reasoningEffortDiagnostics === true ? await resolveCacheRoot(input.sessionID) : null
@@ -710,14 +718,15 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
         if (!enableKey || !desiredKey) return
 
         // ---- cache-root affinity + compaction isolation key injection --------
-        const already = output.options.promptCacheKey
+        const already = output.options[fieldNames.key]
         if (applyRoot && (already === undefined || already !== desiredKey)) {
-          output.options.promptCacheKey = desiredKey
+          output.options[fieldNames.key] = desiredKey
         }
         const optsDelta = gptCacheOptionsDelta(output.options, {
           key: desiredKey,
           mode: gpol?.mode,
           ttl: gpol?.ttl,
+          fieldNames,
         })
         if (Object.keys(optsDelta).length > 0) Object.assign(output.options, optsDelta)
 

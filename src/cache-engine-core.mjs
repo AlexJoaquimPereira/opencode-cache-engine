@@ -240,6 +240,26 @@ export function policyEnabled(cfg, family) {
 // GPT-5.6 cache options
 // ---------------------------------------------------------------------------
 
+// GPT prompt-cache option field names differ by transport.
+//
+// The AI SDK's OpenAI and Azure providers accept camelCase options
+// (`promptCacheKey` / `promptCacheOptions`) and serialize them to the snake_case
+// wire fields (`prompt_cache_key` / `prompt_cache_options`). The OpenRouter AI
+// SDK provider does NOT translate: it spreads `providerOptions.openrouter`
+// verbatim into the request body, so OpenRouter must be given the snake_case
+// wire names directly, otherwise the fields are ignored upstream.
+//
+// Verified by capturing the serialized request body with the exact installed
+// versions: @openrouter/ai-sdk-provider@2.9.0, @ai-sdk/openai@3.0.88,
+// @ai-sdk/azure@3.0.93, ai@6.0.168.
+const GPT_CACHE_FIELDS_CAMEL = { key: "promptCacheKey", options: "promptCacheOptions" }
+const GPT_CACHE_FIELDS_SNAKE = { key: "prompt_cache_key", options: "prompt_cache_options" }
+
+export function gptCacheOptionFieldNames({ providerID, npm } = {}) {
+  const openrouter = providerID === "openrouter" || npm === "@openrouter/ai-sdk-provider"
+  return openrouter ? { ...GPT_CACHE_FIELDS_SNAKE } : { ...GPT_CACHE_FIELDS_CAMEL }
+}
+
 // Build the delta to merge into the request's provider options for a GPT-5.6
 // model. Conservative: `implicit` mode + a stable session-derived key, only
 // added when the fields are not already present (so we never fight the runtime
@@ -247,17 +267,22 @@ export function policyEnabled(cfg, family) {
 // Returns {} when nothing should change.
 //
 // `existingOptions` is the outgoing options record (output.options in the
-// chat.params hook). We never overwrite what is already there.
-export function gptCacheOptionsDelta(existingOptions, { key, mode = GPT56_DEFAULT_MODE, ttl = GPT56_DEFAULT_TTL } = {}) {
+// chat.params hook). `fieldNames` selects the transport's field names; it
+// defaults to the camelCase options the OpenAI/Azure SDK expects.
+export function gptCacheOptionsDelta(
+  existingOptions,
+  { key, mode = GPT56_DEFAULT_MODE, ttl = GPT56_DEFAULT_TTL, fieldNames = GPT_CACHE_FIELDS_CAMEL } = {},
+) {
   const delta = {}
   if (!existingOptions || typeof existingOptions !== "object") return delta
-  if (typeof key === "string" && key.length > 0 && existingOptions.promptCacheKey === undefined) {
-    delta.promptCacheKey = key
+  const fields = { ...GPT_CACHE_FIELDS_CAMEL, ...(fieldNames || {}) }
+  if (typeof key === "string" && key.length > 0 && existingOptions[fields.key] === undefined) {
+    delta[fields.key] = key
   }
-  const existingMode = existingOptions.promptCacheOptions
+  const existingMode = existingOptions[fields.options]
   if (existingMode === undefined || existingMode === null) {
     const m = mode === "explicit" ? "explicit" : "implicit"
-    delta.promptCacheOptions = { mode: m, ttl: typeof ttl === "string" && ttl.length > 0 ? ttl : GPT56_DEFAULT_TTL }
+    delta[fields.options] = { mode: m, ttl: typeof ttl === "string" && ttl.length > 0 ? ttl : GPT56_DEFAULT_TTL }
   }
   return delta
 }

@@ -28,6 +28,7 @@ import {
   digestDecision,
   expandHome,
   glmHitRatio,
+  gptCacheOptionFieldNames,
   gptCacheOptionsDelta,
   hitRatePct,
   isOpenRouterAffinityEligible,
@@ -1771,8 +1772,12 @@ async function runPolicyMigrationProbe() {
         richFamily: resolvePolicy(model).family,
         overlays: resolvePolicy(model).overlays.map((o) => o.id),
         systemRelocated: sysOut.system[0] !== SYS,
-        gptOptionInjected: paramsOut.options.promptCacheKey !== undefined,
-        gptOptions: paramsOut.options.promptCacheOptions ?? null,
+        gptOptionInjected: paramsOut.options.promptCacheKey !== undefined || paramsOut.options.prompt_cache_key !== undefined,
+        gptOptions: paramsOut.options.promptCacheOptions ?? paramsOut.options.prompt_cache_options ?? null,
+        gptKeyCamel: paramsOut.options.promptCacheKey ?? null,
+        gptKeySnake: paramsOut.options.prompt_cache_key ?? null,
+        gptOptionsCamel: paramsOut.options.promptCacheOptions ?? null,
+        gptOptionsSnake: paramsOut.options.prompt_cache_options ?? null,
         affinityHeaderAttached: headersOut.headers["x-session-id"] !== undefined,
         existingHeadersPreserved,
         expect: c.expect,
@@ -2889,4 +2894,86 @@ test("v0.4.8: empty post-compaction history produces no fabricated usage and doe
     assert.deepEqual(Object.keys(c), ["path"])
     assert.equal(typeof c.path.id, "string")
   }
+})
+
+// ===========================================================================
+// v0.4.9: GPT prompt-cache option serialization is transport-aware.
+//
+// The OpenAI/Azure AI SDK providers accept camelCase options and serialize them
+// to snake_case wire fields. The OpenRouter AI SDK provider spreads
+// providerOptions verbatim into the request body, so it must receive the
+// snake_case wire names directly. Verified by capturing the serialized body
+// with the installed versions (@openrouter/ai-sdk-provider@2.9.0,
+// @ai-sdk/openai@3.0.88, @ai-sdk/azure@3.0.93, ai@6.0.168).
+// ===========================================================================
+
+test("v0.4.9: gptCacheOptionFieldNames maps OpenRouter to snake_case and OpenAI/Azure to camelCase", () => {
+  assert.deepEqual(gptCacheOptionFieldNames({ providerID: "openai", npm: "@ai-sdk/openai" }), {
+    key: "promptCacheKey",
+    options: "promptCacheOptions",
+  })
+  assert.deepEqual(gptCacheOptionFieldNames({ providerID: "azure", npm: "@ai-sdk/azure" }), {
+    key: "promptCacheKey",
+    options: "promptCacheOptions",
+  })
+  assert.deepEqual(gptCacheOptionFieldNames({ providerID: "openrouter", npm: "@openrouter/ai-sdk-provider" }), {
+    key: "prompt_cache_key",
+    options: "prompt_cache_options",
+  })
+  // providerID alone is sufficient (OpenRouter routing)
+  assert.deepEqual(gptCacheOptionFieldNames({ providerID: "openrouter" }), {
+    key: "prompt_cache_key",
+    options: "prompt_cache_options",
+  })
+})
+
+test("v0.4.9: gptCacheOptionsDelta honours transport field names and preserves existing values", () => {
+  const orFields = gptCacheOptionFieldNames({ providerID: "openrouter" })
+  const d = gptCacheOptionsDelta({}, { key: "ce-root", fieldNames: orFields })
+  assert.equal(d.prompt_cache_key, "ce-root")
+  assert.equal(d.promptCacheKey, undefined)
+  assert.deepEqual(d.prompt_cache_options, { mode: "implicit", ttl: "30m" })
+  assert.equal(d.promptCacheOptions, undefined)
+
+  // Existing snake_case values are preserved (never overwritten).
+  assert.deepEqual(
+    gptCacheOptionsDelta(
+      { prompt_cache_key: "existing", prompt_cache_options: { mode: "explicit", ttl: "1h" } },
+      { key: "new", fieldNames: orFields },
+    ),
+    {},
+  )
+
+  // Default remains camelCase for the OpenAI/Azure SDKs.
+  const dflt = gptCacheOptionsDelta({}, { key: "ce-root" })
+  assert.equal(dflt.promptCacheKey, "ce-root")
+  assert.deepEqual(dflt.promptCacheOptions, { mode: "implicit", ttl: "30m" })
+  assert.equal(dflt.prompt_cache_key, undefined)
+})
+
+test("v0.4.9 REGRESSION: OpenRouter GPT gets snake_case fields; OpenAI keeps camelCase", async () => {
+  const { results } = await policyMigrationResults()
+  const byName = (n) => results.find((r) => r.name === n)
+
+  // Direct OpenAI: camelCase plugin options (the SDK serializes to snake_case).
+  for (const name of ["gpt-5.6", "gpt-6-astra", "gpt-7-future-openai"]) {
+    const r = byName(name)
+    assert.equal(typeof r.gptKeyCamel, "string", `${name}: camelCase key expected`)
+    assert.equal(r.gptKeySnake, null, `${name}: must not set snake_case`)
+    assert.deepEqual(r.gptOptionsCamel, { mode: "implicit", ttl: "30m" }, `${name}: camelCase options`)
+    assert.equal(r.gptOptionsSnake, null, `${name}: must not set snake_case options`)
+  }
+
+  // OpenRouter: snake_case wire fields (the adapter forwards them verbatim).
+  for (const name of ["gpt-5.6-openrouter", "gpt-6-openrouter"]) {
+    const r = byName(name)
+    assert.equal(typeof r.gptKeySnake, "string", `${name}: snake_case key expected`)
+    assert.equal(r.gptKeyCamel, null, `${name}: must not set camelCase`)
+    assert.deepEqual(r.gptOptionsSnake, { mode: "implicit", ttl: "30m" }, `${name}: snake_case options`)
+    assert.equal(r.gptOptionsCamel, null, `${name}: must not set camelCase options`)
+  }
+
+  // Key derivation is unchanged: default cacheRootKey=false keys on the session.
+  assert.equal(byName("gpt-5.6").gptKeyCamel, "ses_gpt-5.6")
+  assert.equal(byName("gpt-5.6-openrouter").gptKeySnake, "ses_gpt-5.6-openrouter")
 })
