@@ -960,6 +960,65 @@ test("MiMo relocation is a no-op when start/end markers are missing", () => {
 })
 
 // ===========================================================================
+// v0.4.10: <env> relocation correctness (content, determinism, ambiguity)
+// ===========================================================================
+
+test("v0.4.10: relocation is deterministic and idempotent for GLM and MiMo", () => {
+  for (const sys of [GLM_SYSTEM, MIMO_SYSTEM]) {
+    const once = relocateVolatileEnvBlock(sys)
+    assert.equal(once.changed, true)
+    // Deterministic across repeated calls on the same input.
+    assert.equal(relocateVolatileEnvBlock(sys).text, once.text)
+    // Idempotent: applying to the already-relocated text is a no-op.
+    const twice = relocateVolatileEnvBlock(once.text)
+    assert.equal(twice.changed, false)
+    assert.equal(twice.text, once.text)
+  }
+})
+
+test("v0.4.10: relocation preserves the env block bytes and all other text", () => {
+  for (const sys of [GLM_SYSTEM, MIMO_SYSTEM]) {
+    const r = relocateVolatileEnvBlock(sys)
+    const start = sys.indexOf("You are powered by the model named ")
+    const end = sys.indexOf("</env>") + "</env>".length
+    const block = sys.slice(start, end)
+    assert.ok(r.text.includes(block), "env block preserved byte-for-byte")
+    // Removing the block from both texts leaves identical remaining content.
+    const strip = (t) => t.replace(block, "").replace(/\n{2,}/g, "\n").trim()
+    assert.equal(strip(r.text), strip(sys))
+  }
+})
+
+test("v0.4.10: relocation leaves multiple/ambiguous/malformed markers unchanged", () => {
+  const base = ["INSTR", "You are powered by the model named X", "<env>", "date", "</env>", "TAIL"].join("\n")
+  // Control: the unambiguous case relocates.
+  assert.equal(relocateVolatileEnvBlock(base).changed, true)
+
+  const cases = {
+    "two START markers": base + "\nYou are powered by the model named Y",
+    "two <env> opens": base.replace("<env>", "<env>\n<env>"),
+    "two </env> closes": base + "\n</env>",
+    "missing <env>": base.replace("<env>\n", ""),
+    "missing </env>": base.replace("\n</env>", ""),
+    "missing START": base.replace("You are powered by the model named X\n", ""),
+    "markers out of order": ["You are powered by the model named X", "</env>", "<env>", "date"].join("\n"),
+  }
+  for (const [name, input] of Object.entries(cases)) {
+    const r = relocateVolatileEnvBlock(input)
+    assert.equal(r.changed, false, `${name} must be left unchanged`)
+    assert.equal(r.text, input, `${name} text must be byte-identical`)
+  }
+})
+
+test("v0.4.10: relocation never touches non-string or env-less system text", () => {
+  for (const bad of [null, undefined, 7, "plain system prompt with no env block"]) {
+    const r = relocateVolatileEnvBlock(bad)
+    assert.equal(r.changed, false)
+    assert.equal(r.text, bad)
+  }
+})
+
+// ===========================================================================
 // MiMo-V2.6: sticky-session identity (pure, derived but not injected)
 // ===========================================================================
 
