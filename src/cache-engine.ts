@@ -557,7 +557,11 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
     "chat.headers": async (input, output) => {
       try {
         const model = input.model as unknown as ChatParamsModel
-        const providerID = String(model?.providerID ?? "")
+        // OpenCode provider IDs are canonical lowercase, but normalize
+        // defensively so casing/whitespace can never bypass (or leak) the
+        // OpenRouter-only affinity gate. Header-name handling below is already
+        // case-insensitive.
+        const providerID = String(model?.providerID ?? "").trim().toLowerCase()
         const caps = resolveRuntimePolicy(model) as PolicyRuntime
         if (!caps.openRouterAffinity) return
         const family = caps.policy
@@ -836,6 +840,18 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
           })
           return
         }
+        // Bounded retention: drop per-session state only when OpenCode reports
+        // the session deleted (EventSessionDeleted -> properties.info.id). Active
+        // or merely idle sessions are never evicted, so usage accounting, stable
+        // keys, baseline/shape, and compaction bookkeeping are preserved.
+        if (event.type === "session.deleted") {
+          const sid = event.properties.info?.id
+          if (sid) {
+            sessions.delete(sid)
+            effortByRoot.delete(sid)
+          }
+          return
+        }
       } catch (e) {
         rec.record({ kind: "telemetry-error", ts: Date.now(), error: String(e) })
       }
@@ -1002,8 +1018,10 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
         if (!digestDecision({ compactTemplate: cfg.compactTemplate, pendingInsert: s.pendingInsert })) return
         output.context.push(DIGEST_TEMPLATE)
         s.pendingInsert = false
-      } catch {
-        /* best-effort */
+      } catch (e) {
+        // Best-effort: never break compaction, but record the failure like every
+        // other hook so it is observable. The recorder itself never throws.
+        rec.record({ kind: "telemetry-error", ts: Date.now(), error: String(e) })
       }
     },
   }
