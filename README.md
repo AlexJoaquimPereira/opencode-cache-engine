@@ -241,6 +241,14 @@ The environment block can contain volatile information such as a changing date.
 
 Keeping that material at the end allows the earlier portion of the system prompt to remain stable across requests.
 
+This is a prompt-shape heuristic, not an established cache win. A controlled
+A/B through OpenRouter (ordinary short prompts; env block early vs relocated to
+the tail; a changed date between a warm and a test request) did **not** show a
+position-dependent cache benefit — the upstream implicit caches reported high
+cached-token counts regardless of block position. The cache improvement is
+therefore **unverified**. Provider-reported usage remains the only authoritative
+signal.
+
 The plugin therefore attempts to isolate volatility:
 
 ```text
@@ -1400,7 +1408,7 @@ release, use:
 ```json
 {
   "plugin": [
-    "opencode-cache-engine@0.4.9"
+    "opencode-cache-engine@0.4.10"
   ]
 }
 ```
