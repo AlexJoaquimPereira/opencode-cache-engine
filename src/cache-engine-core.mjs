@@ -540,11 +540,19 @@ export function shouldAggregate(count, read, write) {
 // ---------------------------------------------------------------------------
 // Message scanning / cursor
 //
-// `client.session.messages` returns messages newest-first (confirmed against
-// the runtime). We track a single stable boundary: `lastProcessedMessageID`.
-// Everything NEWER than the boundary is unprocessed; scanning stops as soon as
-// the boundary is reached, so repeated `session.idle` events never double-count
-// historical messages and no unbounded per-message Set is required.
+// OpenCode V1 (verified empirically against v1.18.34) returns
+// `client.session.messages` in CHRONOLOGICAL order: oldest first, newest last
+// (`time.created` is non-decreasing across the array).
+//
+// We track two boundaries:
+//   * `lastProcessedMessageID` — the newest message id already processed.
+//     Everything AFTER it in the chronological array is unprocessed.
+//   * `lastProcessedAt` — the newest `time.created` already processed, used only
+//     as a safety watermark when the id boundary disappears (e.g. the cursor
+//     message was pruned or reverted) so historical messages are never recounted.
+//
+// This prevents repeated `session.idle` events from double-counting and needs no
+// unbounded per-message Set.
 // ---------------------------------------------------------------------------
 
 function reasoningHashesFor(m) {
@@ -559,26 +567,35 @@ function reasoningHashesFor(m) {
   return hashes
 }
 
-// page: Array<{ info: { id, role, tokens }, parts }>, newest-first.
+// page: Array<{ info: { id, role, tokens, time }, parts }>, OLDEST-FIRST.
 // startCursor: lastProcessedMessageID or null (first aggregation).
-// Returns sums for the unprocessed segment plus scan bookkeeping.
-export function scanPage(page, startCursor) {
+// sinceCreated: timestamp watermark (ms), used ONLY when startCursor is set but
+//   no longer present in the page. Assistant messages with
+//   time.created <= sinceCreated are treated as already counted.
+//
+// When the cursor is missing and no watermark is known, nothing is counted: a
+// safe undercount is preferred over a double count.
+export function scanPage(page, startCursor, sinceCreated = null) {
+  const list = Array.isArray(page) ? page : []
+  const cursorIndex = startCursor == null ? -1 : list.findIndex((m) => m && m.info && m.info.id === startCursor)
+  const found = startCursor == null || cursorIndex >= 0
   let read = 0
   let write = 0
   let input = 0
   let count = 0
-  let reachedStart = false
-  const seenIds = []
+  let maxCreated = null
   const reasoning = []
-  for (const m of page || []) {
+  for (let i = found ? cursorIndex + 1 : 0; i < list.length; i++) {
+    const m = list[i]
     const info = m && m.info
     const id = info && info.id
     if (typeof id !== "string" || id.length === 0) continue
-    if (startCursor != null && id === startCursor) {
-      reachedStart = true
-      break
+    const created = info && info.time && info.time.created
+    if (Number.isFinite(created)) maxCreated = maxCreated == null ? created : Math.max(maxCreated, created)
+    if (!found) {
+      // Cursor message was pruned/reverted: only count strictly newer messages.
+      if (sinceCreated == null || !Number.isFinite(created) || created <= sinceCreated) continue
     }
-    seenIds.push(id)
     if (info.role !== "assistant") continue
     const t = info.tokens
     if (t) {
@@ -590,21 +607,15 @@ export function scanPage(page, startCursor) {
       if (rh.length > 0) reasoning.push({ id, hashes: rh })
     }
   }
-  return { read, write, input, count, reachedStart, seenIds, reasoning }
+  // `reachedStart` reports whether the id boundary was located (or none was set).
+  return { read, write, input, count, reachedStart: found, seenIds: [], reasoning, maxCreated }
 }
 
-// Compute the new `lastProcessedMessageID` after scanning.
-//
-// Messages append at the TOP of a newest-first list, so the correct boundary is
-// the NEWEST message that has been processed (the first element of the first
-// scanned page): the next aggregation scans down from the top and stops as soon
-// as it reaches that boundary. When the tail of the session was reached without
-// ever hitting the boundary (e.g. the old boundary was pruned), we still know
-// every message on the first scanned page was new and processed, so the newest
-// of those becomes the new boundary.
-export function nextProcessedCursor(firstPage, startCursor) {
-  if (!Array.isArray(firstPage) || firstPage.length === 0) return startCursor
-  const newest = firstPage[0]
+// Compute the new `lastProcessedMessageID` after scanning. The page is
+// OLDEST-FIRST, so the newest processed message is the LAST element.
+export function nextProcessedCursor(page, startCursor) {
+  if (!Array.isArray(page) || page.length === 0) return startCursor
+  const newest = page[page.length - 1]
   const id = newest && newest.info && newest.info.id
   return typeof id === "string" && id.length > 0 ? id : startCursor
 }
