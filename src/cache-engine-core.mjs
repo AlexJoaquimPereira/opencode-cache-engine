@@ -304,15 +304,34 @@ export function gptCacheOptionsDelta(
 // reorder of clearly volatile metadata only -- it never reorders arbitrary
 // instructions. This function is ONLY applied when the caller has already
 // classified the model into a family that opts into system stabilization.
+function countOccurrences(haystack, needle) {
+  if (!needle) return 0
+  let count = 0
+  let idx = haystack.indexOf(needle)
+  while (idx !== -1) {
+    count += 1
+    idx = haystack.indexOf(needle, idx + needle.length)
+  }
+  return count
+}
+
 export function relocateVolatileEnvBlock(text) {
   if (typeof text !== "string") return { text, changed: false }
   const START = "You are powered by the model named "
+  const OPEN = "<env>"
+  const CLOSE = "</env>"
+  // Require exactly one of each marker, in order, so an ambiguous or
+  // multiple-block system prompt is never partially reordered. This enforces
+  // the documented contract ("when the block cannot be identified
+  // unambiguously, return unchanged").
+  if (countOccurrences(text, START) !== 1) return { text, changed: false }
+  if (countOccurrences(text, OPEN) !== 1) return { text, changed: false }
+  if (countOccurrences(text, CLOSE) !== 1) return { text, changed: false }
   const startIdx = text.indexOf(START)
-  if (startIdx < 0) return { text, changed: false }
-  const endMarker = "</env>"
-  const endIdx = text.indexOf(endMarker, startIdx)
-  if (endIdx < 0) return { text, changed: false }
-  const blockEnd = endIdx + endMarker.length
+  const openIdx = text.indexOf(OPEN)
+  const closeIdx = text.indexOf(CLOSE)
+  if (!(startIdx < openIdx && openIdx < closeIdx)) return { text, changed: false }
+  const blockEnd = closeIdx + CLOSE.length
   const block = text.slice(startIdx, blockEnd)
   const rest = text.slice(0, startIdx) + text.slice(blockEnd)
   if (rest.trim().length === 0) return { text, changed: false }
