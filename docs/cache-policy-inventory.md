@@ -529,3 +529,25 @@ of this section.
   usage remains authoritative.
 - No policy-scope change was made; the only runtime change is the
   unambiguous-only guard (a defect fix, covered by regression tests).
+
+### Follow-up: v0.4.11 GPT key ownership and compaction isolation (2026-10-02)
+
+Key ownership by transport and configuration (OpenCode pre-sets
+`promptCacheKey = sessionID` for direct OpenAI/Azure via its provider `options()`,
+and sets nothing for OpenRouter):
+
+| Transport | Live, `cacheRootKey: false` (default) | Live, `cacheRootKey: true` | Compaction, `compactionCacheIsolation: true` |
+| --- | --- | --- | --- |
+| OpenAI / Azure (camelCase) | preserve OpenCode's key | override with resolved-root key | override with `<base>:compact` |
+| OpenRouter (snake_case) | set session-derived key | set resolved-root key | set `<base>:compact` |
+
+**Defect (fixed).** The compaction-isolation key was written only when cache-root
+affinity was enabled (`applyRoot`). Under the default (`cacheRootKey: false`),
+a direct OpenAI/Azure compaction request kept OpenCode's pre-set live key and
+therefore **shared the live-session namespace**, silently disabling
+`compactionCacheIsolation`. Fix: write the desired key when `applyRoot || isolated`,
+so isolation is enforced over a pre-set key. Live requests under the default still
+preserve an existing key. Regression: `v0.4.11` tests (existing/no key, root mode
+on/off, compaction override, repeated requests, separate sessions, transport field
+names). A prompt-cache key provides namespace stability/isolation, not a
+guaranteed cache hit.
