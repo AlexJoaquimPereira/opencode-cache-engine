@@ -3143,3 +3143,149 @@ test("v0.4.11: transport field names are respected for live and compaction keys"
   assert.equal(r.orLive.prompt_cache_key, "ses_A")
   assert.equal(r.orLive.promptCacheKey, undefined)
 })
+
+// ===========================================================================
+// v0.4.12: hooks follow the LIVE model across a mid-session family/provider
+// switch. A latched family must never authorize a mutation for a different live
+// model, and transport field names must follow the live provider.
+// ===========================================================================
+
+async function runModelSwitchProbe() {
+  const home = mkdtempSync(join(tmpdir(), "ce-switch-"))
+  const pluginURL = new URL("../src/cache-engine.ts", import.meta.url).href
+  const script = `
+    import { readFileSync } from "node:fs"
+    process.env.CACHE_ENGINE_METRICS_FILE = process.env.HOME + "/switch.jsonl"
+    const { CacheEngine } = await import(${JSON.stringify(pluginURL)})
+    const fake = {
+      app: { log: async () => ({}) },
+      session: { get: async () => ({ data: { parentID: null } }) },
+      tool: { list: async () => ({ data: [] }) },
+    }
+    const hooks = await CacheEngine({ client: fake, directory: process.env.HOME })
+    const GLM = { providerID: "zai", id: "glm-5.3", api: { id: "glm-5.3", npm: "@ai-sdk/openai-compatible" } }
+    const MIMO = { providerID: "xiaomi", id: "mimo-v2.6-flash", api: { id: "mimo-v2.6-flash" } }
+    const GPT = { providerID: "openai", id: "gpt-5.6", api: { id: "gpt-5.6", npm: "@ai-sdk/openai" } }
+    const ORGPT = { providerID: "openrouter", id: "openai/gpt-5.6-sol", api: { id: "openai/gpt-5.6-sol", npm: "@openrouter/ai-sdk-provider" } }
+    const SYS = ["A: keep1", "You are powered by the model named X. The exact model ID is test/X", "Here is some useful information about the environment you are running in:", "<env>", "Today's date: 2026-08-17", "</env>", "B: keep2"].join("\\n")
+    const step = async (sid, model) => {
+      const provider = { source: "config", info: { id: model.providerID }, options: {} }
+      const params = { options: {} }
+      await hooks["chat.params"]({ sessionID: sid, agent: "build", model, provider, message: { id: "m", sessionID: sid, role: "user", content: "x" } }, params)
+      const sys = { system: [SYS] }
+      await hooks["experimental.chat.system.transform"]({ sessionID: sid, model, provider }, sys)
+      const headers = { headers: {} }
+      await hooks["chat.headers"]({ sessionID: sid, agent: "build", model, provider, message: { id: "m", sessionID: sid, role: "user", content: "x" } }, headers)
+      return {
+        gptKeyCamel: params.options.promptCacheKey ?? null,
+        gptKeySnake: params.options.prompt_cache_key ?? null,
+        gptOptsCamel: params.options.promptCacheOptions ?? null,
+        gptOptsSnake: params.options.prompt_cache_options ?? null,
+        relocated: sys.system[0] !== SYS,
+        affinity: headers.headers["x-session-id"] ?? null,
+      }
+    }
+    const sequences = {
+      glm_then_gpt: ["ses_glm_gpt", [GLM, GPT]],
+      gpt_then_glm: ["ses_gpt_glm", [GPT, GLM]],
+      mimo_then_gpt: ["ses_mimo_gpt", [MIMO, GPT]],
+      gpt_then_mimo: ["ses_gpt_mimo", [GPT, MIMO]],
+      oa_then_or: ["ses_oa_or", [GPT, ORGPT]],
+      or_then_oa: ["ses_or_oa", [ORGPT, GPT]],
+      gpt_twice: ["ses_gpt_twice", [GPT, GPT]],
+      glm_twice: ["ses_glm_twice", [GLM, GLM]],
+    }
+    const out = {}
+    for (const [name, [sid, models]] of Object.entries(sequences)) {
+      out[name] = []
+      for (const m of models) out[name].push(await step(sid, m))
+    }
+    const telemetry = readFileSync(process.env.CACHE_ENGINE_METRICS_FILE, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse)
+    process.stdout.write(JSON.stringify({ out, telemetry }))
+  `
+  const stdout = execFileSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], {
+    cwd: process.cwd(),
+    env: { ...process.env, HOME: home },
+    encoding: "utf8",
+  })
+  return JSON.parse(stdout.trim())
+}
+
+let switchProbe
+const switchResults = async () => (switchProbe ??= runModelSwitchProbe())
+
+test("v0.4.12 REGRESSION: GLM→GPT crosses families safely", async () => {
+  const { out } = await switchResults()
+  const [glm, gpt] = out.glm_then_gpt
+  assert.equal(gpt.gptKeyCamel, "ses_glm_gpt") // GPT gets its cache metadata
+  assert.deepEqual(gpt.gptOptsCamel, { mode: "implicit", ttl: "30m" })
+  assert.equal(gpt.gptKeySnake, null)
+  assert.equal(gpt.relocated, false) // GPT system text is not rewritten by GLM policy
+  assert.equal(glm.relocated, true) // GLM (first) relocates
+  assert.equal(glm.gptKeyCamel, null) // GLM never gets GPT cache options
+})
+
+test("v0.4.12 REGRESSION: GPT→GLM crosses families safely", async () => {
+  const { out } = await switchResults()
+  const [gpt, glm] = out.gpt_then_glm
+  assert.equal(gpt.gptKeyCamel, "ses_gpt_glm")
+  assert.equal(gpt.relocated, false)
+  assert.equal(glm.relocated, true) // GLM relocation follows the LIVE model
+  assert.equal(glm.gptKeyCamel, null) // no GPT injection into GLM
+  assert.equal(glm.gptKeySnake, null)
+})
+
+test("v0.4.12 REGRESSION: MiMo↔GPT crosses families safely", async () => {
+  const { out } = await switchResults()
+  const [mimo, gpt] = out.mimo_then_gpt
+  assert.equal(gpt.gptKeyCamel, "ses_mimo_gpt")
+  assert.equal(gpt.relocated, false)
+  assert.equal(mimo.relocated, true)
+  assert.equal(mimo.gptKeyCamel, null)
+
+  const [gpt2, mimo2] = out.gpt_then_mimo
+  assert.equal(gpt2.gptKeyCamel, "ses_gpt_mimo")
+  assert.equal(mimo2.relocated, true)
+  assert.equal(mimo2.gptKeyCamel, null)
+})
+
+test("v0.4.12 REGRESSION: GPT transport follows the live provider (OpenAI ↔ OpenRouter)", async () => {
+  const { out } = await switchResults()
+  const [, orGpt] = out.oa_then_or
+  assert.equal(orGpt.gptKeySnake, "ses_oa_or")
+  assert.equal(orGpt.gptKeyCamel, null)
+
+  const [, oaGpt] = out.or_then_oa
+  assert.equal(oaGpt.gptKeyCamel, "ses_or_oa")
+  assert.equal(oaGpt.gptKeySnake, null)
+})
+
+test("v0.4.12: direct OpenAI never receives OpenRouter-only affinity headers", async () => {
+  const { out } = await switchResults()
+  assert.equal(out.glm_then_gpt[1].affinity, null)
+  assert.equal(out.oa_then_or[0].affinity, null)
+  assert.equal(out.or_then_oa[1].affinity, null)
+  // OpenRouter GPT is not an affinity family either (GPT is not GLM/MiMo).
+  assert.equal(out.oa_then_or[1].affinity, null)
+})
+
+test("v0.4.12: provider-change telemetry reflects the live family, not a stale one", async () => {
+  const { telemetry } = await switchResults()
+  // No cross-family transition should emit a GLM/MiMo provider-change event for
+  // a GPT request (the live model is GPT, and no two same-family observations).
+  const providerChanges = telemetry.filter((r) => r.reason === "glm_provider_changed" || r.reason === "mimo_provider_changed")
+  assert.equal(providerChanges.length, 0)
+  // policy-resolution reflects the live family for both steps.
+  const families = new Set(telemetry.filter((r) => r.kind === "policy-resolution").map((r) => r.family))
+  assert.ok(families.has("gpt-5.6"))
+  assert.ok(families.has("glm-5.3"))
+  assert.ok(families.has("mimo-v2.6"))
+})
+
+test("v0.4.12: same-model repeated requests are unchanged", async () => {
+  const { out } = await switchResults()
+  assert.deepEqual(out.gpt_twice[0], out.gpt_twice[1])
+  assert.deepEqual(out.glm_twice[0], out.glm_twice[1])
+  assert.equal(out.gpt_twice[0].relocated, false)
+  assert.equal(out.glm_twice[0].relocated, true)
+})
