@@ -3289,3 +3289,113 @@ test("v0.4.12: same-model repeated requests are unchanged", async () => {
   assert.equal(out.gpt_twice[0].relocated, false)
   assert.equal(out.glm_twice[0].relocated, true)
 })
+
+// ===========================================================================
+// v0.4.12: low-severity findings F3 (session-state retention), F4 (compaction
+// error telemetry), F5 (OpenRouter provider-ID normalization).
+// ===========================================================================
+
+async function runLowSeverityProbe() {
+  const home = mkdtempSync(join(tmpdir(), "ce-lowsev-"))
+  const pluginURL = new URL("../src/cache-engine.ts", import.meta.url).href
+  const script = `
+    import { readFileSync } from "node:fs"
+    process.env.CACHE_ENGINE_METRICS_FILE = process.env.HOME + "/lowsev.jsonl"
+    const { CacheEngine } = await import(${JSON.stringify(pluginURL)})
+    const fake = {
+      app: { log: async () => ({}) },
+      session: { get: async () => ({ data: { parentID: null } }), messages: async () => ({ data: [] }) },
+      tool: { list: async () => ({ data: [] }) },
+    }
+    const hooks = await CacheEngine({ client: fake, directory: process.env.HOME })
+    const tick = () => new Promise((r) => setTimeout(r, 30))
+    const GPT = { providerID: "openai", id: "gpt-5.6", api: { id: "gpt-5.6", npm: "@ai-sdk/openai" } }
+    const GLM = { providerID: "zai", id: "glm-5.3", api: { id: "glm-5.3", npm: "@ai-sdk/openai-compatible" } }
+    const prov = (id) => ({ source: "config", info: { id }, options: {} })
+    const doParams = async (sid, model) => {
+      const o = { options: {} }
+      await hooks["chat.params"]({ sessionID: sid, agent: "build", model, provider: prov(model.providerID), message: { id: "m", sessionID: sid, role: "user", content: "x" } }, o)
+      return o
+    }
+    const doHeaders = async (providerID) => {
+      const model = { providerID, id: "glm-5.3", api: { id: "glm-5.3", npm: "@ai-sdk/openai-compatible" } }
+      const sid = "ses_h_" + providerID
+      const o = { headers: {} }
+      await hooks["chat.headers"]({ sessionID: sid, agent: "build", model, provider: prov(providerID), message: { id: "m", sessionID: sid, role: "user", content: "x" } }, o)
+      return o.headers["x-session-id"] ?? null
+    }
+
+    // F3: state exists, is dropped on session.deleted, and is recreated.
+    await doParams("ses_f3", GPT)
+    await doParams("ses_f3", GPT)
+    await hooks.event({ event: { type: "session.deleted", properties: { info: { id: "ses_f3" } } } })
+    await doParams("ses_f3", GPT)
+
+    // F3 active-safety: idle/compacted must NOT evict; state is retained.
+    await doParams("ses_f3b", GPT)
+    await hooks.event({ event: { type: "session.idle", properties: { sessionID: "ses_f3b" } } })
+    await tick()
+    await doParams("ses_f3b", GPT)
+
+    // F4: compaction succeeds normally, and a forced failure is recorded once.
+    const okOut = { context: [] }
+    await hooks["experimental.session.compacting"]({ sessionID: "ses_f4_ok" }, okOut)
+    let threw = false
+    try { await hooks["experimental.session.compacting"]({ sessionID: "ses_f4_bad" }, {}) } catch { threw = true }
+
+    // F5: provider-ID normalization for the OpenRouter affinity gate.
+    const affinity = {}
+    for (const p of ["openrouter", " OpenRouter ", "OpenRouter", "openai", "zai"]) affinity[p] = await doHeaders(p)
+
+    await tick()
+    const records = readFileSync(process.env.CACHE_ENGINE_METRICS_FILE, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse)
+    process.stdout.write(JSON.stringify({
+      cacheOptionsF3: records.filter((r) => r.kind === "cache-options" && r.sid === "ses_f3").length,
+      cacheOptionsF3b: records.filter((r) => r.kind === "cache-options" && r.sid === "ses_f3b").length,
+      compactContext: okOut.context.length,
+      compactThrew: threw,
+      telemetryErrors: records.filter((r) => r.kind === "telemetry-error").map((r) => r.error),
+      affinity,
+      affinityProviders: records.filter((r) => r.kind === "boundary" && String(r.reason).startsWith("openrouter_affinity")).map((r) => r.provider),
+    }))
+  `
+  const stdout = execFileSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], {
+    cwd: process.cwd(),
+    env: { ...process.env, HOME: home },
+    encoding: "utf8",
+  })
+  return JSON.parse(stdout.trim())
+}
+
+let lowSevProbe
+const lowSevResults = async () => (lowSevProbe ??= runLowSeverityProbe())
+
+test("v0.4.12 F3: session state is dropped on session.deleted and recreated", async () => {
+  const { cacheOptionsF3, cacheOptionsF3b } = await lowSevResults()
+  // First request emits cache-options once; the repeat is suppressed. After the
+  // session is deleted, a new request recreates fresh state and re-emits.
+  assert.equal(cacheOptionsF3, 2)
+  // Active safety: idle does not evict, so the repeat stays suppressed.
+  assert.equal(cacheOptionsF3b, 1)
+})
+
+test("v0.4.12 F4: compaction records one error without changing output or throwing", async () => {
+  const { compactContext, compactThrew, telemetryErrors } = await lowSevResults()
+  assert.equal(compactContext, 1) // normal compaction still injects the digest
+  assert.equal(compactThrew, false) // the failure is contained
+  assert.equal(telemetryErrors.length, 1) // exactly one bounded error record
+  assert.match(String(telemetryErrors[0]), /undefined|Cannot read/i)
+})
+
+test("v0.4.12 F5: OpenRouter affinity normalizes the provider ID, direct providers isolated", async () => {
+  const { affinity, affinityProviders } = await lowSevResults()
+  assert.ok(affinity["openrouter"], "canonical openrouter gets the header")
+  assert.ok(affinity[" OpenRouter "], "whitespace/case variant gets the header")
+  assert.ok(affinity["OpenRouter"], "case variant gets the header")
+  assert.equal(affinity["openai"], null)
+  assert.equal(affinity["zai"], null)
+  // Telemetry reports the normalized provider identity.
+  assert.equal(affinityProviders.filter((p) => p === "openrouter").length, 3)
+  assert.ok(affinityProviders.includes("openai"))
+  assert.ok(affinityProviders.includes("zai"))
+})
