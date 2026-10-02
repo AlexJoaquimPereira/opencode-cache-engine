@@ -31,13 +31,23 @@ npm pack --dry-run
   testable logic there. `src/tui.mjs` only registers the plugin; it has no
   CacheEngine-specific UI or server behavior.
 - Package exports are separate: `./server` → `src/cache-engine.ts` and `./tui`
-  → `src/tui.mjs`. Check packaging changes with `npm pack --dry-run`.
+  → `src/tui.mjs`. The package is ESM (`"type": "module"`, no `main`) with a
+  `files` whitelist (`src/`, `README.md`, `LICENSE`); the packed tarball ships
+  runtime files only. Check packaging changes with `npm pack --dry-run`.
 - Hooks registered: `chat.headers`, `chat.params`,
   `experimental.chat.system.transform`, `experimental.session.compacting`, and
   `event` (notably `session.idle` usage aggregation).
 - Runtime facts (verified on OpenCode 1.18.34): `client.session.get` takes
   `{ path: { id } }`; SDK methods use `this._client`, so call them as members or
   bind them. `chat.params` marks compaction with `input.agent === "compaction"`.
+- `client.session.messages` is called as `{ path: { id } }` and returns messages
+  **oldest-first** (chronological; `time.created` non-decreasing), NOT
+  newest-first. Usage aggregation keeps `lastProcessedMessageID` (newest
+  processed id) plus a `lastProcessedAt` watermark: it counts assistant messages
+  AFTER the cursor and falls back to the watermark when the cursor id is
+  pruned/reverted, so compaction can never double-count (it undercounts when no
+  safe boundary exists). Do not reintroduce a newest-first or "stop at the cursor
+  scanning from the top" assumption.
 - The system-transform runtime passes one `output.system` element and ignores
   reassignment; mutate `output.system[0]` in place. The plugin's fake-client
   affinity tests exercise `chat.headers` without model calls, but do not prove
