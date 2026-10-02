@@ -151,7 +151,9 @@ The plugin adds:
 }
 ```
 
-The key is derived from the OpenCode session identity and is independent of transient request data. The implementation also preserves existing provider-supplied cache settings rather than overwriting them.
+The key is derived from the OpenCode session identity (or the resolved cache root when that is enabled) and is independent of transient request data, so it is stable across a session.
+
+Key ownership depends on the transport. OpenCode itself pre-sets `promptCacheKey` to the session id for direct OpenAI/Azure, so on ordinary live requests CacheEngine preserves that existing key and writes its own key only when cache-root affinity is enabled. On OpenRouter, where OpenCode sets no key, CacheEngine supplies it. In both cases a cache key provides namespace **stability and isolation**; it does not by itself guarantee a cache hit — provider-reported usage remains the authoritative signal.
 
 ### Important: the prompt text is not rewritten
 
@@ -194,7 +196,7 @@ compaction:
     ses_abc123:compact
 ```
 
-This prevents a compaction-specific prompt from sharing the same GPT cache namespace as the normal live-session prompt. The behavior is deterministic and tested explicitly.
+This prevents a compaction-specific prompt from sharing the same GPT cache namespace as the normal live-session prompt. The behavior is deterministic and tested explicitly, and it is enforced even when OpenCode has already pre-set a live-session key (direct OpenAI/Azure), so a compaction request never reuses the live namespace.
 
 
 ## GLM-5.3 Flash
@@ -1408,7 +1410,7 @@ release, use:
 ```json
 {
   "plugin": [
-    "opencode-cache-engine@0.4.10"
+    "opencode-cache-engine@0.4.11"
   ]
 }
 ```
