@@ -3036,3 +3036,110 @@ test("v0.4.9 REGRESSION: OpenRouter GPT gets snake_case fields; OpenAI keeps cam
   assert.equal(byName("gpt-5.6").gptKeyCamel, "ses_gpt-5.6")
   assert.equal(byName("gpt-5.6-openrouter").gptKeySnake, "ses_gpt-5.6-openrouter")
 })
+
+// ===========================================================================
+// v0.4.11: GPT prompt-cache key ownership and isolation.
+//
+// OpenCode pre-sets promptCacheKey = sessionID for direct OpenAI/Azure (its
+// provider `options()`), but not for OpenRouter. CacheEngine must:
+//   - preserve an existing key on ordinary live requests under the default
+//     (cacheRootKey disabled);
+//   - own the key when cache-root affinity is enabled; and
+//   - apply the compaction-isolation namespace even when a key already exists,
+//     otherwise a compaction request shares the live-session GPT cache.
+// ===========================================================================
+
+async function runGptKeyProbe() {
+  const home = mkdtempSync(join(tmpdir(), "ce-gptkey-"))
+  const pluginURL = new URL("../src/cache-engine.ts", import.meta.url).href
+  const script = `
+    import { mkdirSync, writeFileSync } from "node:fs"
+    process.env.CACHE_ENGINE_METRICS_FILE = process.env.HOME + "/gptkey.jsonl"
+    const { CacheEngine } = await import(${JSON.stringify(pluginURL)})
+    const mkClient = (parents) => ({
+      app: { log: async () => ({}) },
+      session: { get: async (o) => ({ data: { parentID: parents[o?.path?.id] ?? null } }) },
+      tool: { list: async () => ({ data: [] }) },
+    })
+    const run = async (hooks, { sid, agent, providerID, modelID, npm, pre }) => {
+      const out = { options: { ...(pre ?? {}) } }
+      await hooks["chat.params"]({
+        sessionID: sid, agent,
+        model: { providerID, id: modelID, api: { id: modelID, npm } },
+        provider: { source: "config", info: { id: providerID }, options: {} },
+        message: { id: "m-"+sid+"-"+agent, sessionID: sid, role: "user", content: "x" },
+      }, out)
+      return out.options
+    }
+    const hooksDefault = await CacheEngine({ client: mkClient({}), directory: process.env.HOME })
+    const OA = { providerID: "openai", modelID: "gpt-5.6", npm: "@ai-sdk/openai" }
+    const OR = { providerID: "openrouter", modelID: "openai/gpt-5.6-sol", npm: "@openrouter/ai-sdk-provider" }
+    const result = {
+      liveNoKey: await run(hooksDefault, { sid: "ses_A", agent: "build", ...OA }),
+      liveExisting: await run(hooksDefault, { sid: "ses_A", agent: "build", ...OA, pre: { promptCacheKey: "opencode-sid" } }),
+      liveUserKey: await run(hooksDefault, { sid: "ses_A", agent: "build", ...OA, pre: { promptCacheKey: "user-key" } }),
+      compExisting: await run(hooksDefault, { sid: "ses_A", agent: "compaction", ...OA, pre: { promptCacheKey: "ses_A" } }),
+      compNoKey: await run(hooksDefault, { sid: "ses_A", agent: "compaction", ...OA }),
+      liveRepeat: await run(hooksDefault, { sid: "ses_A", agent: "build", ...OA }),
+      otherSession: await run(hooksDefault, { sid: "ses_B", agent: "build", ...OA }),
+      orLive: await run(hooksDefault, { sid: "ses_A", agent: "build", ...OR }),
+      orComp: await run(hooksDefault, { sid: "ses_A", agent: "compaction", ...OR }),
+    }
+    mkdirSync(process.env.HOME + "/.config/opencode", { recursive: true })
+    writeFileSync(process.env.HOME + "/.config/opencode/cache-engine.json", JSON.stringify({ policies: { gpt56: { cacheRootKey: true } } }))
+    const hooksRoot = await CacheEngine({ client: mkClient({ ses_child: "ses_parent" }), directory: process.env.HOME })
+    result.rootLive = await run(hooksRoot, { sid: "ses_child", agent: "build", ...OA })
+    result.rootComp = await run(hooksRoot, { sid: "ses_child", agent: "compaction", ...OA })
+    process.stdout.write(JSON.stringify(result))
+  `
+  const stdout = execFileSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], {
+    cwd: process.cwd(),
+    env: { ...process.env, HOME: home },
+    encoding: "utf8",
+  })
+  return JSON.parse(stdout.trim())
+}
+
+let gptKeyProbe
+const gptKeyResults = async () => (gptKeyProbe ??= runGptKeyProbe())
+
+test("v0.4.11: live requests preserve an existing GPT key under the default config", async () => {
+  const r = await gptKeyResults()
+  assert.equal(r.liveNoKey.promptCacheKey, "ses_A") // no key -> session-derived
+  assert.equal(r.liveExisting.promptCacheKey, "opencode-sid") // OpenCode key preserved
+  assert.equal(r.liveUserKey.promptCacheKey, "user-key") // user key preserved
+  assert.deepEqual(r.liveNoKey.promptCacheOptions, { mode: "implicit", ttl: "30m" })
+})
+
+test("v0.4.11 REGRESSION: compaction isolation overrides an existing live key", async () => {
+  const r = await gptKeyResults()
+  // OpenCode pre-set the live-session key; the compaction request must not share it.
+  assert.equal(r.compExisting.promptCacheKey, "ses_A:compact")
+  assert.equal(r.compNoKey.promptCacheKey, "ses_A:compact")
+  // OpenRouter (no pre-set key) already isolates; keep it working.
+  assert.equal(r.orComp.prompt_cache_key, "ses_A:compact")
+})
+
+test("v0.4.11: keys are stable per session and distinct across sessions", async () => {
+  const r = await gptKeyResults()
+  assert.equal(r.liveRepeat.promptCacheKey, r.liveNoKey.promptCacheKey) // repeated request
+  assert.equal(r.otherSession.promptCacheKey, "ses_B")
+  assert.notEqual(r.otherSession.promptCacheKey, r.liveNoKey.promptCacheKey)
+})
+
+test("v0.4.11: cache-root mode uses the root key; disabled mode ignores the root", async () => {
+  const r = await gptKeyResults()
+  // Default (cacheRootKey false): a child session keys on its own session id.
+  assert.equal(r.liveNoKey.promptCacheKey, "ses_A")
+  // Enabled: the descendant keys on the resolved root, with its own compact namespace.
+  assert.equal(r.rootLive.promptCacheKey, "ses_parent")
+  assert.equal(r.rootComp.promptCacheKey, "ses_parent:compact")
+})
+
+test("v0.4.11: transport field names are respected for live and compaction keys", async () => {
+  const r = await gptKeyResults()
+  assert.equal(r.liveNoKey.promptCacheKey, "ses_A")
+  assert.equal(r.liveNoKey.prompt_cache_key, undefined)
+  assert.equal(r.orLive.prompt_cache_key, "ses_A")
+  assert.equal(r.orLive.promptCacheKey, undefined)
+})
