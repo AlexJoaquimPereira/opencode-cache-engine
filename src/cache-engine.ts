@@ -130,6 +130,7 @@ type SessionState = {
   toolCount: number | null
   lastToolFetchAt: number | null
   lastProcessedMessageID: string | null
+  lastProcessedAt: number | null
   read: number
   write: number
   input: number
@@ -180,6 +181,7 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
         toolCount: null,
         lastToolFetchAt: null,
         lastProcessedMessageID: null,
+        lastProcessedAt: null,
         read: 0,
         write: 0,
         input: 0,
@@ -391,15 +393,18 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
       const startCursor = s.lastProcessedMessageID
       const res = await listMessages({ path: { id: sid } })
       const messages = res?.data ?? []
-      const scanned = scanPage(messages, startCursor)
+      const scanned = scanPage(messages, startCursor, s.lastProcessedAt)
       const read = scanned.read
       const write = scanned.write
       const input = scanned.input
       const count = scanned.count
       const reachedStart = scanned.reachedStart
-      const reasoningNewestFirst = scanned.reasoning
+      const reasoningChronological = scanned.reasoning
 
       s.lastProcessedMessageID = nextProcessedCursor(messages, startCursor)
+      if (scanned.maxCreated != null) {
+        s.lastProcessedAt = s.lastProcessedAt == null ? scanned.maxCreated : Math.max(s.lastProcessedAt, scanned.maxCreated)
+      }
 
       const caps = s.modelInfo?.caps
       const glmIntegrity =
@@ -407,11 +412,11 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
         policyEnabled(cfg, caps.policy) &&
         cfg.policies?.[caps.policy]?.preserveThinkingIntegrity === true
 
-      if (glmIntegrity && reasoningNewestFirst.length > 0) {
-        // messages arrive newest-first; process oldest->newest so `seen` grows
-        // naturally and `lastSeq` reflects the previous assistant reasoning.
-        const chronological = [...reasoningNewestFirst].reverse()
-        for (const { id, hashes } of chronological) {
+      if (glmIntegrity && reasoningChronological.length > 0) {
+        // scanPage returns messages oldest-first, so reasoning is already
+        // chronological: process it directly so `seen` grows naturally and
+        // `lastSeq` reflects the previous assistant reasoning.
+        for (const { id, hashes } of reasoningChronological) {
           // within-message duplicate reasoning (duplicated reasoning blocks)
           const issues = detectReasoningIssues(hashes, s.reasoningLastSeq, s.reasoningSeen)
           // `seen` holds hashes from EARLIER messages; refresh it AFTER the check.
