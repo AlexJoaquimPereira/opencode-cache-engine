@@ -657,6 +657,14 @@ A usage record can contain fields such as:
 }
 ```
 
+Usage is aggregated from assistant messages when a session goes idle. Messages
+are read in chronological (oldest-first) order and only those newer than the
+session's last-processed cursor are counted, so repeated idle events never
+double-count. The cursor is backed by a `time.created` watermark, so a
+compaction or revert that removes the cursor message cannot inflate the totals;
+when no safe boundary is available the collector undercounts rather than
+double-counts.
+
 A prefix-change record can look like:
 
 ```json
@@ -1104,7 +1112,7 @@ It owns:
 * cache-option generation
 * GLM environment relocation
 * reasoning diagnostics
-* usage aggregation
+* usage aggregation (chronological cursor + `time.created` watermark)
 * compaction guards
 
 Keeping these functions in plain JavaScript allows the logic to be tested independently with Node's built-in test runner.
@@ -1192,6 +1200,7 @@ Coverage includes:
 * cache-hit calculations
 * unknown and future model resolution, using synthetic identifiers
 * policy-match telemetry classification and content safety
+* chronological usage-cursor aggregation and compaction-safe (watermark) accounting
 * configuration behavior
 * JSONL telemetry behavior
 
