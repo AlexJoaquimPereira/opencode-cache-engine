@@ -508,3 +508,24 @@ of this section.
   OpenAI/Azure keep the camelCase options that their SDK serializes correctly.
   Verified against `@openrouter/ai-sdk-provider@2.9.0`, `@ai-sdk/openai@3.0.88`,
   `@ai-sdk/azure@3.0.93`, `ai@6.0.168`.
+
+### Follow-up: v0.4.10 `<env>` relocation validation (2026-10-02)
+
+- **Correctness (FACT).** `relocateVolatileEnvBlock` preserves all text and the
+  env-block bytes, is deterministic and idempotent, and now requires exactly one
+  `START`/`<env>`/`</env>` marker in order. Ambiguous, multiple-marker, missing,
+  and malformed cases are left byte-identical. It is applied only for the
+  validated `zai.glm-5.3` and `xiaomi.mimo-v2.6` entries (the `*-plus` baseline
+  entries have no `envRelocation`) and only when the single system element is
+  eligible.
+- **Cache benefit (UNVERIFIED).** A controlled A/B through OpenRouter (ordinary
+  short prompts ~6.3K; env block early vs relocated to the tail; a date change
+  between a warm and a test request) did **not** show a position-dependent cache
+  benefit. GLM cached ~6.2K regardless of layout (tail −880 vs early, i.e.
+  noise/negative) and the identical-repeat control varied by ~750 tokens; MiMo
+  reported the same cached count either way. Upstream implicit-cache semantics
+  cannot be controlled from the plugin, and OpenRouter routing is best-effort, so
+  the relocation's cache improvement is **not established**. Provider-reported
+  usage remains authoritative.
+- No policy-scope change was made; the only runtime change is the
+  unambiguous-only guard (a defect fix, covered by regression tests).
