@@ -76,9 +76,16 @@ import { explainPolicyResolution, resolveRuntimePolicy } from "./cache-policy-co
 // ---------------------------------------------------------------------------
 
 const TOOL_FETCH_TTL_MS = 1500
+// Bound on remembered per-identity tool-fetch timestamps within one session.
+const TOOL_FETCH_CACHE_CAP = 64
 const REASONING_SEEN_CAP = 5000
 const ROOT_HOPS_MAX = 16
 const ROOT_CACHE_TTL_MS = 30_000
+// Deleted-session tombstones (N4): time-based so a freshly-deleted id is never
+// evicted by count pressure before queued/idle work can drain; the count cap is
+// only a secondary memory bound.
+const DELETED_SESSIONS_TTL_MS = 10 * 60_000
+const DELETED_SESSIONS_CAP = 8192
 // Upper bound on remembered policy resolutions per session, so alternation
 // between models cannot grow the set (or the telemetry file) without limit.
 const RESOLUTION_KEYS_CAP = 16
@@ -129,7 +136,11 @@ type SessionState = {
   modelInfo: ModelInfo | null
   tools: ToolCache | null
   toolCount: number | null
-  lastToolFetchAt: number | null
+  // Per-identity tool-fetch cache: each provider+model keeps its own TTL window
+  // AND its own fingerprints, so a suppressed repeat restores the correct values
+  // instead of leaving another identity's in the per-session slot. Bounded
+  // (oldest identity evicted past the cap).
+  toolFetch: Map<string, { at: number; tools: ToolCache; toolCount: number | null }>
   lastProcessedMessageID: string | null
   lastProcessedAt: number | null
   read: number
@@ -145,6 +156,13 @@ type SessionState = {
   mimoProvider: { providerID: string; modelID: string } | null
   glmProvider: { providerID: string; modelID: string } | null
   resolutionKeys: Set<string>
+  // Per-session tail of the background usage-collection chain (N1): serializes
+  // concurrent `session.idle` collections so they never capture the same cursor.
+  collectChain: Promise<void>
+  // Set by the session.deleted handler on the object it removes. Queued/async
+  // work holds this exact object and skips if it was deleted, so the guard does
+  // NOT depend on the bounded tombstone set (N4).
+  deleted: boolean
 }
 
 const emptyShape = (): Shape => ({
@@ -171,6 +189,20 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
   const rec = createRecorder(cfg.metricsFile)
 
   const sessions = new Map<string, SessionState>()
+  // Tombstones for explicitly deleted sessions (N4): a late or queued
+  // `session.idle` must not resurrect per-session state after
+  // `session.deleted`. Time-based (see TTL); a genuine new request for the same
+  // id clears the tombstone (see rememberModel).
+  const deletedSessions = new Map<string, number>()
+  const isDeleted = (sid: string): boolean => {
+    const at = deletedSessions.get(sid)
+    if (at == null) return false
+    if (Date.now() - at > DELETED_SESSIONS_TTL_MS) {
+      deletedSessions.delete(sid)
+      return false
+    }
+    return true
+  }
   const get = (sid: string): SessionState => {
     let s = sessions.get(sid)
     if (!s) {
@@ -180,7 +212,7 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
         modelInfo: null,
         tools: null,
         toolCount: null,
-        lastToolFetchAt: null,
+        toolFetch: new Map(),
         lastProcessedMessageID: null,
         lastProcessedAt: null,
         read: 0,
@@ -196,6 +228,8 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
         mimoProvider: null,
         glmProvider: null,
         resolutionKeys: new Set(),
+        collectChain: Promise.resolve(),
+        deleted: false,
       }
       sessions.set(sid, s)
     }
@@ -330,6 +364,9 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
   // latched info, so one family's capabilities can never authorize mutations for
   // another live model.
   const rememberModel = (sid: string, model: ChatParamsModel | undefined): ModelInfo | null => {
+    // A genuine request for this session id means it is live again; clear any
+    // deletion tombstone so legitimate state creation is never blocked.
+    deletedSessions.delete(sid)
     if (!model) return null
     // Single runtime source of policy classification: the registry resolver.
     const caps = resolveRuntimePolicy(model) as PolicyRuntime
@@ -366,19 +403,38 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
       return
     }
     const now = Date.now()
-    if (s.lastToolFetchAt != null && now - s.lastToolFetchAt < TOOL_FETCH_TTL_MS) return
+    // TTL and fingerprints are tracked per provider+model identity: each identity
+    // keeps its own window and its own hashes, so a title/summary request cannot
+    // reuse (and misattribute) another model's fingerprints, and a repeat of an
+    // earlier identity within its own window restores that identity's values.
+    // The per-session cache is bounded.
+    const fetchKey = `${providerID}\u0000${apiID}`
+    const cached = s.toolFetch.get(fetchKey)
+    if (cached && now - cached.at < TOOL_FETCH_TTL_MS) {
+      s.tools = cached.tools
+      s.toolCount = cached.toolCount
+      return
+    }
     try {
       const res = await (client.tool.list as unknown as (opts: {
         query: { directory: string; provider: string; model: string }
       }) => Promise<{ data?: ToolDef[] }>)({
         query: { directory, provider: providerID, model: apiID },
       })
-      s.lastToolFetchAt = now
-      s.tools = {
+      const tools: ToolCache = {
         semanticToolsHash: toolFingerprint(res?.data),
         wireToolsHash: toolWireFingerprint(res?.data),
       }
-      s.toolCount = Array.isArray(res?.data) ? res.data.length : null
+      const toolCount = Array.isArray(res?.data) ? res.data.length : null
+      s.tools = tools
+      s.toolCount = toolCount
+      // delete+set so a re-fetched identity moves to the end (last-use order).
+      s.toolFetch.delete(fetchKey)
+      s.toolFetch.set(fetchKey, { at: now, tools, toolCount })
+      if (s.toolFetch.size > TOOL_FETCH_CACHE_CAP) {
+        const oldest = s.toolFetch.keys().next().value
+        if (oldest !== undefined) s.toolFetch.delete(oldest)
+      }
     } catch {
       // Unknown tool shape: leave fingerprints null (no retry TTL) so a
       // transient failure is never misreported as a tool change.
@@ -390,13 +446,16 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
   // Aggregate cache tokens + reasoning-integrity signals from all messages
   // newer than the last-processed boundary. One SDK call returns the history;
   // OpenCode paginates internally when no limit is supplied.
-  const collectUsage = async (sid: string): Promise<void> => {
+  const collectUsageOnce = async (sid: string, s: SessionState): Promise<void> => {
+    // N4: skip if this exact session object was deleted (captured object flag,
+    // so the guard is independent of the bounded tombstone set) or if a
+    // tombstone still covers the id.
+    if (s.deleted || isDeleted(sid)) return
     try {
       // V1.18.33 shape: { path: { id } } -> { data?: MessagePage[] }. Methods use
       // `this._client`, so invoke with .call() to preserve the receiver binding.
       const listMessages = (opts: { path: { id: string } }): Promise<SessionMessagesResult> =>
         (client.session.messages as unknown as (o: { path: { id: string } }) => Promise<SessionMessagesResult>).call(client.session, opts)
-      const s = get(sid)
       const startCursor = s.lastProcessedMessageID
       const res = await listMessages({ path: { id: sid } })
       const messages = res?.data ?? []
@@ -475,11 +534,14 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
           cumulativeHitRate: hitRatePct(s.read, s.write),
           cursor: s.lastProcessedMessageID,
         }
-        if (s.modelInfo) {
-          recFields.provider = s.modelInfo.providerID
-          recFields.model = s.modelInfo.modelID
-          recFields.policy = s.modelInfo.family
+        // Attribute usage to the counted assistant messages' own identity when
+        // available (per-message), then the live observed MiMo provider, then the
+        // latched session model as a safe fallback.
+        if (s.modelInfo || scanned.providerID || s.mimoProvider) {
+          recFields.provider = scanned.providerID ?? s.mimoProvider?.providerID ?? s.modelInfo?.providerID
+          recFields.model = scanned.modelID ?? s.mimoProvider?.modelID ?? s.modelInfo?.modelID
         }
+        if (s.modelInfo) recFields.policy = s.modelInfo.family
         if (caps?.cacheRatio === "glm") {
           recFields.promptTokens = read + write + input
           recFields.glmHitRate = glmHitRatio(read, write, input)
@@ -497,14 +559,9 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
           if (cfg.policies?.[caps.policy]?.stickySession === true) {
             recFields.stickySessionId = mimoSessionIdFor(sid)
           }
-          // Prefer the latest live provider identity over the latched one.
-          if (s.mimoProvider) {
-            recFields.provider = s.mimoProvider.providerID
-            recFields.model = s.mimoProvider.modelID
-          }
         }
         if (caps?.gptCacheMetadata === true && s.gptInjected) {
-          recFields.keyStrategy = "session"
+          recFields.keyStrategy = cfg.policies?.[caps.policy]?.cacheRootKey !== false ? "cache-root" : "session"
           recFields.mode = cfg.policies?.[caps.policy]?.mode
           recFields.ttl = cfg.policies?.[caps.policy]?.ttl
         }
@@ -522,6 +579,22 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
     } catch (e) {
       rec.record({ kind: "telemetry-error", ts: Date.now(), error: String(e) })
     }
+  }
+
+  // N1: serialize per-session collections. Each `session.idle` appends a link to
+  // the session's chain, so a second collection re-reads `lastProcessedMessageID`
+  // only after the first has advanced it: no double-count, and no follow-up is
+  // lost. N4: tombstoned sessions are dropped before `get()` can recreate state.
+  // The internal catch keeps the fire-and-forget caller free of unhandled
+  // rejections while preserving the chain for later links.
+  const collectUsage = (sid: string): Promise<void> => {
+    if (isDeleted(sid)) return Promise.resolve()
+    const s = get(sid)
+    const run = s.collectChain.then(() => collectUsageOnce(sid, s)).catch((e) => {
+      rec.record({ kind: "telemetry-error", ts: Date.now(), error: String(e) })
+    })
+    s.collectChain = run
+    return run
   }
 
   const prefixFields = (shape: Shape, toolCount: number | null) => ({
@@ -779,7 +852,7 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
             compaction,
             namespace: isolated ? "compact" : "live",
             key: desiredKey,
-            options: { ...(output.options.promptCacheOptions ?? {}) },
+            options: { ...(output.options[fieldNames.options] ?? {}) },
           })
 
           if (applyRoot && rootRes!.source === "parent" && rootRes!.hops > 0) {
@@ -847,8 +920,25 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
         if (event.type === "session.deleted") {
           const sid = event.properties.info?.id
           if (sid) {
+            // Mark the exact object first: any queued/async work holding it is
+            // now guaranteed to skip, regardless of the bounded tombstone set.
+            const s = sessions.get(sid)
+            if (s) s.deleted = true
             sessions.delete(sid)
             effortByRoot.delete(sid)
+            // N4: block stale/queued idle collection from recreating state.
+            deletedSessions.set(sid, Date.now())
+            if (deletedSessions.size > DELETED_SESSIONS_CAP) {
+              const cutoff = Date.now() - DELETED_SESSIONS_TTL_MS
+              for (const [k, at] of deletedSessions) {
+                if (at < cutoff) deletedSessions.delete(k)
+              }
+              while (deletedSessions.size > DELETED_SESSIONS_CAP) {
+                const oldest = deletedSessions.keys().next().value
+                if (oldest === undefined) break
+                deletedSessions.delete(oldest)
+              }
+            }
           }
           return
         }
