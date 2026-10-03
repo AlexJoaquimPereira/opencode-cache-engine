@@ -113,10 +113,43 @@ npm pack --dry-run
   runtime-facing changes, use the fake-client/no-model harness where applicable
   and distinguish tested hook logic from unverified network behavior.
 
+## External research findings (search last, store always)
+
+Web search is the last resort, not the first step. Before searching for provider
+cache semantics, cache-control/cache-key/usage-field behavior, OpenCode runtime
+or SDK behavior, or OpenRouter transport behavior, consult the two tracked
+stores:
+
+- `docs/cache-policy-inventory.md` — per-model compatibility evidence: creator
+  docs, verification dates, compatibility matrix.
+- `docs/research-findings.md` — cross-model findings about the harness and
+  transports: OpenCode runtime/SDK/plugin API, OpenRouter routing, AI-SDK and
+  provider-package serialization, and provider API mechanics.
+
+Both use the same evidence tags: `[D]` documented, `[O]` observed, `[I]` inferred,
+`[U]` unknown. Cite a finding ID (`RF-OC-001`) instead of restating the fact.
+
+- Never re-search a fact already recorded with `Status: current` whose
+  `Version context` still matches the installed toolchain.
+- Record every newly verified first-party fact using the entry template in
+  `docs/research-findings.md` (harness/transport/API mechanics) or in the
+  inventory (per-model compatibility). A research session that fetches a source
+  and does not store the fact is not finished.
+- Give a concrete `Re-verify when:` trigger, not a date. IDs are immutable and
+  never reused; supersede by pointing forward with `Superseded by:`.
+- Store facts, never payloads: no prompt text, reasoning content, credentials,
+  authorization headers, or request/response bodies.
+- `audit-report-*.md` and `session-*.md` are gitignored and lost on a fresh
+  clone. Promote anything durable from them into one of the two tracked files.
+- Unsure whether something is already recorded? Search both files first; that is
+  cheaper than a fetch and it is the reason they exist.
+
 ## Future-model maintenance procedure (audit first)
 
 Use this whenever a newly released model needs a compatibility review. It is an
-AUDIT FIRST task: web search is allowed, runtime code changes are not.
+AUDIT FIRST task: web search is allowed, runtime code changes are not. Start
+from `docs/research-findings.md` and `docs/cache-policy-inventory.md`; search
+only for the gaps they do not cover, and store anything new you verify.
 
 Establish the model id and creator, then determine from **first-party creator
 documentation**:
@@ -132,8 +165,9 @@ documentation**:
 9. whether the model inherits the creator's existing family cache policy
 10. whether any existing CacheEngine overlay is applicable
 
-Compare the findings against `docs/cache-policy-inventory.md`, the current policy
-resolver (`src/cache-policy-core.mjs`), and the current tests.
+Compare the findings against `docs/cache-policy-inventory.md`,
+`docs/research-findings.md`, the current policy resolver
+(`src/cache-policy-core.mjs`), and the current tests.
 
 Classify the model as exactly one of:
 
