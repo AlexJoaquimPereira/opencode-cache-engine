@@ -256,7 +256,12 @@ const GPT_CACHE_FIELDS_CAMEL = { key: "promptCacheKey", options: "promptCacheOpt
 const GPT_CACHE_FIELDS_SNAKE = { key: "prompt_cache_key", options: "prompt_cache_options" }
 
 export function gptCacheOptionFieldNames({ providerID, npm } = {}) {
-  const openrouter = providerID === "openrouter" || npm === "@openrouter/ai-sdk-provider"
+  // Normalize defensively (the same boundary rule the chat.headers affinity gate
+  // uses): casing/whitespace must never select camelCase fields for an
+  // OpenRouter request, because OpenRouter forwards providerOptions verbatim and
+  // silently ignores camelCase cache fields.
+  const normalizedProviderID = String(providerID ?? "").trim().toLowerCase()
+  const openrouter = normalizedProviderID === "openrouter" || npm === "@openrouter/ai-sdk-provider"
   return openrouter ? { ...GPT_CACHE_FIELDS_SNAKE } : { ...GPT_CACHE_FIELDS_CAMEL }
 }
 
@@ -629,6 +634,9 @@ export function scanPage(page, startCursor, sinceCreated = null) {
   let count = 0
   let maxCreated = null
   const reasoning = []
+  // Identity of the NEWEST counted assistant message (per-message attribution).
+  let providerID = null
+  let modelID = null
   for (let i = found ? cursorIndex + 1 : 0; i < list.length; i++) {
     const m = list[i]
     const info = m && m.info
@@ -647,12 +655,14 @@ export function scanPage(page, startCursor, sinceCreated = null) {
       write += t.cache && Number.isFinite(t.cache.write) ? t.cache.write : 0
       input += Number.isFinite(t.input) ? t.input : 0
       count += 1
+      if (typeof info.providerID === "string" && info.providerID.length > 0) providerID = info.providerID
+      if (typeof info.modelID === "string" && info.modelID.length > 0) modelID = info.modelID
       const rh = reasoningHashesFor(m)
       if (rh.length > 0) reasoning.push({ id, hashes: rh })
     }
   }
   // `reachedStart` reports whether the id boundary was located (or none was set).
-  return { read, write, input, count, reachedStart: found, seenIds: [], reasoning, maxCreated }
+  return { read, write, input, count, reachedStart: found, seenIds: [], reasoning, maxCreated, providerID, modelID }
 }
 
 // Compute the new `lastProcessedMessageID` after scanning. The page is
