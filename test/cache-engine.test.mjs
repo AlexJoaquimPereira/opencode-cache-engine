@@ -3399,3 +3399,259 @@ test("v0.4.12 F5: OpenRouter affinity normalizes the provider ID, direct provide
   assert.ok(affinityProviders.includes("openai"))
   assert.ok(affinityProviders.includes("zai"))
 })
+
+// ===========================================================================
+// v0.4.13: N1 usage-collection concurrency, N2 OpenRouter option telemetry,
+// N5 telemetry attribution (per-message identity, key strategy, per-model tool
+// TTL). N3 is a pure field-name normalization covered by a direct unit test.
+// ===========================================================================
+
+async function runN1N5Probe() {
+  const home = mkdtempSync(join(tmpdir(), "ce-n1n5-"))
+  const pluginURL = new URL("../src/cache-engine.ts", import.meta.url).href
+  const script = `
+    import { mkdirSync, writeFileSync, readFileSync } from "node:fs"
+    process.env.CACHE_ENGINE_METRICS_FILE = process.env.HOME + "/n1n5.jsonl"
+    mkdirSync(process.env.HOME + "/.config/opencode", { recursive: true })
+    // Enable GPT cache-root keys so the N5 key-strategy telemetry is observable.
+    writeFileSync(process.env.HOME + "/.config/opencode/cache-engine.json", JSON.stringify({ policies: { gpt56: { cacheRootKey: true } } }))
+    const { CacheEngine } = await import(${JSON.stringify(pluginURL)})
+    const responses = {}
+    const toollistQueries = []
+    let n1Calls = 0
+    let releaseN1
+    const n1Gate = new Promise((r) => { releaseN1 = r })
+    const fake = {
+      app: { log: async () => ({}) },
+      session: {
+        get: async () => ({ data: { parentID: null } }),
+        messages: async (opts) => {
+          const id = opts && opts.path && opts.path.id
+          const r = responses[id]
+          if (typeof r === "function") return await r()
+          return r || { data: [] }
+        },
+      },
+      tool: {
+        list: async (opts) => {
+          const m = opts && opts.query && opts.query.model
+          toollistQueries.push(m)
+          const n = String(m).indexOf("alt") >= 0 ? 2 : 1
+          const data = []
+          for (let i = 0; i < n; i++) data.push({ id: String(m) + "-" + i })
+          return { data }
+        },
+      },
+    }
+    const hooks = await CacheEngine({ client: fake, directory: process.env.HOME })
+    const tick = () => new Promise((r) => setTimeout(r, 30))
+    const mkAst = (id, read, write, input, providerID, modelID) => ({
+      info: { id, role: "assistant", providerID, modelID, tokens: { input, output: 1, cache: { read, write } }, time: { created: Date.now() } },
+      parts: [],
+    })
+    const setModel = async (sid, providerID, modelID) => {
+      const o = { options: {} }
+      await hooks["chat.params"]({
+        sessionID: sid, agent: "build",
+        model: { providerID, id: modelID, api: { id: modelID } },
+        provider: { source: "config", info: { id: providerID }, options: {} },
+        message: { id: "u-" + sid, sessionID: sid, role: "user", content: "x" },
+      }, o)
+      return o
+    }
+    const idle = (sid) => hooks.event({ event: { type: "session.idle", properties: { sessionID: sid } } })
+
+    // N1: first messages call is gated; a second idle arrives before it resolves.
+    responses["ses_n1"] = () => {
+      n1Calls += 1
+      const page = { data: [mkAst("n1a", 100, 20, 5)] }
+      return n1Calls === 1 ? n1Gate.then(() => page) : page
+    }
+    await setModel("ses_n1", "deepseek", "deepseek-flash")
+    await idle("ses_n1")
+    await idle("ses_n1")
+    releaseN1()
+    await tick()
+
+    // N2: OpenRouter GPT cache-options telemetry must carry the injected options.
+    await setModel("ses_n2", "openrouter", "openai/gpt-5.6-sol")
+
+    // N5.1: assistant message identity differs from the latched session model.
+    responses["ses_attr"] = { data: [mkAst("at1", 100, 0, 10, "openai", "gpt-5.6")] }
+    await setModel("ses_attr", "deepseek", "deepseek-flash")
+    await idle("ses_attr")
+
+    // N5.2: GPT usage key strategy must reflect the enabled cache-root mode.
+    responses["ses_key"] = { data: [mkAst("k1", 100, 0, 10, "openai", "gpt-5.6")] }
+    await setModel("ses_key", "openai", "gpt-5.6")
+    await idle("ses_key")
+
+    // N5.3: a second model within the TTL window must trigger its own fetch.
+    const transform = (sid, model) => hooks["experimental.chat.system.transform"](
+      { sessionID: sid, model, provider: { source: "config", info: { id: model.providerID }, options: {} } },
+      { system: ["base system"] },
+    )
+    await transform("ses_tools", { providerID: "zai", id: "glm-5.3", api: { id: "glm-5.3" } })
+    await transform("ses_tools", { providerID: "zai", id: "glm-5.3-alt", api: { id: "glm-5.3-alt" } })
+    // Repeat the FIRST identity within its own window: it must be suppressed
+    // independently (not merely because it was the most recently seen identity).
+    await transform("ses_tools", { providerID: "zai", id: "glm-5.3", api: { id: "glm-5.3" } })
+
+    // N1 recovery: a failed collection must not block later collections.
+    let recCalls = 0
+    responses["ses_rec"] = () => {
+      recCalls += 1
+      if (recCalls === 1) throw new Error("boom-rec")
+      return { data: [mkAst("r1", 100, 20, 5)] }
+    }
+    await setModel("ses_rec", "deepseek", "deepseek-flash")
+    await idle("ses_rec")
+    await idle("ses_rec")
+    await tick()
+
+    // N4: a late idle after session.deleted must not resurrect per-session state.
+    responses["ses_del"] = { data: [mkAst("d1", 100, 20, 5)] }
+    await setModel("ses_del", "deepseek", "deepseek-flash")
+    await hooks.event({ event: { type: "session.deleted", properties: { info: { id: "ses_del" } } } })
+    await idle("ses_del")
+    await tick()
+
+    // N4 in-flight: a QUEUED collection (idle2 behind a slow idle1) must not
+    // resurrect state after delete, even when tombstones are flooded past the
+    // cap. The captured object flag (not the bounded set) is what protects it.
+    let delCalls = 0
+    let releaseDel
+    const delGate = new Promise((r) => { releaseDel = r })
+    responses["ses_del2"] = () => {
+      delCalls += 1
+      if (delCalls === 1) return delGate.then(() => ({ data: [mkAst("d2", 100, 20, 5)] }))
+      return { data: [mkAst("d2", 100, 20, 5), mkAst("d3", 50, 10, 5)] }
+    }
+    await setModel("ses_del2", "deepseek", "deepseek-flash")
+    await idle("ses_del2")
+    await idle("ses_del2")
+    await hooks.event({ event: { type: "session.deleted", properties: { info: { id: "ses_del2" } } } })
+    for (let i = 0; i < 9000; i++) {
+      await hooks.event({ event: { type: "session.deleted", properties: { info: { id: "ses_flood_" + i } } } })
+    }
+    releaseDel()
+    await tick()
+
+    const readRecords = () => readFileSync(process.env.CACHE_ENGINE_METRICS_FILE, "utf8").trim().split("\\n").filter(Boolean).map((l) => JSON.parse(l))
+    const usage = (recs, sid) => recs.filter((r) => r.kind === "usage" && r.sid === sid)
+    let records = readRecords()
+    const n1 = usage(records, "ses_n1")
+    const n4AfterDelete = usage(records, "ses_del").length
+    const n4InFlight = usage(records, "ses_del2").length
+    const n1Recovery = usage(records, "ses_rec").length
+    const n1RecoveryErrors = records.filter((r) => r.kind === "telemetry-error" && String(r.error).indexOf("boom-rec") >= 0).length
+
+    // A genuine new request for the same id clears the tombstone (legit reuse).
+    await setModel("ses_del", "deepseek", "deepseek-flash")
+    await idle("ses_del")
+    await tick()
+    records = readRecords()
+    const n4AfterRecreate = usage(records, "ses_del").length
+
+    process.stdout.write(JSON.stringify({
+      n1UsageCount: n1.length,
+      n1Cumulative: n1[0] ? n1[0].cumulative : null,
+      n2Options: (records.find((r) => r.kind === "cache-options" && r.sid === "ses_n2") || {}).options || null,
+      attr: usage(records, "ses_attr")[0] || null,
+      keyStrategy: (usage(records, "ses_key")[0] || {}).keyStrategy || null,
+      toollistQueries,
+      toolsToolCounts: records
+        .filter((r) => r.sid === "ses_tools" && (r.kind === "prefix-observation" || r.kind === "prefix-change"))
+        .map((r) => r.toolCount),
+      n4AfterDelete,
+      n4AfterRecreate,
+      n4InFlight,
+      n1Recovery,
+      n1RecoveryErrors,
+    }))
+  `
+  const stdout = execFileSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], {
+    cwd: process.cwd(),
+    env: { ...process.env, HOME: home },
+    encoding: "utf8",
+  })
+  return JSON.parse(stdout.trim())
+}
+
+let n1n5Probe
+const n1n5Results = async () => (n1n5Probe ??= runN1N5Probe())
+
+test("v0.4.13 N3: provider-id normalization selects snake_case fields for OpenRouter", () => {
+  const SNAKE = { key: "prompt_cache_key", options: "prompt_cache_options" }
+  const CAMEL = { key: "promptCacheKey", options: "promptCacheOptions" }
+  for (const p of ["openrouter", "OpenRouter", " OpenRouter ", String.fromCharCode(9) + "OPENROUTER "]) {
+    assert.deepEqual(gptCacheOptionFieldNames({ providerID: p }), SNAKE, "openrouter variant: " + p)
+  }
+  for (const p of ["openai", "azure", "zai", "xiaomi"]) {
+    assert.deepEqual(gptCacheOptionFieldNames({ providerID: p }), CAMEL, "direct provider: " + p)
+  }
+  assert.deepEqual(gptCacheOptionFieldNames({ npm: "@openrouter/ai-sdk-provider" }), SNAKE)
+  assert.deepEqual(gptCacheOptionFieldNames({}), CAMEL)
+})
+
+test("v0.4.13 N5: scanPage reports the newest counted assistant identity", () => {
+  const page = [
+    { info: { id: "a1", role: "assistant", providerID: "openai", modelID: "gpt-5.6", tokens: { input: 1, output: 1, cache: { read: 10, write: 0 } } }, parts: [] },
+    { info: { id: "a2", role: "assistant", providerID: "xiaomi", modelID: "mimo-v2.6-flash", tokens: { input: 1, output: 1, cache: { read: 20, write: 0 } } }, parts: [] },
+  ]
+  const scan = scanPage(page, null)
+  assert.equal(scan.providerID, "xiaomi")
+  assert.equal(scan.modelID, "mimo-v2.6-flash")
+})
+
+test("v0.4.13 N1: concurrent idle collections count each message once", async () => {
+  const { n1UsageCount, n1Cumulative } = await n1n5Results()
+  assert.equal(n1UsageCount, 1)
+  assert.deepEqual(n1Cumulative, { read: 100, write: 20 })
+})
+
+test("v0.4.13 N2: OpenRouter cache-options telemetry reports the injected options", async () => {
+  const { n2Options } = await n1n5Results()
+  assert.deepEqual(n2Options, { mode: "implicit", ttl: "30m" })
+})
+
+test("v0.4.13 N5: usage is attributed to the message identity, not the latched model", async () => {
+  const { attr } = await n1n5Results()
+  assert.ok(attr, "a usage record is emitted")
+  assert.equal(attr.provider, "openai")
+  assert.equal(attr.model, "gpt-5.6")
+})
+
+test("v0.4.13 N5: usage key strategy follows cache-root mode", async () => {
+  const { keyStrategy } = await n1n5Results()
+  assert.equal(keyStrategy, "cache-root")
+})
+
+test("v0.4.13 N5: tool fetch TTL is enforced independently per provider+model", async () => {
+  const { toollistQueries, toolsToolCounts } = await n1n5Results()
+  // A, B, then A again: A's own window is still open, so the second A is
+  // suppressed without relying on A being the most-recent identity.
+  assert.deepEqual(toollistQueries, ["glm-5.3", "glm-5.3-alt"])
+  // The suppressed repeat must also RESTORE A's fingerprints (1 tool), not
+  // leave B's (2 tools) in the per-session slot.
+  assert.deepEqual(toolsToolCounts, [1, 2, 1])
+})
+
+test("v0.4.13 N4: a late idle after session.deleted does not resurrect state", async () => {
+  const { n4AfterDelete, n4AfterRecreate } = await n1n5Results()
+  assert.equal(n4AfterDelete, 0) // stale background work cannot recreate deleted state
+  assert.equal(n4AfterRecreate, 1) // a genuine new request still creates state
+})
+
+test("v0.4.13 N4: a queued collection cannot resurrect a deleted session after tombstone eviction", async () => {
+  const { n4InFlight } = await n1n5Results()
+  // The in-flight collection (started before delete) counts its message once;
+  // the queued follow-up is skipped via the captured object flag, not the set.
+  assert.equal(n4InFlight, 1)
+})
+
+test("v0.4.13 N1: a failed collection does not block later collections", async () => {
+  const { n1Recovery, n1RecoveryErrors } = await n1n5Results()
+  assert.equal(n1RecoveryErrors, 1) // the failure is recorded
+  assert.equal(n1Recovery, 1) // the next idle still collects and emits
+})
