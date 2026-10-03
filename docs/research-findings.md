@@ -184,6 +184,30 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Re-verify when: OpenCode changes tool ordering or serialization.
 - Superseded by: null
 
+### RF-OC-007 — The OpenCode plugin client throws on HTTP errors (`throwOnError: true`)
+
+- Status: current
+- Verified: 2026-10-03
+- Area: opencode-runtime
+- Fact: The generated SDK client defaults `throwOnError` to `false`, but OpenCode
+  constructs the client handed to plugins with `throwOnError: true`, so SDK calls
+  (`session.messages`, `session.get`, `tool.list`) reject on HTTP failure rather
+  than resolving an `{ error }` value.
+- Evidence: [O]
+- Sources: local — installed binary `/home/alex/.opencode/bin/opencode` (multiple
+  `createClient({...,throwOnError:!0})` sites); installed `@opencode-ai/sdk`
+  `dist/gen/client/types.gen.d.ts` documents the `false` default.
+- Justifies: the `try/catch` + single bounded `telemetry-error` paths in
+  `collectUsage` and `resolveCacheRoot`. No `res.error` checks are needed for the
+  verified plugin client; adding them would be redundant.
+- Version context: OpenCode 1.18.34; `@opencode-ai/sdk` 1.18.34.
+- Re-verify when: OpenCode changes how it constructs the plugin client, or the
+  installed SDK's `throwOnError` default handling changes.
+- Superseded by: null
+- Notes: Residual uncertainty — the exact client instance passed to plugins was
+  not pinned from the minified binary. If a probe against an unavailable endpoint
+  resolves a value instead of throwing, add explicit `res.error` checks then.
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
