@@ -465,6 +465,7 @@ export function shapeFieldDiffs(prev, cur, fields) {
 // cacheHitRate = cache.read / (cache.read + cache.write). Returns null when
 // there is no denominator (no read/write tokens observed).
 export function hitRatePct(read, write) {
+  if (!Number.isFinite(read) || !Number.isFinite(write)) return null
   const denom = read + write
   if (denom <= 0) return null
   return Math.round((100 * read) / denom)
