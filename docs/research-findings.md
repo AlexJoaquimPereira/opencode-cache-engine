@@ -250,7 +250,64 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   parallel `@opencode-ai/llm` `CacheHint` layer also contains
   `BEDROCK_BREAKPOINT_CAP = 4` and a `cachePoint:{type:"default",ttl:"1h"}`
   constant; its reachability in this build is **UNKNOWN** — the runtime path above
-  is `provider/transform.ts`.
+  is `provider/transform.ts`. The gate has **two** id checks (`api.id` and
+  `model.id`), and the `@ai-sdk/gateway` exclusion targets the **Vercel AI
+  Gateway**; OpenCode **Zen**/**Go** use per-model native npm, so they are not
+  excluded (see RF-OC-009).
+
+### RF-OC-009 — OpenCode Claude route support: Zen caches; Go has no Claude; subscription OAuth is absent
+
+- Status: current
+- Verified: 2026-10-04
+- Area: opencode-runtime
+- Fact: (1) OpenCode **Zen** (`opencode`, `opencode.ai/zen/v1/messages`) serves
+  Claude via `@ai-sdk/anthropic` and lists Cached-Read and Cached-Write pricing,
+  so Anthropic caching applies (applyCaching; not `@ai-sdk/gateway`). (2)
+  **OpenCode Go** (`opencode-go`, `https://opencode.ai/zen/go/v1/*`) is a hosted
+  subscription gateway that serves **no Claude models** (MiniMax/Qwen only); its
+  Anthropic-style `/v1/messages` routes are for those non-Claude models. (3)
+  Claude Pro/Max **subscription OAuth is not built into OpenCode 1.18.34** — the
+  bundled Anthropic-subscription plugin was removed in 1.3.0 and the third-party
+  `opencode-anthropic-auth` package is deprecated; Anthropic prohibits third-party
+  subscription use. (4) The `@ai-sdk/gateway` exclusion targets the **Vercel AI
+  Gateway**, not Zen/Go.
+- Evidence: [D]
+- Sources: OpenCode tag `v1.18.34` `provider/transform.ts` and
+  `packages/opencode/package.json`; https://opencode.ai/docs/go/ ;
+  https://opencode.ai/docs/zen/ ; https://registry.npmjs.org/opencode-anthropic-auth.
+  Accessed 2026-10-04.
+- Justifies: classifying the Claude subscription path as **outside the plugin's
+  effective scope**, and keeping CacheEngine passive on every route.
+- Version context: OpenCode 1.18.34.
+- Re-verify when: OpenCode adds/removes a subscription provider or changes the Zen/Go model set.
+- Superseded by: null
+- Notes: A route may serve a Claude model without exposing Anthropic caching; do
+  not infer cache support from the model catalogue.
+
+### RF-OR-002 — `@openrouter/ai-sdk-provider` converts `cacheControl` to wire `cache_control`
+
+- Status: current
+- Verified: 2026-10-04
+- Area: openrouter-transport
+- Fact: OpenRouter serves Anthropic models over an OpenAI-shaped
+  `/api/v1/chat/completions` endpoint, but supports Anthropic prompt caching via
+  top-level or per-block `cache_control` (translated to a Bedrock breakpoint on
+  Bedrock; <=4 breakpoints; 1h TTL supported). The AI SDK provider converts
+  `providerOptions.openrouter.cacheControl` to the wire `cache_control` field
+  (its README: "will automatically convert these messages to the correct format
+  internally"), so OpenCode's `applyCaching` markers survive on the OpenRouter
+  route. Usage: `prompt_tokens_details.cached_tokens` / `cache_write_tokens`.
+  Sticky routing is best-effort (10-min inactivity; `provider.order` disables).
+- Evidence: [D]
+- Sources: https://openrouter.ai/docs/guides/best-practices/prompt-caching ;
+  `@openrouter/ai-sdk-provider` README. Accessed 2026-10-04.
+- Justifies: resolving the prior inventory "OpenRouter serialization UNVERIFIED"
+  item; CacheEngine still stays passive (it does not add the marker).
+- Version context: OpenRouter docs and provider README as of 2026-10-04.
+- Re-verify when: the AI SDK provider or OpenRouter changes cache-field handling.
+- Superseded by: null
+- Notes: CacheEngine adds no `x-session-id` for Claude (`openRouterAffinity` is
+  false for the Claude family).
 
 ## RF-OR — OpenRouter transport and routing
 
