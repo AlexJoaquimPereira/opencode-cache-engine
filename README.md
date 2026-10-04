@@ -25,7 +25,7 @@ opencode plugin opencode-cache-engine
 
 `CacheEngine` is an OpenCode plugin designed for long-running agent sessions where prompt-cache efficiency affects both latency and cost. It keeps the harness conservative for providers whose cache behavior is already automatic, while applying provider-specific optimizations where the provider exposes useful cache controls or where prompt structure can be safely improved.
 
-The plugin currently has five cache-policy families:
+The plugin currently has six cache-policy families:
 
 * **DeepSeek** — passive cache observability; request structure is preserved.
 * **GPT-5.6 and later** — documented cache-key/options metadata, with prompt text
@@ -36,6 +36,9 @@ The plugin currently has five cache-policy families:
 * **Kimi** — passive Moonshot/Kimi implicit-cache observability; the request is
   left unchanged. The Anthropic-compatible `cache_control` route is not
   implemented.
+* **Claude (Anthropic)** — passive classification and accounting; the request is
+  left unchanged because OpenCode itself applies Anthropic `cache_control`
+  breakpoints.
 
 Family classification is not hard-coded in the runtime. A pure policy registry
 and resolver in `src/cache-policy-core.mjs` returns a structured result
@@ -497,6 +500,52 @@ against first-party Moonshot/Kimi documentation on 2026-10-04 (see
 is published, and the Anthropic-compatible route is not implemented.
 
 
+## Claude (Anthropic)
+
+### Policy: passive (OpenCode applies the cache breakpoints)
+
+Anthropic prompt caching is **explicit**: a request must carry `cache_control`
+markers (a top-level automatic marker, or per-block breakpoints — max 4, `5m`
+default or `1h` TTL). **OpenCode already applies these breakpoints itself**:
+`ProviderTransform.applyCaching` marks the first two `system` messages and the last
+two non-system messages (default `5m`) for Claude/Anthropic transports. CacheEngine
+therefore leaves the Claude request **unchanged** — it adds no `cache_control`, no
+cache key, no TTL, and no breakpoints.
+
+Injecting a top-level `cacheControl` from CacheEngine would *replace* OpenCode's
+breakpoint strategy with automatic caching and risk duplicate or TTL-conflicting
+markers (Anthropic returns HTTP 400), so the policy is deliberately passive.
+
+Cache usage is read from OpenCode's normalized `tokens.cache.{read,write}` (from
+Anthropic `cache_read_input_tokens` / `cache_creation_input_tokens`); the generic
+`read/(read+write)` ratio applies.
+
+**Recognized ids** (bare or gateway-prefixed such as `anthropic/claude-sonnet-4-5`):
+`claude-opus-*`, `claude-sonnet-*`, `claude-haiku-*`, `claude-fable-*`,
+`claude-mythos-*`, and legacy `claude-3-*`.
+
+**Not recognized (neutral):** look-alikes such as `claude-opus-clone`,
+`myclaude-opus-5`, and retired `claude-2` / `claude-instant`.
+
+### Transport and platform limitations
+
+OpenCode applies Anthropic breakpoints for native `@ai-sdk/anthropic`,
+`google-vertex-anthropic`, Bedrock (`cachePoint`), and OpenRouter when the model id
+contains `anthropic`/`claude`; `@ai-sdk/gateway` is excluded. CacheEngine adds
+nothing on any of these routes. Automatic top-level caching is unsupported on
+legacy Amazon Bedrock (Opus 4.6 and earlier); since CacheEngine does not choose the
+strategy, that constraint is OpenCode-owned.
+
+### Evidence and status
+
+Verified against first-party Anthropic documentation and the OpenCode v1.18.34
+source on 2026-10-04 (see
+[docs/cache-policy-inventory.md](docs/cache-policy-inventory.md) §6). Status:
+**documented; not live-validated.** Whether
+`providerOptions.openrouter.cacheControl` serializes to Anthropic-style
+`cache_control` through OpenRouter is unverified.
+
+
 # Provider comparison
 
 | Policy family | Detection | Prompt text changed? | Cache metadata changed? | OpenRouter affinity header | Primary cache signal |
@@ -506,6 +555,7 @@ is published, and the Anthropic-compatible route is not implemented.
 | GLM-5.3 and later | `glm-5.3+` | Yes, narrowly (`<env>` tail) on GLM-5.3 only | No provider cache key | `x-session-id` on OpenRouter only | provider cache tokens (GLM ratio) |
 | MiMo V2.6 and later | `mimo-v2.6+` (family) | Yes, narrowly (`<env>` tail) on V2.6 Flash/Pro only | No: implicit caching only | `x-session-id` on OpenRouter only | `cached_tokens / prompt_tokens` |
 | Kimi K2.6 / K2.7-code / K3 | `kimi-k3`, `kimi-k2.6`, `kimi-k2.7-code(-highspeed)` (bare or gateway-prefixed) | No | No: implicit caching only | None | provider `cache.read` / `cache.write` |
+| Claude (Anthropic) | `claude-{opus,sonnet,haiku,fable,mythos}-*`, legacy `claude-3-*` (bare or gateway-prefixed) | No | No: OpenCode applies `cache_control` breakpoints | None | provider `cache.read` / `cache.write` |
 
 `x-session-id` is an HTTP affinity header, not a provider cache key or
 cache-control field. Non-OpenRouter endpoints do not receive CacheEngine's
@@ -879,6 +929,9 @@ The default configuration is:
     },
     "kimi": {
       "enabled": true
+    },
+    "claude": {
+      "enabled": true
     }
   }
 }
@@ -1091,6 +1144,24 @@ There are no other Kimi knobs, and `prompt_cache_options`, `prompt_cache_key`, a
 the Anthropic-compatible `cache_control` route are neither exposed nor sent.
 
 
+# Claude configuration
+
+```json
+{
+  "claude": {
+    "enabled": true
+  }
+}
+```
+
+### `enabled`
+
+Enables the Claude policy classification. Claude is a **passive** family:
+OpenCode applies Anthropic `cache_control` breakpoints itself, so CacheEngine never
+mutates the request. There are no other Claude knobs, and `cache_control`,
+`cacheControl`, cache keys, and TTLs are neither exposed nor sent.
+
+
 # Model detection
 
 The plugin classifies requests into:
@@ -1101,6 +1172,7 @@ gpt56
 glm53
 mimo26
 kimi
+claude
 neutral
 ```
 
@@ -1111,6 +1183,7 @@ The model detector recognizes:
 * GLM-5.3-and-later variants
 * MiMo V2.6-and-later family (`mimo-v2.6-flash`, `mimo-v2.6-pro`, `mimo-v2.6-pro-ultraspeed`, ...)
 * Kimi current ids (`kimi-k3`, `kimi-k2.6`, `kimi-k2.7-code`, `kimi-k2.7-code-highspeed`; bare or gateway-prefixed)
+* Claude current ids (`claude-opus-*`, `claude-sonnet-*`, `claude-haiku-*`, `claude-fable-*`, `claude-mythos-*`, legacy `claude-3-*`; bare or gateway-prefixed)
 
 The GPT-5.6-and-later family has an additional OpenAI/Azure-context check, so a string containing a qualifying GPT version (for example `gpt-5.6` or `gpt-6`) does not automatically cause GPT-specific fields to be sent to an unrelated endpoint.
 
@@ -1282,6 +1355,7 @@ Coverage includes:
 * configuration behavior
 * JSONL telemetry behavior
 * Kimi classification, passive (no-mutation) resolution, and generic usage accounting
+* Claude classification, passive (no-mutation) resolution, and generic usage accounting
 
 The tests are designed around the pure core logic, while OpenCode runtime behavior is validated separately through actual plugin loading.
 
@@ -1479,7 +1553,7 @@ release, use:
 ```json
 {
   "plugin": [
-    "opencode-cache-engine@0.5.1"
+    "opencode-cache-engine@0.5.2"
   ]
 }
 ```
