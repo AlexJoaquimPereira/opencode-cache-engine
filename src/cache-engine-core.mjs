@@ -39,6 +39,7 @@ export const POLICY_GPT56 = "gpt56"
 export const POLICY_GLM53 = "glm53"
 export const POLICY_MIMO26 = "mimo26"
 export const POLICY_KIMI = "kimi"
+export const POLICY_CLAUDE = "claude"
 export const POLICY_NEUTRAL = "neutral"
 
 export const GPT56_DEFAULT_TTL = "30m"
@@ -82,6 +83,9 @@ function defaultPolicies() {
     // for consistency with the other families and so a future Kimi overlay can
     // gate on `enabled` like the rest.
     kimi: { enabled: true },
+    // Claude is passive: OpenCode already applies Anthropic cache_control
+    // breakpoints, so CacheEngine classifies and accounts but does not mutate.
+    claude: { enabled: true },
   }
 }
 
@@ -132,7 +136,7 @@ export function parseConfig(raw, env) {
     if (typeof raw.logPrefixChanges === "boolean") cfg.logPrefixChanges = raw.logPrefixChanges
     if (raw.policies && typeof raw.policies === "object") {
       const d = defaultPolicies()
-      for (const fam of ["deepseek", "gpt56", "glm53", "mimo26", "kimi"]) {
+      for (const fam of ["deepseek", "gpt56", "glm53", "mimo26", "kimi", "claude"]) {
         if (raw.policies[fam]) cfg.policies[fam] = parsePolicy(raw.policies[fam], d[fam])
       }
     }
@@ -226,6 +230,7 @@ const LEGACY_FAMILY_TO_POLICY = {
   "mimo-v2.6": POLICY_MIMO26,
   deepseek: POLICY_DEEPSEEK,
   kimi: POLICY_KIMI,
+  claude: POLICY_CLAUDE,
 }
 
 // Pure classifier. Returns one of the POLICY_* keys. `model` may be a full

@@ -14,6 +14,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import {
+  POLICY_CLAUDE,
   POLICY_DEEPSEEK,
   POLICY_GLM53,
   POLICY_GPT56,
@@ -423,7 +424,7 @@ test("MiMo V2.5 stays neutral; V2.6 Pro UltraSpeed now resolves (v0.4.5)", () =>
 test("unrelated MiMo/other models do NOT match MiMo policy", () => {
   assert.equal(detectPolicy(M("openrouter", "xiaomi/mimo-v2")), POLICY_NEUTRAL)
   assert.equal(detectPolicy(M("openrouter", "xiaomi/mimo-v2-flash")), POLICY_NEUTRAL)
-  assert.equal(detectPolicy(M("anthropic", "claude-sonnet-4-5")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("mistral", "mistral-large-latest")), POLICY_NEUTRAL)
 })
 
 // --- v0.5.0 Moonshot/Kimi (passive) ---------------------------------------
@@ -489,8 +490,60 @@ test("v0.5.0: the Kimi policy is passive (no overlays, no mutation capabilities)
   assert.equal(caps.policy, detectPolicy(M("moonshot", "kimi-k3")))
 })
 
+// --- v0.5.2 Anthropic Claude (passive) ------------------------------------
+// OpenCode already applies Anthropic `cache_control` breakpoints itself, so
+// CacheEngine classifies and accounts for Claude but does not mutate the request.
+test("v0.5.2: current Anthropic Claude models match the Claude policy", () => {
+  const ids = [
+    "claude-opus-5-5", "claude-sonnet-5-5", "claude-opus-5", "claude-sonnet-5",
+    "claude-haiku-4-5", "claude-opus-4-8", "claude-sonnet-4-5-20250929",
+    "claude-fable-5-1", "claude-mythos-5-1",
+  ]
+  for (const id of ids) {
+    assert.equal(detectPolicy(M("anthropic", id)), POLICY_CLAUDE, id)
+    assert.equal(detectPolicy(M("openrouter", "anthropic/" + id)), POLICY_CLAUDE, "anthropic/" + id)
+  }
+  // legacy 3.x naming
+  assert.equal(detectPolicy(M("anthropic", "claude-3-5-sonnet-20241022")), POLICY_CLAUDE)
+  assert.equal(detectPolicy(M("anthropic", "claude-3-opus")), POLICY_CLAUDE)
+  assert.equal(detectPolicy(M("anthropic", "claude-haiku-4-5-20251001")), POLICY_CLAUDE)
+  // Bedrock / vendor-qualified ids (dot namespace) are an in-scope Claude route.
+  assert.equal(detectPolicy(M("amazon-bedrock", "anthropic.claude-3-5-sonnet-20241022-v2:0")), POLICY_CLAUDE)
+  assert.equal(detectPolicy(M("amazon-bedrock", "us.anthropic.claude-opus-4-5-20251101-v1:0")), POLICY_CLAUDE)
+  assert.equal(detectPolicy(M("amazon-bedrock", "eu.anthropic.claude-sonnet-4-5-20250929-v1:0")), POLICY_CLAUDE)
+})
+
+test("v0.5.2: Claude look-alikes and non-Claude models stay neutral", () => {
+  assert.equal(detectPolicy(M("acme", "claude-opus-clone")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("acme", "myclaude-opus-5")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("acme", "claude-2")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("acme", "claude-instant-1")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("anthropic", "claude")), POLICY_NEUTRAL)
+  // other providers unchanged
+  assert.equal(detectPolicy(M("openai", "gpt-5.6")), POLICY_GPT56)
+  assert.equal(detectPolicy(M("moonshot", "kimi-k3")), POLICY_KIMI)
+})
+
+test("v0.5.2: the Claude policy is passive (no overlays, no mutation capabilities)", () => {
+  const r = resolvePolicy(M("anthropic", "claude-sonnet-4-5"))
+  assert.equal(r.creator, "anthropic")
+  assert.equal(r.family, "claude")
+  assert.equal(r.baseline.id, "anthropic.ephemeral-cache")
+  assert.deepEqual(r.overlays, [])
+  const caps = resolveRuntimePolicy(M("anthropic", "claude-sonnet-4-5"))
+  assert.equal(caps.policy, "claude")
+  assert.equal(caps.isNeutral, false)
+  assert.equal(caps.gptCacheMetadata, false)
+  assert.equal(caps.envRelocation, null)
+  assert.equal(caps.thinkingIntegrity, false)
+  assert.equal(caps.cacheRatio, null) // generic read/(read+write)
+  assert.equal(caps.openRouterAffinity, false)
+  // Resolver and legacy classifier agree.
+  assert.equal(caps.policy, detectPolicy(M("anthropic", "claude-sonnet-4-5")))
+})
+
 test("unrelated models match neutral policy", () => {
-  assert.equal(detectPolicy(M("anthropic", "claude-sonnet-4-5")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("mistral", "mistral-large-latest")), POLICY_NEUTRAL)
   assert.equal(detectPolicy(M("openrouter", "x-ai/grok-4")), POLICY_NEUTRAL)
   assert.equal(detectPolicy(undefined), POLICY_NEUTRAL)
   assert.equal(detectPolicy(null), POLICY_NEUTRAL)
@@ -755,7 +808,7 @@ test("empty current sequence -> no anomalies", () => {
 // Config: provider policies
 // ===========================================================================
 
-test("config defaults enable all five policies", () => {
+test("config defaults enable all six policies", () => {
   const cfg = parseConfig({}, {})
   assert.deepEqual(cfg.policies.deepseek, { enabled: true })
   assert.deepEqual(cfg.policies.glm53, { enabled: true, stabilizeSystem: true, preserveThinkingIntegrity: true })
@@ -766,6 +819,7 @@ test("config defaults enable all five policies", () => {
     preserveThinkingIntegrity: true,
   })
   assert.deepEqual(cfg.policies.kimi, { enabled: true })
+  assert.deepEqual(cfg.policies.claude, { enabled: true })
   assert.deepEqual(cfg.policies.gpt56, {
     enabled: true,
     promptCacheKey: true,
@@ -1729,6 +1783,8 @@ test("detectPolicy remains compatible with the legacy family resolution", () => 
     "glm-5.3": POLICY_GLM53,
     "mimo-v2.6": POLICY_MIMO26,
     deepseek: POLICY_DEEPSEEK,
+    kimi: POLICY_KIMI,
+    claude: POLICY_CLAUDE,
   }
   const samples = [
     M("openrouter", "openai/gpt-5.6-luna"),
@@ -1741,6 +1797,7 @@ test("detectPolicy remains compatible with the legacy family resolution", () => 
     M("xiaomi", "mimo-v2.6-pro-ultraspeed"),
     M("xiaomi", "mimo-v2.5"),
     M("deepseek", "deepseek-chat"),
+    M("moonshot", "kimi-k3"),
     M("openrouter", "x-ai/grok-4"),
     M("anthropic", "claude-sonnet-4-5"),
     {},
@@ -1890,6 +1947,9 @@ async function runPolicyMigrationProbe() {
       { name: "kimi-k2.7-code-highspeed", model: { providerID: "moonshotai-cn", id: "kimi-k2.7-code-highspeed", api: { id: "kimi-k2.7-code-highspeed" } }, expect: { policy: "kimi", env: false, gpt: false, header: false } },
       { name: "kimi-deprecated-k2", model: { providerID: "moonshot", id: "kimi-k2", api: { id: "kimi-k2" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
       { name: "kimi-for-coding", model: { providerID: "kimi-code-plan-global", id: "kimi-for-coding", api: { id: "kimi-for-coding" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
+      { name: "claude-sonnet-direct", model: { providerID: "anthropic", id: "claude-sonnet-4-5", api: { id: "claude-sonnet-4-5", npm: "@ai-sdk/anthropic" } }, expect: { policy: "claude", env: false, gpt: false, header: false } },
+      { name: "claude-opus-openrouter", model: { providerID: "openrouter", id: "anthropic/claude-opus-4-8", api: { id: "anthropic/claude-opus-4-8" } }, expect: { policy: "claude", env: false, gpt: false, header: false } },
+      { name: "claude-lookalike", model: { providerID: "acme", id: "acme/claude-opus-clone", api: { id: "acme/claude-opus-clone" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
     ]
     const results = []
     for (const c of CASES) {
@@ -2762,6 +2822,12 @@ async function runUsageCollectionProbe() {
     await setModel(SID_KIMI, "moonshot", "kimi-k3")
     await idle(SID_KIMI)
 
+    // v0.5.2: Claude uses the same generic accounting path.
+    const SID_CLAUDE = "ses_usage_claude"
+    responses[SID_CLAUDE] = { data: [mkAst("c1", 5000, 800, 1200)] }
+    await setModel(SID_CLAUDE, "anthropic", "claude-sonnet-4-5")
+    await idle(SID_CLAUDE)
+
     const lines = readFileSync(process.env.CACHE_ENGINE_METRICS_FILE, "utf8").trim().split("\\n")
     const records = lines.map((l) => JSON.parse(l))
     process.stdout.write(JSON.stringify({ calls, records }))
@@ -2780,7 +2846,7 @@ const usageResults = async () => (usageProbe ??= runUsageCollectionProbe())
 test("v0.4.6 K2: session.messages is called with the V1 SDK shape and a bound receiver", async () => {
   const { calls } = await usageResults()
   assert.ok(calls.length >= 5, "collector should call session.messages per idle")
-  const sids = ["ses_usage_basic", "ses_usage_multi", "ses_usage_empty", "ses_usage_undef", "ses_usage_throw", "ses_usage_kimi"]
+  const sids = ["ses_usage_basic", "ses_usage_multi", "ses_usage_empty", "ses_usage_undef", "ses_usage_throw", "ses_usage_kimi", "ses_usage_claude"]
   for (const c of calls) {
     // exactly { path: { id } }, nothing else
     assert.deepEqual(Object.keys(c.opts), ["path"])
@@ -2842,6 +2908,26 @@ test("v0.5.0: Kimi uses the generic cache accounting path (read/(read+write))", 
   assert.equal(u.promptTokens, undefined)
   assert.equal(u.glmHitRate, undefined)
   assert.equal(u.cacheHitRate, undefined)
+})
+
+test("v0.5.2: Claude uses the generic cache accounting path (read/(read+write))", async () => {
+  const { records } = await usageResults()
+  const usage = records.filter((r) => r.kind === "usage" && r.sid === "ses_usage_claude")
+  assert.equal(usage.length, 1)
+  const u = usage[0]
+  assert.equal(u.read, 5000)
+  assert.equal(u.write, 800)
+  assert.equal(u.input, 1200)
+  assert.equal(u.messages, 1)
+  assert.equal(u.sampleHitRate, 86) // round(100*5000/5800)
+  assert.equal(u.provider, "anthropic")
+  assert.equal(u.model, "claude-sonnet-4-5")
+  assert.equal(u.policy, "claude")
+  // Generic ratio only: no GLM/MiMo/Kimi-specific fields are fabricated.
+  assert.equal(u.promptTokens, undefined)
+  assert.equal(u.glmHitRate, undefined)
+  assert.equal(u.cacheHitRate, undefined)
+  assert.equal(u.stickySessionId, undefined)
 })
 
 test("v0.4.6 K1: empty/undefined/throwing messages fail safely without breaking the plugin", async () => {
@@ -3804,6 +3890,9 @@ async function runKimiPassiveProbe(configPolicies) {
     const kimiOR = { providerID: "openrouter", id: "moonshotai/kimi-k3", api: { id: "moonshotai/kimi-k3", npm: "@openrouter/ai-sdk-provider" } };
     const look = { providerID: "acme", id: "acme/kimi-k9", api: { id: "acme/kimi-k9" } };
     const glm = { providerID: "zai", id: "glm-5.3", api: { id: "glm-5.3", npm: "@ai-sdk/openai-compatible" } };
+    const claude = { providerID: "anthropic", id: "claude-sonnet-4-5", api: { id: "claude-sonnet-4-5", npm: "@ai-sdk/anthropic" } };
+    const claudeOR = { providerID: "openrouter", id: "anthropic/claude-opus-4-8", api: { id: "anthropic/claude-opus-4-8", npm: "@openrouter/ai-sdk-provider" } };
+    const claudeLook = { providerID: "acme", id: "acme/claude-opus-clone", api: { id: "acme/claude-opus-clone" } };
     const preOpts = { promptCacheKey: "user-key", promptCacheOptions: { mode: "implicit", ttl: "5m" }, cache_control: { type: "ephemeral" }, temperature: 0.3 };
     const preHdrs = { "x-session-id": "user-sess", "x-custom": "keep" };
     const out = {
@@ -3811,6 +3900,9 @@ async function runKimiPassiveProbe(configPolicies) {
       openrouter: await run("ses_kimi_passive_or", kimiOR, {}, {}),
       lookalike: await run("ses_kimi_passive_look", look, {}, {}),
       glm: await run("ses_kimi_passive_glm", glm, {}, {}),
+      claude: await run("ses_claude_passive", claude, preOpts, preHdrs),
+      claudeOR: await run("ses_claude_passive_or", claudeOR, {}, {}),
+      claudeLook: await run("ses_claude_passive_look", claudeLook, {}, {}),
       preOpts,
       preHdrs,
     };
@@ -3856,4 +3948,35 @@ test("v0.5.0: disabling the Kimi policy does not change passivity or leak into o
   assert.deepEqual(out.direct.headers, out.preHdrs)
   // The Kimi switch must not disable another family: GLM still relocates.
   assert.equal(out.glm.systemChanged, true)
+})
+
+test("v0.5.2: a supported Claude request is passive and preserves existing options/headers", async () => {
+  const out = await kimiPassiveResults()
+  // No Claude-specific mutation: existing options (incl. a user cache key and a
+  // foreign cache_control) and headers are preserved byte-for-byte.
+  assert.deepEqual(out.claude.options, out.preOpts)
+  assert.equal(out.claude.systemChanged, false)
+  assert.deepEqual(out.claude.headers, out.preHdrs)
+  // OpenRouter Claude also receives no affinity header and no mutation.
+  assert.deepEqual(out.claudeOR.options, {})
+  assert.deepEqual(out.claudeOR.headers, {})
+  assert.equal(out.claudeOR.systemChanged, false)
+})
+
+test("v0.5.2: a Claude look-alike under an unrelated provider is neutral and unchanged", async () => {
+  const out = await kimiPassiveResults()
+  assert.deepEqual(out.claudeLook.options, {})
+  assert.equal(out.claudeLook.systemChanged, false)
+  assert.deepEqual(out.claudeLook.headers, {})
+})
+
+test("v0.5.2: disabling the Claude policy does not change passivity or leak into other families", async () => {
+  const out = await runKimiPassiveProbe({ claude: { enabled: false } })
+  assert.deepEqual(out.claude.options, out.preOpts)
+  assert.equal(out.claude.systemChanged, false)
+  assert.deepEqual(out.claude.headers, out.preHdrs)
+  // The Claude switch must not disable other families: GLM still relocates and
+  // Kimi stays passive.
+  assert.equal(out.glm.systemChanged, true)
+  assert.deepEqual(out.direct.options, out.preOpts)
 })
