@@ -100,7 +100,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Sources: local — `@opencode-ai/sdk` types 1.18.34; OpenCode source tag
   `v1.18.34` (`packages/opencode/src/session/llm/ai-sdk.ts`,
   `session/session.ts` getUsage); full per-provider field map in
-  `docs/cache-policy-inventory.md` §6a.
+  `docs/cache-policy-inventory.md` §7a.
 - Justifies: the GLM ratio `read/(read+write+input)` and the MiMo
   `promptTokens = read + input` formulas in `src/cache-engine.ts`.
 - Version context: OpenCode 1.18.34.
@@ -208,6 +208,50 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   not pinned from the minified binary. If a probe against an unavailable endpoint
   resolves a value instead of throwing, add explicit `res.error` checks then.
 
+### RF-OC-008 — OpenCode applies Anthropic `cache_control` breakpoints itself, so CacheEngine must not
+
+- Status: current
+- Verified: 2026-10-04
+- Area: opencode-runtime
+- Fact: OpenCode 1.18.34's `ProviderTransform.applyCaching` marks the first two
+  `system` messages and the last two non-system messages (≤4 breakpoints, default
+  `{type:"ephemeral"}` 5m TTL) for Claude/Anthropic transports. Gate:
+  `(providerID === "anthropic" || providerID === "google-vertex-anthropic" ||
+  api.id/model.id includes "anthropic" or "claude" || api.npm === "@ai-sdk/anthropic"
+  || api.npm === "@ai-sdk/alibaba") && api.npm !== "@ai-sdk/gateway" &&
+  !usesAnthropicAutomaticCaching`, where `usesAnthropicAutomaticCaching` is
+  `options.cacheControl !== undefined && (npm === "@ai-sdk/anthropic" ||
+  "@ai-sdk/google-vertex/anthropic")`. Transport map:
+  `anthropic:{cacheControl}`, `openrouter:{cacheControl}`,
+  `bedrock:{cachePoint:{type:"default"}}`, `openaiCompatible:{cache_control}`,
+  `copilot:{copilot_cache_control}`, `alibaba:{cacheControl}`; native
+  Anthropic/Bedrock use message-level provider options, the others mark the last
+  content block. Supplying a top-level `options.cacheControl` in the `chat.params`
+  hook disables the `applyCaching` path (flips to automatic). Anthropic usage is
+  normalized into `tokens.cache.{read,write}` via `getUsage`
+  (`cacheReadInputTokens`/`cacheWriteInputTokens`, with fallbacks
+  `metadata.anthropic.cacheCreationInputTokens`,
+  `metadata.vertex.cacheCreationInputTokens`,
+  `metadata.bedrock.usage.cacheWriteInputTokens`); there is **no TTL-specific
+  handling** (only read/write totals). See RF-OC-002.
+- Evidence: [O]
+- Sources: OpenCode tag `v1.18.34` — `packages/opencode/src/provider/transform.ts`
+  (`applyCaching`, `message()` gate), `packages/opencode/src/session/llm/request.ts`,
+  `packages/opencode/src/session/session.ts` (`getUsage`); local `opencode@1.18.34`
+  binary. Accessed 2026-10-04.
+- Justifies: keeping Claude **passive** in `src/cache-policy-core.mjs`
+  (`anthropic.claude`, no overlay) and not injecting `cacheControl`/`cache_control`.
+- Version context: OpenCode 1.18.34.
+- Re-verify when: OpenCode changes `applyCaching`, the provider gating, or the
+  `chat.params` options path.
+- Superseded by: null
+- Notes: Injecting our own top-level `cacheControl` would switch OpenCode to
+  automatic caching and risk duplicate/TTL-conflicting markers (HTTP 400). A
+  parallel `@opencode-ai/llm` `CacheHint` layer also contains
+  `BEDROCK_BREAKPOINT_CAP = 4` and a `cachePoint:{type:"default",ttl:"1h"}`
+  constant; its reachability in this build is **UNKNOWN** — the runtime path above
+  is `provider/transform.ts`.
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
@@ -218,7 +262,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Fact: Which upstream OpenRouter picks is not observable from a plugin, so
   CacheEngine must never claim or override routing.
 - Evidence: [O]
-- Sources: local — recorded in `docs/cache-policy-inventory.md` §6; consistent
+- Sources: local — recorded in `docs/cache-policy-inventory.md` §7; consistent
   with RF-OC-003.
 - Justifies: the "never override routing" invariant.
 - Version context: OpenCode 1.18.34.
@@ -308,7 +352,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Notes: Do NOT apply Anthropic-style `cache_control` to the OpenAI-compatible
   request, and do NOT apply `prompt_cache_options` to unrelated
   OpenAI-compatible providers. CacheEngine stays passive because caching does not
-  require a mutation; the Anthropic path is deferred (inventory §8 item 14).
+  require a mutation; the Anthropic path is deferred (inventory §9 item 14).
   Conflicting first-party evidence is preserved: the K2.x Chat OpenAPI declares
   `prompt_cache_key`/`prompt_cache_options` while the caching FAQ gates Cache
   Write to `kimi-k3` (unresolved), and the caching academy page names
@@ -316,3 +360,37 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   `kimi-k2.7-code`/`-code-highspeed` (CacheEngine matches the Models page).
   Also: no numeric minimum cacheable prefix length is published, and
   `prompt_cache_key`/`metadata.user_id` partitioning semantics are undocumented.
+
+
+### RF-PRV-003 — Anthropic prompt caching is explicit (cache_control) with ≤4 breakpoints and 5m/1h TTL
+
+- Status: current
+- Verified: 2026-10-04
+- Area: provider-api
+- Fact: Anthropic caches only when `cache_control` markers are present — either a
+  top-level `cache_control: {type:"ephemeral"}` (automatic; marks the last
+  cacheable block) or per-block `cache_control` on eligible text/image/document
+  blocks, `system[]`, or `tools[]` (thinking blocks cannot be marked directly).
+  Max 4 breakpoints; automatic + explicit share them; a marker on a block that
+  already carries the same TTL is a no-op; a different TTL on the same block, or
+  >4 slots, errors; mixing TTLs requires longer-first. TTL default `5m` (write
+  1.25x) or `1h` (write 2x); reads 0.1x. Prefix order `tools -> system -> messages`,
+  with later levels invalidated by earlier changes; reads look back up to **20
+  blocks** (a consecutive `tool_use`/`tool_result` run counts as one position).
+  `usage.input_tokens` counts only the tokens **after the last breakpoint**.
+  Per-model minimum cacheable length is 512 / 1,024 / 2,048 / 4,096 tokens
+  depending on the family. Automatic top-level caching is unsupported on **legacy
+  Amazon Bedrock (Opus 4.6 and earlier)**, which requires explicit breakpoints.
+  Usage: `cache_read_input_tokens`, `cache_creation_input_tokens`, and
+  `cache_creation.{ephemeral_5m,ephemeral_1h}_input_tokens` (the latter two sum to
+  the total).
+- Evidence: [D]
+- Sources: Anthropic *Prompt caching* —
+  https://platform.claude.com/docs/en/build-with-claude/prompt-caching ; *Messages*
+  — https://platform.claude.com/docs/en/api/messages. Accessed 2026-10-04.
+- Justifies: the `anthropic.ephemeral-cache` baseline in `src/cache-policy-core.mjs`
+  and the passive Claude policy.
+- Version context: Anthropic docs as of 2026-10-04.
+- Re-verify when: Anthropic changes cache_control, TTLs, breakpoint caps, or usage fields.
+- Superseded by: null
+- Notes: CacheEngine sends no cache_control because OpenCode already does (RF-OC-008).
