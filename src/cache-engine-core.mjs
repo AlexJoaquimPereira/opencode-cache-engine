@@ -5,7 +5,7 @@
 // TypeScript compiler. The plugin entry (cache-engine.ts) imports this module.
 //
 // This module is PROVIDER-AWARE: it classifies a model into a cache-policy
-// family (deepseek | gpt56 | glm53 | mimo26 | neutral) and exposes small pure
+// family (deepseek | gpt56 | glm53 | mimo26 | kimi | neutral) and exposes small pure
 // helpers for each family's strategy. The plugin entry (cache-engine.ts) remains
 // the only place that touches OpenCode hooks; every decision here is testable in
 // Node.
@@ -38,6 +38,7 @@ export const POLICY_DEEPSEEK = "deepseek"
 export const POLICY_GPT56 = "gpt56"
 export const POLICY_GLM53 = "glm53"
 export const POLICY_MIMO26 = "mimo26"
+export const POLICY_KIMI = "kimi"
 export const POLICY_NEUTRAL = "neutral"
 
 export const GPT56_DEFAULT_TTL = "30m"
@@ -77,6 +78,10 @@ function defaultPolicies() {
       // depends on reasoning replay, so this never rewrites reasoning content.
       preserveThinkingIntegrity: true,
     },
+    // Kimi is a passive family (Moonshot caching is automatic); the entry exists
+    // for consistency with the other families and so a future Kimi overlay can
+    // gate on `enabled` like the rest.
+    kimi: { enabled: true },
   }
 }
 
@@ -127,7 +132,7 @@ export function parseConfig(raw, env) {
     if (typeof raw.logPrefixChanges === "boolean") cfg.logPrefixChanges = raw.logPrefixChanges
     if (raw.policies && typeof raw.policies === "object") {
       const d = defaultPolicies()
-      for (const fam of ["deepseek", "gpt56", "glm53", "mimo26"]) {
+      for (const fam of ["deepseek", "gpt56", "glm53", "mimo26", "kimi"]) {
         if (raw.policies[fam]) cfg.policies[fam] = parsePolicy(raw.policies[fam], d[fam])
       }
     }
@@ -220,6 +225,7 @@ const LEGACY_FAMILY_TO_POLICY = {
   "glm-5.3": POLICY_GLM53,
   "mimo-v2.6": POLICY_MIMO26,
   deepseek: POLICY_DEEPSEEK,
+  kimi: POLICY_KIMI,
 }
 
 // Pure classifier. Returns one of the POLICY_* keys. `model` may be a full
