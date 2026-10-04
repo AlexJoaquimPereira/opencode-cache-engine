@@ -531,10 +531,28 @@ Anthropic `cache_read_input_tokens` / `cache_creation_input_tokens`); the generi
 
 OpenCode applies Anthropic breakpoints for native `@ai-sdk/anthropic`,
 `google-vertex-anthropic`, Bedrock (`cachePoint`), and OpenRouter when the model id
-contains `anthropic`/`claude`; `@ai-sdk/gateway` is excluded. CacheEngine adds
-nothing on any of these routes. Automatic top-level caching is unsupported on
-legacy Amazon Bedrock (Opus 4.6 and earlier); since CacheEngine does not choose the
-strategy, that constraint is OpenCode-owned.
+contains `anthropic`/`claude`; the `@ai-sdk/gateway` exclusion targets the Vercel
+AI Gateway. CacheEngine adds nothing on any of these routes. Automatic top-level
+caching is unsupported on legacy Amazon Bedrock (Opus 4.6 and earlier); since
+CacheEngine does not choose the strategy, that constraint is OpenCode-owned.
+
+Route summary (all Claude routes are passive for CacheEngine):
+
+| Route | Anthropic caching | Notes |
+| ----- | ----------------- | ----- |
+| Direct Anthropic API | supported | OpenCode applies the breakpoints; per-workspace cache scope |
+| OpenCode Zen (`opencode`) | supported | Claude via `@ai-sdk/anthropic`; Cached Read/Write pricing |
+| OpenCode Go (`opencode-go`) | not applicable | serves no Claude models (MiniMax/Qwen only) |
+| Claude subscription (OAuth) | unknown / outside scope | not built into OpenCode 1.18.34; Anthropic prohibits third-party subscription use |
+| OpenRouter → Claude | supported | `cacheControl` converted to wire `cache_control`; sticky routing is best-effort |
+| Amazon Bedrock Claude | supported | `cachePoint`; legacy Opus ≤4.6 explicit-only |
+| Google Vertex Claude | supported | Messages `cache_control`; per-org cache scope |
+| OpenAI-compatible gateway serving Claude | conditional/unknown | Anthropic `cache_control` is not in the OpenAI schema; honoring it depends on the gateway |
+
+CacheEngine performs no mutation on any of these routes, so it cannot make an
+incompatible endpoint reject a request; where a gateway drops cache fields, that
+is a gateway limitation. Whether cache reuse actually occurs on a given route is
+owned by OpenCode and the provider — CacheEngine only classifies and accounts.
 
 ### Evidence and status
 
