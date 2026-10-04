@@ -345,10 +345,35 @@ Sources (accessed 2026-10-04): Anthropic *Prompt caching*
 *Messages* (https://platform.claude.com/docs/en/api/messages); OpenCode
 `provider/transform.ts` + `session/session.ts` at tag `v1.18.34`.
 
-**Unresolved.** Whether `providerOptions.openrouter.cacheControl` serializes to
-Anthropic-style `cache_control` through OpenRouter is not verified; the AI SDK
-turning `options.cacheControl` into a literal top-level `cache_control` is
-inferred from OpenCode's `usesAnthropicAutomaticCaching` gate.
+**Route support (CacheEngine stays passive on all of these; OpenCode owns the
+breakpoints).**
+
+| Route | Protocol / endpoint | Cache-control | Field preservation | Cache scope / routing | Usage reporting | Evidence |
+| --- | --- | --- | --- | --- | --- | --- |
+| Direct Anthropic API | Messages `/v1/messages` | supported | n/a (OpenCode injects) | per-workspace | `cache_read_input_tokens` / `cache_creation_input_tokens` | [D] |
+| Claude subscription (OAuth) | not built into OpenCode 1.18.34 (bundled plugin removed; Anthropic prohibits third-party use) | unknown | n/a | unknown | unknown | [D]/[U] |
+| OpenCode Zen (`opencode`) | `opencode.ai/zen/v1/messages`, `@ai-sdk/anthropic` | supported (Cached Read/Write pricing) | n/a | service-scoped | provider usage | [D] |
+| OpenCode Go (`opencode-go`) | hosted gateway; **serves no Claude models** (MiniMax/Qwen only) | n/a for Claude | n/a | n/a | n/a | [D] |
+| OpenRouter → Claude | OpenAI-shaped `/api/v1/chat/completions` | supported (`cacheControl` -> `cache_control`) | preserved by `@openrouter/ai-sdk-provider` | sticky, best-effort, 10-min | `prompt_tokens_details.cached_tokens` / `cache_write_tokens` | [D] |
+| Amazon Bedrock Claude | Converse `cachePoint:{type:"default"}` | supported (legacy Opus <=4.6: explicit only) | n/a | per-workspace (AWS) | `cacheReadInputTokens` / `cacheWriteInputTokens` | [D] |
+| Google Vertex Claude | Messages `cache_control` | supported | n/a | per-org | `cache_read_input_tokens` / `cache_creation_input_tokens` | [D] |
+| OpenAI-compatible gateway serving Claude | Chat Completions | **conditional/unknown** (Anthropic `cache_control` is not in the OpenAI schema) | depends on the gateway | unknown | `prompt_tokens_details.cached_tokens` when present | [D]/[U] |
+
+**OpenCode `applyCaching` gate (v1.18.34).** Fires when
+`(providerID === "anthropic" || providerID === "google-vertex-anthropic" ||
+api.id OR model.id includes "anthropic"/"claude" || api.npm === "@ai-sdk/anthropic"
+|| api.npm === "@ai-sdk/alibaba") && api.npm !== "@ai-sdk/gateway"`. The
+`@ai-sdk/gateway` exclusion targets the **Vercel AI Gateway**; OpenCode Zen/Go use
+per-model native npm, so they are not excluded.
+
+**Resolved (was UNVERIFIED).** `@openrouter/ai-sdk-provider` converts
+`providerOptions.openrouter.cacheControl` to wire `cache_control` (its README),
+so OpenRouter Claude caching is supported. The AI SDK turning top-level
+`options.cacheControl` into a literal `cache_control` remains inferred from
+OpenCode's `usesAnthropicAutomaticCaching` gate. **CacheEngine injects nothing on
+any of these routes**, so it cannot make an incompatible endpoint reject a request;
+where a gateway drops cache fields, that is a gateway limitation, not a
+CacheEngine mutation.
 
 ---
 
