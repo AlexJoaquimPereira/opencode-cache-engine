@@ -144,6 +144,15 @@ Both use the same evidence tags: `[D]` documented, `[O]` observed, `[I]` inferre
   `docs/research-findings.md` (harness/transport/API mechanics) or in the
   inventory (per-model compatibility). A research session that fetches a source
   and does not store the fact is not finished.
+- Record findings in **full detail, not a paraphrase**. When a research subagent
+  returns an evidence packet (or you fetch first-party pages yourself), store
+  every decision-relevant fact: exact endpoint/route and base URL, exact
+  request/response field names and JSON shapes, provider/transport gating
+  conditions and precedence, fallback rules, numeric values (TTL, minimum
+  length, caps, multipliers, limits), usage-field paths, and every
+  caveat/unknown. A finding that drops a field name, a gate condition, or an
+  unknown is incomplete. Only strip payloads (see below), never facts. If the
+  packet is long, the entry is long — do not compress it to save space.
 - Give a concrete `Re-verify when:` trigger, not a date. IDs are immutable and
   never reused; supersede by pointing forward with `Superseded by:`.
 - Store facts, never payloads: no prompt text, reasoning content, credentials,
