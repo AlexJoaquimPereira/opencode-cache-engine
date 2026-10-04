@@ -100,7 +100,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Sources: local — `@opencode-ai/sdk` types 1.18.34; OpenCode source tag
   `v1.18.34` (`packages/opencode/src/session/llm/ai-sdk.ts`,
   `session/session.ts` getUsage); full per-provider field map in
-  `docs/cache-policy-inventory.md` §5a.
+  `docs/cache-policy-inventory.md` §6a.
 - Justifies: the GLM ratio `read/(read+write+input)` and the MiMo
   `promptTokens = read + input` formulas in `src/cache-engine.ts`.
 - Version context: OpenCode 1.18.34.
@@ -218,7 +218,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Fact: Which upstream OpenRouter picks is not observable from a plugin, so
   CacheEngine must never claim or override routing.
 - Evidence: [O]
-- Sources: local — recorded in `docs/cache-policy-inventory.md` §5; consistent
+- Sources: local — recorded in `docs/cache-policy-inventory.md` §6; consistent
   with RF-OC-003.
 - Justifies: the "never override routing" invariant.
 - Version context: OpenCode 1.18.34.
@@ -268,3 +268,51 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   isolation semantics.
 - Superseded by: null
 - Notes: Never synthesize a DeepSeek cache-write value.
+
+### RF-PRV-002 — Moonshot/Kimi caching is automatic on the OpenAI-compatible path; `prompt_cache_options` only selects a write TTL and the Anthropic path uses `cache_control`
+
+- Status: current
+- Verified: 2026-10-04
+- Area: provider-api
+- Fact: On Moonshot/Kimi's OpenAI-compatible Chat Completions and Responses
+  paths, context caching is **automatic/implicit**. The optional
+  `prompt_cache_options` object (`{ mode: "implicit", ttl: "5m"|"1h" }`, `mode`
+  accepting only `"implicit"`) selects only the write TTL (default `5m`) and is
+  not required for caching — omitting it auto-writes the prefix at the `5m` tier
+  (Cache Write charges apply); explicit `prompt_cache_breakpoint` in content is
+  rejected (HTTP 400). The documented Anthropic-compatible Messages path
+  (`/anthropic/v1/messages`) is a **different request shape** that uses a
+  top-level `cache_control { type: "ephemeral", ttl: "5m"|"1h" }` (per-message
+  markers are ignored; omitting it means read-only at `5m` with no write) and
+  currently accepts `kimi-k3` only. Cache Write (separate billing + TTL choice)
+  is documented for `kimi-k3` only; `kimi-k2.6`/`kimi-k2.7*` report implicit
+  reads only. Usage: Chat `usage.prompt_tokens_details.cached_tokens`/`.cache_write_tokens`,
+  Responses `usage.input_tokens_details.*`, Anthropic
+  `cache_read_input_tokens`/`cache_creation_input_tokens`; cache-write is also
+  surfaced in response headers `Msh-Usage-Cache-Write-Tokens-5m`/`-1h`.
+- Evidence: [D]
+- Sources: Moonshot/Kimi *Best practices for context caching* —
+  https://www.kimi.ai/academy/best-practices-for-context-caching (updated
+  2026-09-28) and https://platform.kimi.ai/docs/guide/context-caching; API docs
+  https://platform.kimi.ai/docs/api/{chat,responses,messages,models}. Access
+  date 2026-10-04.
+- Justifies: the **passive** `moonshot.kimi` policy in
+  `src/cache-policy-core.mjs` (no request mutation) and the decision not to send
+  `prompt_cache_options`/`prompt_cache_key`.
+- Version context: Moonshot docs as of 2026-10-04 (docs host now
+  `platform.kimi.ai`); current ids `kimi-k3`, `kimi-k2.6`, `kimi-k2.7-code`,
+  `kimi-k2.7-code-highspeed`.
+- Re-verify when: Moonshot changes the cache fields/TTL, adds models, or
+  publishes a numeric minimum prefix length.
+- Superseded by: null
+- Notes: Do NOT apply Anthropic-style `cache_control` to the OpenAI-compatible
+  request, and do NOT apply `prompt_cache_options` to unrelated
+  OpenAI-compatible providers. CacheEngine stays passive because caching does not
+  require a mutation; the Anthropic path is deferred (inventory §8 item 14).
+  Conflicting first-party evidence is preserved: the K2.x Chat OpenAPI declares
+  `prompt_cache_key`/`prompt_cache_options` while the caching FAQ gates Cache
+  Write to `kimi-k3` (unresolved), and the caching academy page names
+  `kimi-k2.7`/`-highspeed` while the authoritative Models page lists
+  `kimi-k2.7-code`/`-code-highspeed` (CacheEngine matches the Models page).
+  Also: no numeric minimum cacheable prefix length is published, and
+  `prompt_cache_key`/`metadata.user_id` partitioning semantics are undocumented.
