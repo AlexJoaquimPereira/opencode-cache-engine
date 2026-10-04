@@ -74,6 +74,8 @@ It:
 7. Applies the GLM-5.3 and MiMo-V2.6 volatile-environment relocation.
 8. Records diagnostics that help determine whether prompt-shape changes correlate with cache behavior.
 9. Records MiMo/GLM affinity outcomes and provider-identity changes.
+10. Classifies Kimi and Claude but leaves their requests unchanged (both are passive:
+    Moonshot caching is automatic, and OpenCode applies Anthropic `cache_control`).
 
 The plugin deliberately avoids pretending that a local hash is proof of a provider cache hit. Provider-reported token usage remains the authoritative signal.
 
@@ -139,7 +141,7 @@ DeepSeek:
 ```
 
 
-## GPT-5.6 Luna
+## GPT-5.6 and later
 
 ### Policy: active cache control
 
@@ -156,6 +158,12 @@ The plugin adds:
   }
 }
 ```
+
+Field names are transport-aware: direct OpenAI/Azure receive the camelCase SDK
+option names above, while OpenRouter receives snake_case `prompt_cache_key` and
+`prompt_cache_options`, because the OpenRouter provider forwards provider options
+onto the wire verbatim. Only missing fields are added; existing values are never
+overwritten.
 
 The key is derived from the OpenCode session identity (or the resolved cache root when that is enabled) and is independent of transient request data, so it is stable across a session.
 
@@ -205,7 +213,7 @@ compaction:
 This prevents a compaction-specific prompt from sharing the same GPT cache namespace as the normal live-session prompt. The behavior is deterministic and tested explicitly, and it is enforced even when OpenCode has already pre-set a live-session key (direct OpenAI/Azure), so a compaction request never reuses the live namespace.
 
 
-## GLM-5.3 Flash
+## GLM-5.3 and later
 
 ### Policy: input-shape optimization
 
@@ -753,6 +761,24 @@ Telemetry is best-effort.
 
 A failed metrics write must never break an OpenCode request. The recorder catches write failures rather than allowing telemetry failures to affect execution.
 
+The plugin writes these record kinds (one JSON object per line):
+
+| `kind` | Emitted when |
+| ------ | ------------ |
+| `usage` | An idle session aggregated provider-reported cache tokens |
+| `usage` (fields) | May carry `promptTokens`/`glmHitRate` (GLM) or `promptTokens`/`cachedTokens`/`cacheHitRate` (MiMo) in addition to the generic read/write fields |
+| `prefix-observation` | First observation of a session's system/tool shape |
+| `prefix-change` | A later observation differs (system and/or tools) |
+| `reasoning-integrity` | GLM preserved-thinking check flags duplicate/reordered/modified reasoning |
+| `cache-options` | GPT cache metadata was applied for a session |
+| `boundary` | Affinity outcomes, provider switches, env relocation, compaction namespace |
+| `policy-resolution` | How a model was classified (`matchCategory`, overlay applied/skipped) |
+| `compaction` | A session compaction occurred |
+| `telemetry-error` | A telemetry/collection operation failed (best-effort; never fatal) |
+
+Provider-reported usage remains the authoritative cache signal; local hashes are
+diagnostics only.
+
 
 # Metrics examples
 
@@ -1297,7 +1323,8 @@ request mutation:
 * baseline cache-policy descriptors (documented facts)
 * model-specific overlays (for example GLM/MiMo `<env>` relocation)
 * transport capabilities (for example OpenRouter `x-session-id` affinity)
-* explicit, inventory-traceable inheritance (`inheritsFrom`)
+* inventory-traceable family boundaries (a documented version range or an
+  explicit baseline/overlay registration, never an implicit "newer model inherits")
 * safe neutral fallback for unknown or future models
 
 `resolvePolicy(model)` returns `creator`, `family`, `baseline`, `overlays`,
@@ -1339,6 +1366,8 @@ model resolves as follows:
 | Unknown DeepSeek model | Passive. Baseline telemetry only; no cache-control field is invented |
 | Unknown GLM model at 5.3 or later | Family baseline only. The `<env>` relocation overlay is not applied unless the model is validated for it |
 | Unknown MiMo model after V2.6 | Family baseline only. The `<env>` relocation overlay is not applied unless the model is validated for it |
+| Unknown Kimi model after V2.6 | Family baseline only; Moonshot caching is automatic, so no overlay is registered |
+| Unknown Claude model after the current families | Family baseline only; OpenCode applies Anthropic `cache_control` itself, so CacheEngine mutates nothing |
 | Unknown creator or provider | Fully neutral. No guessed cache controls, and no OpenRouter-specific header unless the actual provider identity is `openrouter` and the family is already eligible |
 
 Two rules follow from this. A model-specific prompt transformation always
@@ -1742,6 +1771,8 @@ DeepSeek    -> preserve and measure
 GPT-5.6+    -> documented cache key/options; user/harness controls the 272K pricing boundary
 GLM-5.3+    -> family baseline; GLM-5.3 only: preserve-content <env> relocation + OpenRouter affinity header
 MiMo V2.6+  -> family baseline; V2.6 Flash/Pro only: preserve-content <env> relocation (+ OpenRouter affinity header)
+Kimi        -> passive; Moonshot caching is automatic (V2.6/K2.7-code/K3); request unchanged
+Claude      -> passive; OpenCode applies Anthropic cache_control breakpoints; request unchanged
 ```
 
 That separation is the core design of the project.
