@@ -1479,7 +1479,7 @@ release, use:
 ```json
 {
   "plugin": [
-    "opencode-cache-engine@0.5.0"
+    "opencode-cache-engine@0.5.1"
   ]
 }
 ```
