@@ -498,8 +498,10 @@ Changes summary:
 export const cachePolicies = {
   // Field names below are ILLUSTRATIVE placeholders. Real values must come from
   // first-party provider docs and be recorded before implementation (see §2).
-  kimi:    { strategy: "<per §2 route>", field: "<verified>" },
-  anthropic: { strategy: "active-marker", field: "cache_control" },
+  // As shipped on master (v0.5.x), kimi and anthropic are PASSIVE: OpenCode /
+  // Moonshot own the cache behavior, so CacheEngine only classifies + accounts.
+  kimi:    { strategy: "passive", field: null },
+  anthropic: { strategy: "passive", field: null },
   // ...
 };
 // Usage:
