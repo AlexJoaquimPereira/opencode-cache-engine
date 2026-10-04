@@ -26,6 +26,9 @@
       "stabilizeSystem": true,
       "stickySession": true,
       "preserveThinkingIntegrity": true
+    },
+    "kimi": {
+      "enabled": true
     }
   }
 }
