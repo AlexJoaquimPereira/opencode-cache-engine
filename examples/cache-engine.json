@@ -29,6 +29,9 @@
     },
     "kimi": {
       "enabled": true
+    },
+    "claude": {
+      "enabled": true
     }
   }
 }
