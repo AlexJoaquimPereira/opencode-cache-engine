@@ -55,16 +55,18 @@ calls and no runtime documentation lookups.
 ## CacheEngine current treatment (baseline for the matrix)
 
 Source: the pure registry/resolver (`src/cache-policy-core.mjs`) and the hook
-entry (`src/cache-engine.ts`), as wired in v0.4.1. The behavior described here is
-the same as at the pre-resolver revision `19b87f2`; only the classification
-source changed.
+entry (`src/cache-engine.ts`), as wired since v0.4.1. Kimi (v0.5.0) and Claude
+(v0.5.2) extend the same registry; no hook changes were required for either
+because both resolve to capability-free (passive) runtimes.
 
-| Family | Detection (verbatim) | Current treatment | Affinity header |
+| Family | Detection (verbatim from the registry) | Current treatment | Affinity header |
 | --- | --- | --- | --- |
-| DeepSeek | `/deepseek/i` on `${apiID} ${modelID}` or `providerID` | Passive; no mutation | none |
-| GPT-5.6 | version boundary `gpt-<major>[.<minor>] ≥ 5.6` on slug **and** `isOpenAIish` (provider `openai`/`azure`, slug `openai/`/`azure/`, or npm `@ai-sdk/openai`/`@ai-sdk/azure`); since v0.4.2 covers GPT-6 and later | Inject missing `promptCacheKey` + `promptCacheOptions` (`implicit`, `30m`) | none |
-| GLM-5.3 | `/glm-5\.3(?![\d.])/i` on slug | Relocate identifiable `<env>` block to system tail | `x-session-id` only when `providerID === "openrouter"` |
-| MiMo-V2.6 | `/mimo-v2\.6-(flash\|pro)(?![\w-])/i` on slug | Relocate identifiable `<env>` block to system tail; provider-change telemetry | `x-session-id` only when `providerID === "openrouter"` |
+| DeepSeek | `isDeepseekV4OrLater` predicate (`deepseek-v<major>` ≥ 4) + exact ids `deepseek-flash`, `deepseek-v4-pro`; creator fallback `/deepseek/i` | Passive; no mutation | none |
+| GPT-5.6 and later | `isGpt56OrLater` predicate on slug **and** `isOpenAIish` (provider `openai`/`azure`, slug `openai/`/`azure/`, or npm `@ai-sdk/openai`/`@ai-sdk/azure`); covers GPT-6 and later | Inject missing `promptCacheKey` + `promptCacheOptions` (`implicit`, `30m`) | none |
+| GLM-5.3 and later | `/glm-5\.3(?![\d.])/i` (overlay entry) plus `isGlm53OrLater` predicate (baseline-only entry); exact ids `glm-5.3`, `glm-5.3-flash`, `glm-5.3-flashx` | Relocate identifiable `<env>` block to system tail on GLM-5.3 only | `x-session-id` only when `providerID === "openrouter"` |
+| MiMo-V2.6 and later | `/mimo-v2\.6-(flash\|pro)(?![\w-])/i` (overlay entry), `/mimo-v2\.6-pro-ultraspeed/i`, plus `isMimoAfterV26` predicate (baseline-only entries) | Relocate identifiable `<env>` block to system tail on V2.6 Flash/Pro only; provider-change telemetry | `x-session-id` only when `providerID === "openrouter"` |
+| Kimi (V2.6/K2.7-code/K3) | `/(?:^|\/)kimi-k(?:3\|2\.6\|2\.7-code)(?![\w.])/i` + exact ids `kimi-k3`, `kimi-k2.6`, `kimi-k2.7-code`, `kimi-k2.7-code-highspeed` | Passive; no mutation (Moonshot caching is automatic) | none |
+| Claude (Anthropic) | `/(?:^\|[\/.])claude-(?:(?:opus\|sonnet\|haiku\|fable\|mythos)-\d\|3(?:[.-]\d+)?)(?![\w])/i` (bare, gateway `/`, and Bedrock `.` namespaced ids) | Passive; no mutation (OpenCode applies Anthropic `cache_control` breakpoints) | none |
 | Neutral | everything else | Byte-untouched | none |
 
 Detection consequences worth stating explicitly:
@@ -74,11 +76,16 @@ Detection consequences worth stating explicitly:
 - `gpt-5.5`, `gpt-5.2`, `gpt-4o`, and the malformed `gpt-5.60` are **not**
   matched → neutral. **[O]**
 - `deepseek-v5` (or any future `*deepseek*` id) matches the passive DeepSeek
-  branch because the regex is a bare substring test. **[O]**
+  branch because the creator fallback is a bare substring test. **[O]**
 - `mimo-v2.6-pro-ultraspeed` is matched by its own explicit entry since v0.4.5
   (MiMo family baseline, no `<env>` overlay). **[O]**
 - Undocumented V2.6 variants such as `mimo-v2.6-flashx` remain neutral, and
   `mimo-v2.5*` and `glm-5.2`/`glm-4.x` are neutral. **[O]**
+- The Kimi pattern is anchored at a slug boundary, so `mykimi-k3` is neutral, while
+  `moonshotai/kimi-k3` matches. **[O]** (v0.5.0)
+- The Claude pattern additionally accepts a `.` namespace so Bedrock ids such as
+  `anthropic.claude-3-5-sonnet-…` match, while look-alikes (`claude-opus-clone`,
+  `myclaude-opus-5`) stay neutral. **[O]** (v0.5.2)
 
 ---
 
