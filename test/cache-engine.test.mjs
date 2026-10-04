@@ -194,6 +194,16 @@ test("hit rate = read / (read + write)", () => {
   assert.equal(shouldAggregate(2, 180, 40), true)
 })
 
+test("v0.5.0: hit-rate ratio is safe for zero, write-only, and non-finite inputs", () => {
+  assert.equal(hitRatePct(0, 20), 0) // write-only, no fabricated hit
+  assert.equal(hitRatePct(20, 0), 100) // read-only
+  assert.equal(hitRatePct(0, 0), null) // no data
+  assert.equal(hitRatePct(NaN, 5), null)
+  assert.equal(hitRatePct(5, Infinity), null)
+  assert.equal(hitRatePct(undefined, 5), null)
+  assert.equal(hitRatePct(-1, 0), null) // denom <= 0
+})
+
 // --- 10. compaction digest is not duplicated for one invocation --------------
 test("digestDecision prevents duplicate insertion per compaction", () => {
   assert.equal(digestDecision({ compactTemplate: true, pendingInsert: true }), true)
@@ -422,16 +432,16 @@ test("unrelated MiMo/other models do NOT match MiMo policy", () => {
 // Anthropic-compatible `cache_control` path is a different request shape and is
 // deliberately not implemented here.
 test("v0.5.0: current Moonshot/Kimi models match the Kimi policy", () => {
-  assert.equal(detectPolicy(M("moonshot", "kimi-k3")), POLICY_KIMI)
-  assert.equal(detectPolicy(M("moonshotai", "kimi-k2.6")), POLICY_KIMI)
-  assert.equal(detectPolicy(M("moonshotai-cn", "kimi-k2.7-code")), POLICY_KIMI)
-  assert.equal(detectPolicy(M("moonshotai", "kimi-k2.7-code-highspeed")), POLICY_KIMI)
-  // gateway-prefixed (OpenRouter) shape
+  // Bare and gateway-prefixed forms for every supported id.
+  for (const id of ["kimi-k3", "kimi-k2.6", "kimi-k2.7-code", "kimi-k2.7-code-highspeed"]) {
+    assert.equal(detectPolicy(M("moonshot", id)), POLICY_KIMI, id)
+    assert.equal(detectPolicy(M("moonshotai", "moonshotai/" + id)), POLICY_KIMI, "moonshotai/" + id)
+  }
+  // OpenRouter gateway shape + nested gateway path + batch suffix.
   assert.equal(detectPolicy(M("openrouter", "moonshotai/kimi-k3")), POLICY_KIMI)
-  assert.equal(
-    detectPolicy({ providerID: "openrouter", api: { id: "moonshotai/kimi-k3", npm: "@openrouter/ai-sdk-provider" } }),
-    POLICY_KIMI,
-  )
+  assert.equal(detectPolicy({ providerID: "openrouter", api: { id: "moonshotai/kimi-k3", npm: "@openrouter/ai-sdk-provider" } }), POLICY_KIMI)
+  assert.equal(detectPolicy(M("acme", "accounts/team/models/kimi-k3")), POLICY_KIMI)
+  assert.equal(detectPolicy(M("openrouter", "moonshotai/kimi-k3:batch")), POLICY_KIMI)
 })
 
 test("v0.5.0: retired/renamed Kimi models stay neutral", () => {
@@ -441,6 +451,7 @@ test("v0.5.0: retired/renamed Kimi models stay neutral", () => {
   assert.equal(detectPolicy(M("moonshot", "kimi-k2-thinking")), POLICY_NEUTRAL)
   assert.equal(detectPolicy(M("moonshot", "moonshot-v1-128k")), POLICY_NEUTRAL)
   assert.equal(detectPolicy(M("moonshot", "kimi-thinking-preview")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("moonshot", "kimi-latest")), POLICY_NEUTRAL)
   // Kimi Code Plan aliases are not first-party cache-documented here.
   assert.equal(detectPolicy(M("kimi-code-plan-global", "kimi-for-coding")), POLICY_NEUTRAL)
   assert.equal(detectPolicy(M("kimi-code-plan-global", "k3")), POLICY_NEUTRAL)
@@ -453,6 +464,9 @@ test("v0.5.0: similarly named non-Kimi models stay neutral", () => {
   // Anchored: a prefixed/suffixed look-alike must not match the Kimi family.
   assert.equal(detectPolicy(M("acme", "mykimi-k3")), POLICY_NEUTRAL)
   assert.equal(detectPolicy(M("acme", "acme/kimix-k3")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("acme", "acme/notkimi-k3")), POLICY_NEUTRAL)
+  // A Kimi-looking but unsupported generation stays neutral.
+  assert.equal(detectPolicy(M("acme", "kimi-k9")), POLICY_NEUTRAL)
 })
 
 test("v0.5.0: the Kimi policy is passive (no overlays, no mutation capabilities)", () => {
@@ -3746,4 +3760,100 @@ test("v0.4.13 N1: a failed collection does not block later collections", async (
   const { n1Recovery, n1RecoveryErrors } = await n1n5Results()
   assert.equal(n1RecoveryErrors, 1) // the failure is recorded
   assert.equal(n1Recovery, 1) // the next idle still collects and emits
+})
+
+// ===========================================================================
+// v0.5.0 Kimi passivity + config isolation (real hook path, no model calls)
+//
+// The Kimi policy is passive, so a supported Kimi request must be byte-for-byte
+// unchanged, pre-existing options/headers preserved, and the family config
+// switch must not leak into other families.
+// ===========================================================================
+
+async function runKimiPassiveProbe(configPolicies) {
+  const home = mkdtempSync(join(tmpdir(), "ce-kimi-passive-"))
+  const pluginURL = new URL("../src/cache-engine.ts", import.meta.url).href
+  const script = `
+    import { mkdirSync, writeFileSync } from "node:fs"
+    process.env.CACHE_ENGINE_METRICS_FILE = process.env.HOME + "/kimi-passive.jsonl"
+    const cfgPolicy = ${JSON.stringify(configPolicies ?? null)};
+    if (cfgPolicy) {
+      mkdirSync(process.env.HOME + "/.config/opencode", { recursive: true });
+      writeFileSync(process.env.HOME + "/.config/opencode/cache-engine.json", JSON.stringify({ policies: cfgPolicy }));
+    }
+    const { CacheEngine } = await import(${JSON.stringify(pluginURL)});
+    const fake = {
+      app: { log: async () => ({}) },
+      session: { get: async () => ({ data: { parentID: null } }), messages: async () => ({ data: [] }) },
+      tool: { list: async () => ({ data: [] }) },
+    };
+    const hooks = await CacheEngine({ client: fake, directory: process.env.HOME });
+    const SYS = ["A", "You are powered by the model named kimi-k3. The exact model ID is moonshot/kimi-k3", "<env>", "Today date: 2026-10-04", "</env>", "Z"].join("\\n");
+    const run = async (sid, model, opts0, hdrs0) => {
+      const paramsOut = { options: { ...opts0 } };
+      const sysOut = { system: [SYS] };
+      const headersOut = { headers: { ...hdrs0 } };
+      const provider = { source: "config", info: { id: model.providerID }, options: {} };
+      const message = { id: "m", sessionID: sid, role: "user", content: "x" };
+      await hooks["chat.params"]({ sessionID: sid, agent: "build", model, provider, message }, paramsOut);
+      await hooks["experimental.chat.system.transform"]({ sessionID: sid, model, provider }, sysOut);
+      await hooks["chat.headers"]({ sessionID: sid, agent: "build", model, provider, message }, headersOut);
+      return { options: paramsOut.options, systemChanged: sysOut.system[0] !== SYS, headers: headersOut.headers };
+    };
+    const kimi = { providerID: "moonshot", id: "kimi-k3", api: { id: "kimi-k3", npm: "@ai-sdk/openai-compatible" } };
+    const kimiOR = { providerID: "openrouter", id: "moonshotai/kimi-k3", api: { id: "moonshotai/kimi-k3", npm: "@openrouter/ai-sdk-provider" } };
+    const look = { providerID: "acme", id: "acme/kimi-k9", api: { id: "acme/kimi-k9" } };
+    const glm = { providerID: "zai", id: "glm-5.3", api: { id: "glm-5.3", npm: "@ai-sdk/openai-compatible" } };
+    const preOpts = { promptCacheKey: "user-key", promptCacheOptions: { mode: "implicit", ttl: "5m" }, cache_control: { type: "ephemeral" }, temperature: 0.3 };
+    const preHdrs = { "x-session-id": "user-sess", "x-custom": "keep" };
+    const out = {
+      direct: await run("ses_kimi_passive_direct", kimi, preOpts, preHdrs),
+      openrouter: await run("ses_kimi_passive_or", kimiOR, {}, {}),
+      lookalike: await run("ses_kimi_passive_look", look, {}, {}),
+      glm: await run("ses_kimi_passive_glm", glm, {}, {}),
+      preOpts,
+      preHdrs,
+    };
+    process.stdout.write(JSON.stringify(out));
+  `
+  const stdout = execFileSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], {
+    cwd: process.cwd(),
+    env: { ...process.env, HOME: home },
+    encoding: "utf8",
+  })
+  return JSON.parse(stdout.trim())
+}
+
+let kimiPassiveProbe
+const kimiPassiveResults = async () => (kimiPassiveProbe ??= runKimiPassiveProbe(null))
+
+test("v0.5.0: a supported Kimi request is passive and preserves existing options/headers", async () => {
+  const out = await kimiPassiveResults()
+  // No Kimi-specific mutation: existing options (incl. a user cache key and a
+  // foreign `cache_control`) are preserved byte-for-byte.
+  assert.deepEqual(out.direct.options, out.preOpts)
+  // No `<env>` relocation for Kimi.
+  assert.equal(out.direct.systemChanged, false)
+  // Pre-existing headers (incl. x-session-id) are preserved untouched.
+  assert.deepEqual(out.direct.headers, out.preHdrs)
+  // OpenRouter Kimi still receives no affinity header.
+  assert.deepEqual(out.openrouter.headers, {})
+  assert.equal(out.openrouter.systemChanged, false)
+})
+
+test("v0.5.0: a Kimi look-alike under an unrelated provider is neutral and unchanged", async () => {
+  const out = await kimiPassiveResults()
+  assert.deepEqual(out.lookalike.options, {})
+  assert.equal(out.lookalike.systemChanged, false)
+  assert.deepEqual(out.lookalike.headers, {})
+})
+
+test("v0.5.0: disabling the Kimi policy does not change passivity or leak into other families", async () => {
+  const out = await runKimiPassiveProbe({ kimi: { enabled: false } })
+  // Kimi stays passive whether enabled or disabled (no Kimi-specific effects).
+  assert.deepEqual(out.direct.options, out.preOpts)
+  assert.equal(out.direct.systemChanged, false)
+  assert.deepEqual(out.direct.headers, out.preHdrs)
+  // The Kimi switch must not disable another family: GLM still relocates.
+  assert.equal(out.glm.systemChanged, true)
 })
