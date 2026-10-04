@@ -246,6 +246,24 @@ export const BASELINES = {
     ],
     inventoryRef: "§5 Moonshot Kimi",
   },
+  "anthropic.ephemeral-cache": {
+    id: "anthropic.ephemeral-cache",
+    creator: "anthropic",
+    appliesTo:
+      "Anthropic Claude Messages API (explicit cache_control breakpoints; OpenCode applies them automatically)",
+    automatic: false,
+    defaultMode: "explicit",
+    supportsExplicitBreakpoints: true,
+    minCacheTokens: null,
+    ttl: "5m",
+    cacheKeyOptional: false,
+    cacheWriteBilled: true,
+    usageFields: [
+      "cache_read_input_tokens",
+      "cache_creation_input_tokens",
+    ],
+    inventoryRef: "§6 Anthropic Claude",
+  },
   "neutral.none": {
     id: "neutral.none",
     creator: "unknown",
@@ -258,7 +276,7 @@ export const BASELINES = {
     cacheKeyOptional: false,
     cacheWriteBilled: false,
     usageFields: [],
-    inventoryRef: "§7 Compatibility Matrix",
+    inventoryRef: "§8 Compatibility Matrix",
   },
 }
 
@@ -305,7 +323,7 @@ export const TRANSPORTS = {
     kind: "openrouter",
     sessionAffinityHeader: "x-session-id",
     stickyRouting: true,
-    inventoryRef: "§6 OpenRouter transport",
+    inventoryRef: "§7 OpenRouter transport",
   },
 }
 
@@ -313,9 +331,9 @@ function resolveTransport(s) {
   const p = String(s.providerID ?? "").toLowerCase()
   if (p === "openrouter") return { ...TRANSPORTS.openrouter }
   if (!p) {
-    return { id: "unknown", kind: "unknown", sessionAffinityHeader: null, stickyRouting: false, inventoryRef: "§6 OpenRouter transport" }
+    return { id: "unknown", kind: "unknown", sessionAffinityHeader: null, stickyRouting: false, inventoryRef: "§7 OpenRouter transport" }
   }
-  return { id: p, kind: "direct", sessionAffinityHeader: null, stickyRouting: false, inventoryRef: "§6 OpenRouter transport" }
+  return { id: p, kind: "direct", sessionAffinityHeader: null, stickyRouting: false, inventoryRef: "§7 OpenRouter transport" }
 }
 
 // ---------------------------------------------------------------------------
@@ -550,6 +568,28 @@ export const POLICY_REGISTRY = [
     boundary: "Kimi K2.6 / K2.7-code / K3 (Moonshot OpenAI-compatible path)",
     note: "Moonshot context caching is automatic on the OpenAI-compatible Chat/Responses path; `prompt_cache_options` selects only the write TTL (5m/1h, default 5m) and is not required for caching, and explicit `prompt_cache_breakpoint` is rejected. CacheEngine is therefore passive (no mutation). The Anthropic-compatible Messages path uses a separate top-level `cache_control` and is not applied here. Cache Write (separate billing/TTL choice) is documented for kimi-k3 only. Verified 2026-10-04.",
     inventoryRef: "§5 Moonshot Kimi",
+  },
+  {
+    // v0.5.2: Anthropic Claude. CacheEngine is PASSIVE because OpenCode itself
+    // applies Anthropic `cache_control` breakpoints (ProviderTransform.applyCaching:
+    // first two system messages + last two non-system messages, default 5m TTL,
+    // <=4 breakpoints) for Claude/Anthropic transports, and normalizes
+    // cache_read_input_tokens/cache_creation_input_tokens into tokens.cache.{read,write}.
+    // Injecting CacheEngine's own top-level `cacheControl` via chat.params would
+    // DISABLE OpenCode's breakpoint strategy and risk duplicate/TTL-conflicting
+    // markers, so no mutation is registered here. Classification + accounting only.
+    id: "anthropic.claude",
+    creator: "anthropic",
+    family: "claude",
+    kind: "family",
+    pattern: /(?:^|[\/.])claude-(?:(?:opus|sonnet|haiku|fable|mythos)-\d|3(?:[.-]\d+)?)(?![\w])/i,
+    baseline: "anthropic.ephemeral-cache",
+    overlays: [],
+    legacy: true,
+    runtime: rt("claude"),
+    boundary: "Anthropic Claude (Messages API / Claude-compatible routes)",
+    note: "OpenCode 1.18.34 already applies Anthropic cache_control breakpoints for Claude/Anthropic transports (native @ai-sdk/anthropic, google-vertex-anthropic, Bedrock cachePoint, and OpenRouter when the model id contains anthropic/claude) and normalizes cache_read_input_tokens/cache_creation_input_tokens. CacheEngine therefore stays passive: no cache_control, no cache key, no TTL, no breakpoint injection. Verified 2026-10-04.",
+    inventoryRef: "§6 Anthropic Claude",
   },
 ]
 
