@@ -25,7 +25,7 @@ opencode plugin opencode-cache-engine
 
 `CacheEngine` is an OpenCode plugin designed for long-running agent sessions where prompt-cache efficiency affects both latency and cost. It keeps the harness conservative for providers whose cache behavior is already automatic, while applying provider-specific optimizations where the provider exposes useful cache controls or where prompt structure can be safely improved.
 
-The plugin currently has four cache-policy families:
+The plugin currently has five cache-policy families:
 
 * **DeepSeek** — passive cache observability; request structure is preserved.
 * **GPT-5.6 and later** — documented cache-key/options metadata, with prompt text
@@ -33,6 +33,9 @@ The plugin currently has four cache-policy families:
   documented boundary.
 * **GLM-5.3 and later** — GLM implicit-cache baseline and diagnostics; GLM-5.3 additionally uses a narrow, content-preserving `<env>` relocation overlay.
 * **MiMo V2.6 and later** — MiMo implicit-cache baseline and diagnostics; MiMo V2.6 Flash/Pro additionally use a narrow, content-preserving `<env>` relocation overlay.
+* **Kimi** — passive Moonshot/Kimi implicit-cache observability; the request is
+  left unchanged. The Anthropic-compatible `cache_control` route is not
+  implemented.
 
 Family classification is not hard-coded in the runtime. A pure policy registry
 and resolver in `src/cache-policy-core.mjs` returns a structured result
@@ -453,6 +456,47 @@ message-history rewrite. Skill/MCP changes simply appear as system-prefix change
 and are reported diagnostically; the message content is left untouched.
 
 
+## Kimi (K2.6 / K2.7-code / K3)
+
+### Policy: passive (automatic implicit caching)
+
+Moonshot/Kimi's OpenAI-compatible Chat Completions and Responses paths cache
+**automatically**. CacheEngine therefore leaves the request **unchanged** for the
+Kimi family: it adds no cache key, cache options, or markers. It classifies the
+documented current model ids and relies on OpenCode's provider-reported cache
+usage for accounting.
+
+The optional `prompt_cache_options` object
+(`{ "mode": "implicit", "ttl": "5m" | "1h" }`) only selects the cache-write TTL and
+is not required for caching, so CacheEngine does not send it. Moonshot documents
+Cache Write (separate billing and TTL choice) for `kimi-k3` only. Explicit
+per-block `prompt_cache_breakpoint` is rejected by the API.
+
+**Recognized ids** (bare or gateway-prefixed such as `moonshotai/kimi-k3`):
+`kimi-k3`, `kimi-k2.6`, `kimi-k2.7-code`, `kimi-k2.7-code-highspeed`.
+
+**Not recognized (neutral):** deprecated or renamed ids such as `kimi-k2`,
+`kimi-k2-0905`, `kimi-k2.5`, `kimi-k2-thinking`, `moonshot-v1-*`,
+`kimi-thinking-preview`, `kimi-latest`, and the Kimi Code Plan aliases
+(`kimi-for-coding`, `k3`).
+
+### Anthropic-compatible route (not implemented)
+
+Moonshot also documents an Anthropic-compatible Messages path
+(`/anthropic/v1/messages`) that uses a **top-level `cache_control`** instead of
+`prompt_cache_options`, and currently accepts `kimi-k3` only. This is a different
+request shape; CacheEngine does **not** apply it, and it is never applied to the
+OpenAI-compatible request. Implementing it is deferred to a later release.
+
+### Evidence and status
+
+Automatic caching and the `prompt_cache_options` write-TTL semantics were verified
+against first-party Moonshot/Kimi documentation on 2026-10-04 (see
+[docs/cache-policy-inventory.md](docs/cache-policy-inventory.md) §5). Status:
+**documented but not live-validated**; no numeric minimum cacheable prefix length
+is published, and the Anthropic-compatible route is not implemented.
+
+
 # Provider comparison
 
 | Policy family | Detection | Prompt text changed? | Cache metadata changed? | OpenRouter affinity header | Primary cache signal |
@@ -461,6 +505,7 @@ and are reported diagnostically; the message content is left untouched.
 | GPT-5.6 and later | version boundary `gpt-<major>[.<minor>] ≥ 5.6` on OpenAI-ish endpoints (includes GPT-6) | No | Yes: `prompt_cache_key` + options | None | provider cache tokens |
 | GLM-5.3 and later | `glm-5.3+` | Yes, narrowly (`<env>` tail) on GLM-5.3 only | No provider cache key | `x-session-id` on OpenRouter only | provider cache tokens (GLM ratio) |
 | MiMo V2.6 and later | `mimo-v2.6+` (family) | Yes, narrowly (`<env>` tail) on V2.6 Flash/Pro only | No: implicit caching only | `x-session-id` on OpenRouter only | `cached_tokens / prompt_tokens` |
+| Kimi K2.6 / K2.7-code / K3 | `kimi-k3`, `kimi-k2.6`, `kimi-k2.7-code(-highspeed)` (bare or gateway-prefixed) | No | No: implicit caching only | None | provider `cache.read` / `cache.write` |
 
 `x-session-id` is an HTTP affinity header, not a provider cache key or
 cache-control field. Non-OpenRouter endpoints do not receive CacheEngine's
@@ -831,6 +876,9 @@ The default configuration is:
       "stabilizeSystem": true,
       "stickySession": true,
       "preserveThinkingIntegrity": true
+    },
+    "kimi": {
+      "enabled": true
     }
   }
 }
@@ -1025,6 +1073,24 @@ knobs are exposed: those values are not established by authoritative V2.6
 documentation.
 
 
+# Kimi configuration
+
+```json
+{
+  "kimi": {
+    "enabled": true
+  }
+}
+```
+
+### `enabled`
+
+Enables the Kimi policy classification. Kimi is a **passive** family: Moonshot's
+OpenAI-compatible caching is automatic, so CacheEngine never mutates the request.
+There are no other Kimi knobs, and `prompt_cache_options`, `prompt_cache_key`, and
+the Anthropic-compatible `cache_control` route are neither exposed nor sent.
+
+
 # Model detection
 
 The plugin classifies requests into:
@@ -1034,6 +1100,7 @@ deepseek
 gpt56
 glm53
 mimo26
+kimi
 neutral
 ```
 
@@ -1043,6 +1110,7 @@ The model detector recognizes:
 * GPT-5.6-and-later variants
 * GLM-5.3-and-later variants
 * MiMo V2.6-and-later family (`mimo-v2.6-flash`, `mimo-v2.6-pro`, `mimo-v2.6-pro-ultraspeed`, ...)
+* Kimi current ids (`kimi-k3`, `kimi-k2.6`, `kimi-k2.7-code`, `kimi-k2.7-code-highspeed`; bare or gateway-prefixed)
 
 The GPT-5.6-and-later family has an additional OpenAI/Azure-context check, so a string containing a qualifying GPT version (for example `gpt-5.6` or `gpt-6`) does not automatically cause GPT-specific fields to be sent to an unrelated endpoint.
 
@@ -1213,6 +1281,7 @@ Coverage includes:
 * chronological usage-cursor aggregation and compaction-safe (watermark) accounting
 * configuration behavior
 * JSONL telemetry behavior
+* Kimi classification, passive (no-mutation) resolution, and generic usage accounting
 
 The tests are designed around the pure core logic, while OpenCode runtime behavior is validated separately through actual plugin loading.
 
@@ -1410,7 +1479,7 @@ release, use:
 ```json
 {
   "plugin": [
-    "opencode-cache-engine@0.4.12"
+    "opencode-cache-engine@0.5.0"
   ]
 }
 ```
