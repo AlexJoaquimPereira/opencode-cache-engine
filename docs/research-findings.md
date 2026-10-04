@@ -284,6 +284,23 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Notes: A route may serve a Claude model without exposing Anthropic caching; do
   not infer cache support from the model catalogue.
 
+## RF-OR — OpenRouter transport and routing
+
+### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
+
+- Status: current
+- Verified: 2026-09-26
+- Area: openrouter-transport
+- Fact: Which upstream OpenRouter picks is not observable from a plugin, so
+  CacheEngine must never claim or override routing.
+- Evidence: [O]
+- Sources: local — recorded in `docs/cache-policy-inventory.md` §7; consistent
+  with RF-OC-003.
+- Justifies: the "never override routing" invariant.
+- Version context: OpenCode 1.18.34.
+- Re-verify when: OpenRouter exposes routing information to plugins.
+- Superseded by: null
+
 ### RF-OR-002 — `@openrouter/ai-sdk-provider` converts `cacheControl` to wire `cache_control`
 
 - Status: current
@@ -309,23 +326,6 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Notes: CacheEngine adds no `x-session-id` for Claude (`openRouterAffinity` is
   false for the Claude family).
 
-## RF-OR — OpenRouter transport and routing
-
-### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
-
-- Status: current
-- Verified: 2026-09-26
-- Area: openrouter-transport
-- Fact: Which upstream OpenRouter picks is not observable from a plugin, so
-  CacheEngine must never claim or override routing.
-- Evidence: [O]
-- Sources: local — recorded in `docs/cache-policy-inventory.md` §7; consistent
-  with RF-OC-003.
-- Justifies: the "never override routing" invariant.
-- Version context: OpenCode 1.18.34.
-- Re-verify when: OpenRouter exposes routing information to plugins.
-- Superseded by: null
-
 ## RF-SDK — AI-SDK and provider-package serialization
 
 ### RF-SDK-001 — `@openrouter/ai-sdk-provider` forwards `providerOptions.openrouter` verbatim, so OpenRouter needs snake_case keys
@@ -348,7 +348,10 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   field names.
 - Superseded by: null
 - Notes: Sending camelCase to OpenRouter fails silently — the cache key is
-  dropped without an error.
+  dropped without an error. **Scope note:** this is about the GPT
+  `prompt_cache_key` / `prompt_cache_options` options. It does **not** contradict
+  RF-OR-002: the provider *does* convert the separate `cacheControl` key to wire
+  `cache_control`. Only the GPT cache options are forwarded verbatim.
 
 ## RF-PRV — Provider API mechanics (not model-specific)
 
