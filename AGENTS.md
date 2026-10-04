@@ -5,6 +5,15 @@ request structure only for verified provider behavior, and keep each mutation
 narrow, deterministic, and tested; otherwise preserve the request and observe
 provider-reported usage.
 
+**Current state:** v0.4.x maintenance is complete. The audit findings through
+F5 and the N1–N5 concurrency/telemetry defects are fixed, and the verified
+evidence lives in `docs/cache-policy-inventory.md` and
+`docs/research-findings.md`. Treat that as the stable baseline. All planned
+future work — new provider strategies, the shared-core refactor, the OpenCode V2
+adapter, and the dual-runtime 1.0 release — is specified in
+`docs/implementation-plan-v2.md`; read it, and the Roadmap section at the end of
+this file, before starting any of it.
+
 ## Commands
 
 ```bash
@@ -196,3 +205,76 @@ Hard rules:
 OpenCode is the harness. Use `policy-resolution` telemetry
 (`matchCategory`, `matchReason`, `overlaySkippedReason`) to see how a model
 actually resolved before assuming anything about it.
+
+## Roadmap (v0.5.x → 1.0): planned future work
+
+`docs/implementation-plan-v2.md` is the authoritative plan for everything after
+v0.4.x. Read it before starting roadmap work, and treat it as a milestone
+checklist rather than as authorization to implement.
+
+Milestones, in order:
+
+1. **0.5.x — provider coverage (Kimi, Claude, Gemini, Qwen).** A
+   provider-coverage phase, *not* an architecture phase. Each family lands as its
+   own validated release: `0.5.0` Kimi (route-scoped: Moonshot Chat/Responses
+   `prompt_cache_options` vs the Anthropic-compatible `cache_control` path),
+   `0.5.1` Anthropic/Claude (cache-control strategy validated against the real V1
+   request shape), `0.5.2` Gemini (passive/implicit), `0.5.3` Qwen (passive
+   first; markers only if the exact endpoint justifies them). **Mistral and
+   xAI/Grok are not prerequisites** for this release line — deferred candidates,
+   each still requiring its own audit-first evidence note.
+2. **0.6.x — core consolidation.** Shared-core usage/accounting extraction and
+   generic policy conformance tests, with no provider prerequisites.
+3. **0.7.x — shared-core refactor.** Runtime-adapter interface, formalized
+   session-state model, and a V2 plugin skeleton (on the V2 branch).
+4. **0.8.x — V2 adapter.** Map the hooks (`context`, `model.request`,
+   `compaction`), confirm TUI/CLI integration, then dual-runtime integration
+   testing.
+5. **0.9.x — polish and compliance.** V2 performance/logging, final docs review.
+6. **1.0.0 — dual-runtime release.** Shared core plus both adapters, green
+   tests, finalized packaging.
+
+Read §2 of the plan before starting any provider work: it carries the per-provider
+tasks, references-to-verify, required tests, acceptance criteria, branch/release
+workflow, and the v0.5.x definition of done.
+
+Branches: `master`/`main` carries the V1 shared core, policies, and releases.
+`feature/v2-adapter` is branched off the `v0.4.13` tag and continues
+independently; it merges *from* `master`, and no V2 code lands in `master` until
+the integration phase. `feature/provider-<name>` is optional per provider.
+
+Binding constraints on roadmap work — these override the plan:
+
+- The plan is a roadmap, not a source of truth for provider behavior. Every
+  provider recipe in it is illustrative; the official links are *references to
+  verify*, never evidence. Never implement a field name, header, TTL, or usage
+  mapping from the plan text. Verify each one from first-party creator
+  documentation and record it, or classify the model as insufficient evidence
+  and stay passive.
+- Every new provider or model still goes through **Future-model maintenance
+  procedure (audit first)** above, and every verified fact is stored in the two
+  tracked files. Do not skip the audit because a provider is already on the
+  roadmap.
+- Gate per **API route**, not per provider name. A provider reached through a
+  native endpoint, an OpenAI-compatible gateway, or a third-party gateway can
+  have different request shapes; assume nothing is uniform across a vendor's
+  endpoints or models. Anthropic and Kimi in particular need route-difference
+  tests.
+- Never bundle a provider addition with a large architecture refactor. Keep the
+  phase small and release incrementally; a validated passive policy beats an
+  active mutation based on assumptions, and shipping fewer providers beats
+  lowering the evidence or test standard.
+- The **Provider invariants** above stay binding for the existing families. A
+  new family earns its own invariant bullet only after its evidence is recorded.
+- Telemetry changes stay additive: keep existing record kinds, field names, and
+  provider-correct ratios readable by current consumers.
+- Runtime-file moves or renames (`cache-engine.ts` becoming a V1 adapter module,
+  a new V2 entrypoint) must update the `Ownership and runtime` section, the
+  `package.json` `exports` map, and the `files` whitelist in the same change,
+  and be validated with `npm pack --dry-run`. Keep the existing `./server`
+  entrypoint working or make an explicit breaking version bump.
+- Keep the V1 path stable on `master`; V1-only tasks must not take on V2 runtime
+  dependencies.
+- Pricing, cost thresholds, and context/output limits stay out of scope.
+- The plan's CI/packaging automation is optional future work; do not add a
+  bundler, `tsc`, or runtime dependencies just to satisfy it.
