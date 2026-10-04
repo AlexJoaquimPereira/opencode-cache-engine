@@ -225,6 +225,27 @@ export const BASELINES = {
     usageFields: ["prompt_tokens_details.cached_tokens", "cache_read_input_tokens"],
     inventoryRef: "§4 Xiaomi MiMo",
   },
+  "moonshot.implicit-cache": {
+    id: "moonshot.implicit-cache",
+    creator: "moonshot",
+    appliesTo:
+      "Moonshot/Kimi OpenAI-compatible Chat Completions and Responses (automatic prefix caching)",
+    automatic: true,
+    defaultMode: "implicit",
+    supportsExplicitBreakpoints: false,
+    minCacheTokens: null,
+    ttl: "5m",
+    cacheKeyOptional: true,
+    // Cache Write (separate billing + TTL choice) is documented for kimi-k3 only;
+    // kimi-k2.6/kimi-k2.7 report implicit reads only. Kept true because the
+    // family includes kimi-k3 (see the inventory §5 table, item 11).
+    cacheWriteBilled: true,
+    usageFields: [
+      "prompt_tokens_details.cached_tokens",
+      "prompt_tokens_details.cache_write_tokens",
+    ],
+    inventoryRef: "§5 Moonshot Kimi",
+  },
   "neutral.none": {
     id: "neutral.none",
     creator: "unknown",
@@ -237,7 +258,7 @@ export const BASELINES = {
     cacheKeyOptional: false,
     cacheWriteBilled: false,
     usageFields: [],
-    inventoryRef: "§6 Compatibility Matrix",
+    inventoryRef: "§7 Compatibility Matrix",
   },
 }
 
@@ -284,7 +305,7 @@ export const TRANSPORTS = {
     kind: "openrouter",
     sessionAffinityHeader: "x-session-id",
     stickyRouting: true,
-    inventoryRef: "§5 OpenRouter transport",
+    inventoryRef: "§6 OpenRouter transport",
   },
 }
 
@@ -292,9 +313,9 @@ function resolveTransport(s) {
   const p = String(s.providerID ?? "").toLowerCase()
   if (p === "openrouter") return { ...TRANSPORTS.openrouter }
   if (!p) {
-    return { id: "unknown", kind: "unknown", sessionAffinityHeader: null, stickyRouting: false, inventoryRef: "§5 OpenRouter transport" }
+    return { id: "unknown", kind: "unknown", sessionAffinityHeader: null, stickyRouting: false, inventoryRef: "§6 OpenRouter transport" }
   }
-  return { id: p, kind: "direct", sessionAffinityHeader: null, stickyRouting: false, inventoryRef: "§5 OpenRouter transport" }
+  return { id: p, kind: "direct", sessionAffinityHeader: null, stickyRouting: false, inventoryRef: "§6 OpenRouter transport" }
 }
 
 // ---------------------------------------------------------------------------
@@ -505,6 +526,30 @@ export const POLICY_REGISTRY = [
     legacy: true,
     runtime: rt("deepseek"),
     inventoryRef: "§2 DeepSeek",
+  },
+  {
+    // v0.5.0: Moonshot/Kimi. On the native OpenAI-compatible Chat Completions
+    // and Responses paths, context caching is automatic (implicit); the optional
+    // `prompt_cache_options` object only selects the write TTL (`5m`|`1h`) and
+    // does not enable caching, so CacheEngine stays PASSIVE here (no request
+    // mutation). The Anthropic-compatible Messages path uses a different
+    // top-level `cache_control` shape and is deliberately NOT applied to the
+    // OpenAI-compatible request. Matched by the documented current ids (bare or
+    // gateway-prefixed); deprecated K2/K2.5/`moonshot-v1-*` ids and other
+    // `*kimi*` names stay neutral.
+    id: "moonshot.kimi",
+    creator: "moonshot",
+    family: "kimi",
+    kind: "family",
+    pattern: /(?:^|\/)kimi-k(?:3|2\.6|2\.7-code)(?![\w.])/i,
+    exactIds: ["kimi-k3", "kimi-k2.6", "kimi-k2.7-code", "kimi-k2.7-code-highspeed"],
+    baseline: "moonshot.implicit-cache",
+    overlays: [],
+    legacy: true,
+    runtime: rt("kimi"),
+    boundary: "Kimi K2.6 / K2.7-code / K3 (Moonshot OpenAI-compatible path)",
+    note: "Moonshot context caching is automatic on the OpenAI-compatible Chat/Responses path; `prompt_cache_options` selects only the write TTL (5m/1h, default 5m) and is not required for caching, and explicit `prompt_cache_breakpoint` is rejected. CacheEngine is therefore passive (no mutation). The Anthropic-compatible Messages path uses a separate top-level `cache_control` and is not applied here. Cache Write (separate billing/TTL choice) is documented for kimi-k3 only. Verified 2026-10-04.",
+    inventoryRef: "§5 Moonshot Kimi",
   },
 ]
 
