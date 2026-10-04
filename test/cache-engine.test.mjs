@@ -17,6 +17,7 @@ import {
   POLICY_DEEPSEEK,
   POLICY_GLM53,
   POLICY_GPT56,
+  POLICY_KIMI,
   POLICY_MIMO26,
   POLICY_NEUTRAL,
   affinityTelemetryFields,
@@ -415,6 +416,65 @@ test("unrelated MiMo/other models do NOT match MiMo policy", () => {
   assert.equal(detectPolicy(M("anthropic", "claude-sonnet-4-5")), POLICY_NEUTRAL)
 })
 
+// --- v0.5.0 Moonshot/Kimi (passive) ---------------------------------------
+// Moonshot context caching is automatic on the OpenAI-compatible Chat/Responses
+// path, so the Kimi policy is passive and must not mutate the request. The
+// Anthropic-compatible `cache_control` path is a different request shape and is
+// deliberately not implemented here.
+test("v0.5.0: current Moonshot/Kimi models match the Kimi policy", () => {
+  assert.equal(detectPolicy(M("moonshot", "kimi-k3")), POLICY_KIMI)
+  assert.equal(detectPolicy(M("moonshotai", "kimi-k2.6")), POLICY_KIMI)
+  assert.equal(detectPolicy(M("moonshotai-cn", "kimi-k2.7-code")), POLICY_KIMI)
+  assert.equal(detectPolicy(M("moonshotai", "kimi-k2.7-code-highspeed")), POLICY_KIMI)
+  // gateway-prefixed (OpenRouter) shape
+  assert.equal(detectPolicy(M("openrouter", "moonshotai/kimi-k3")), POLICY_KIMI)
+  assert.equal(
+    detectPolicy({ providerID: "openrouter", api: { id: "moonshotai/kimi-k3", npm: "@openrouter/ai-sdk-provider" } }),
+    POLICY_KIMI,
+  )
+})
+
+test("v0.5.0: retired/renamed Kimi models stay neutral", () => {
+  assert.equal(detectPolicy(M("moonshot", "kimi-k2")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("moonshot", "kimi-k2-0905")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("moonshotai", "kimi-k2.5")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("moonshot", "kimi-k2-thinking")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("moonshot", "moonshot-v1-128k")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("moonshot", "kimi-thinking-preview")), POLICY_NEUTRAL)
+  // Kimi Code Plan aliases are not first-party cache-documented here.
+  assert.equal(detectPolicy(M("kimi-code-plan-global", "kimi-for-coding")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("kimi-code-plan-global", "k3")), POLICY_NEUTRAL)
+})
+
+test("v0.5.0: similarly named non-Kimi models stay neutral", () => {
+  assert.equal(detectPolicy(M("acme", "kimiko-9")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("acme", "kimi-clone")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("acme", "acme/kimi-9000")), POLICY_NEUTRAL)
+  // Anchored: a prefixed/suffixed look-alike must not match the Kimi family.
+  assert.equal(detectPolicy(M("acme", "mykimi-k3")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("acme", "acme/kimix-k3")), POLICY_NEUTRAL)
+})
+
+test("v0.5.0: the Kimi policy is passive (no overlays, no mutation capabilities)", () => {
+  const r = resolvePolicy(M("moonshot", "kimi-k3"))
+  assert.equal(r.creator, "moonshot")
+  assert.equal(r.family, "kimi")
+  assert.equal(r.baseline.id, "moonshot.implicit-cache")
+  assert.deepEqual(r.overlays, [])
+  const caps = resolveRuntimePolicy(M("moonshot", "kimi-k3"))
+  assert.equal(caps.policy, "kimi")
+  assert.equal(caps.isNeutral, false)
+  assert.equal(caps.gptCacheMetadata, false)
+  assert.equal(caps.envRelocation, null)
+  assert.equal(caps.thinkingIntegrity, false)
+  assert.equal(caps.cacheRatio, null) // generic read/(read+write) applies
+  assert.equal(caps.openRouterAffinity, false)
+  // OpenRouter Kimi is still not an affinity family.
+  assert.equal(resolveRuntimePolicy(M("openrouter", "moonshotai/kimi-k3")).openRouterAffinity, false)
+  // Resolver and legacy classifier agree.
+  assert.equal(caps.policy, detectPolicy(M("moonshot", "kimi-k3")))
+})
+
 test("unrelated models match neutral policy", () => {
   assert.equal(detectPolicy(M("anthropic", "claude-sonnet-4-5")), POLICY_NEUTRAL)
   assert.equal(detectPolicy(M("openrouter", "x-ai/grok-4")), POLICY_NEUTRAL)
@@ -681,7 +741,7 @@ test("empty current sequence -> no anomalies", () => {
 // Config: provider policies
 // ===========================================================================
 
-test("config defaults enable all four policies", () => {
+test("config defaults enable all five policies", () => {
   const cfg = parseConfig({}, {})
   assert.deepEqual(cfg.policies.deepseek, { enabled: true })
   assert.deepEqual(cfg.policies.glm53, { enabled: true, stabilizeSystem: true, preserveThinkingIntegrity: true })
@@ -691,6 +751,7 @@ test("config defaults enable all four policies", () => {
     stickySession: true,
     preserveThinkingIntegrity: true,
   })
+  assert.deepEqual(cfg.policies.kimi, { enabled: true })
   assert.deepEqual(cfg.policies.gpt56, {
     enabled: true,
     promptCacheKey: true,
@@ -1809,6 +1870,12 @@ async function runPolicyMigrationProbe() {
       { name: "mimo-v3-future-openrouter", model: { providerID: "openrouter", id: "xiaomi/mimo-v3-flash", api: { id: "xiaomi/mimo-v3-flash" } }, expect: { policy: "mimo26", env: false, gpt: false, header: true } },
       { name: "unknown-vendor-model", model: { providerID: "acme", id: "acme/nova-9", api: { id: "acme/nova-9" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
       { name: "missing-provider-identity", model: { id: "acme/nova-9", api: { id: "acme/nova-9" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
+      { name: "kimi-k3-direct", model: { providerID: "moonshot", id: "kimi-k3", api: { id: "kimi-k3" } }, expect: { policy: "kimi", env: false, gpt: false, header: false } },
+      { name: "kimi-k3-openrouter", model: { providerID: "openrouter", id: "moonshotai/kimi-k3", api: { id: "moonshotai/kimi-k3" } }, expect: { policy: "kimi", env: false, gpt: false, header: false } },
+      { name: "kimi-k2.6", model: { providerID: "moonshotai", id: "kimi-k2.6", api: { id: "kimi-k2.6" } }, expect: { policy: "kimi", env: false, gpt: false, header: false } },
+      { name: "kimi-k2.7-code-highspeed", model: { providerID: "moonshotai-cn", id: "kimi-k2.7-code-highspeed", api: { id: "kimi-k2.7-code-highspeed" } }, expect: { policy: "kimi", env: false, gpt: false, header: false } },
+      { name: "kimi-deprecated-k2", model: { providerID: "moonshot", id: "kimi-k2", api: { id: "kimi-k2" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
+      { name: "kimi-for-coding", model: { providerID: "kimi-code-plan-global", id: "kimi-for-coding", api: { id: "kimi-for-coding" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
     ]
     const results = []
     for (const c of CASES) {
@@ -2675,6 +2742,12 @@ async function runUsageCollectionProbe() {
     responses[SID_THROW] = "THROW"
     await idle(SID_THROW)
 
+    // v0.5.0: Kimi uses the same generic accounting path (read/(read+write)).
+    const SID_KIMI = "ses_usage_kimi"
+    responses[SID_KIMI] = { data: [mkAst("k1", 4000, 400, 2000)] }
+    await setModel(SID_KIMI, "moonshot", "kimi-k3")
+    await idle(SID_KIMI)
+
     const lines = readFileSync(process.env.CACHE_ENGINE_METRICS_FILE, "utf8").trim().split("\\n")
     const records = lines.map((l) => JSON.parse(l))
     process.stdout.write(JSON.stringify({ calls, records }))
@@ -2693,7 +2766,7 @@ const usageResults = async () => (usageProbe ??= runUsageCollectionProbe())
 test("v0.4.6 K2: session.messages is called with the V1 SDK shape and a bound receiver", async () => {
   const { calls } = await usageResults()
   assert.ok(calls.length >= 5, "collector should call session.messages per idle")
-  const sids = ["ses_usage_basic", "ses_usage_multi", "ses_usage_empty", "ses_usage_undef", "ses_usage_throw"]
+  const sids = ["ses_usage_basic", "ses_usage_multi", "ses_usage_empty", "ses_usage_undef", "ses_usage_throw", "ses_usage_kimi"]
   for (const c of calls) {
     // exactly { path: { id } }, nothing else
     assert.deepEqual(Object.keys(c.opts), ["path"])
@@ -2736,6 +2809,25 @@ test("v0.4.6 K1: multi-message aggregation counts only assistant cache data, onc
   assert.equal(u.input, 15) // 10 + 5
   assert.equal(u.messages, 2) // user message excluded
   assert.equal(u.cursor, "m1") // newest = last element (oldest-first runtime order)
+})
+
+test("v0.5.0: Kimi uses the generic cache accounting path (read/(read+write))", async () => {
+  const { records } = await usageResults()
+  const usage = records.filter((r) => r.kind === "usage" && r.sid === "ses_usage_kimi")
+  assert.equal(usage.length, 1)
+  const u = usage[0]
+  assert.equal(u.read, 4000)
+  assert.equal(u.write, 400)
+  assert.equal(u.input, 2000)
+  assert.equal(u.messages, 1)
+  assert.equal(u.sampleHitRate, 91) // round(100*4000/4400)
+  assert.equal(u.provider, "moonshot")
+  assert.equal(u.model, "kimi-k3")
+  assert.equal(u.policy, "kimi")
+  // Generic ratio only: no GLM/MiMo-specific fields are fabricated.
+  assert.equal(u.promptTokens, undefined)
+  assert.equal(u.glmHitRate, undefined)
+  assert.equal(u.cacheHitRate, undefined)
 })
 
 test("v0.4.6 K1: empty/undefined/throwing messages fail safely without breaking the plugin", async () => {
