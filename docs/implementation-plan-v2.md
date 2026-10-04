@@ -104,9 +104,10 @@ it is validated; the four-provider set does not need to land in one release.
 | Milestone         | Scope                   | Exit condition                                              |
 |-------------------|-------------------------|-------------------------------------------------------------|
 | `0.5.0`           | Kimi                    | API-path-specific policy, tests, usage validation, docs     |
-| `0.5.1`           | Anthropic / Claude      | Cache-control strategy validated against V1 request shape   |
-| `0.5.2`           | Gemini                  | Passive policy and usage-reporting behavior validated       |
-| `0.5.3`           | Qwen                    | Passive policy and any justified request controls validated |
+| `0.5.1`           | Kimi maintenance        | Audit fixes and hardening (ratio guard, coverage)           |
+| `0.5.2`           | Anthropic / Claude      | Passive policy validated against the V1 request shape (OpenCode owns the `cache_control` breakpoints) |
+| `0.5.3`           | Gemini                  | Passive policy and usage-reporting behavior validated       |
+| `0.5.4`           | Qwen                    | Passive policy and any justified request controls validated |
 | `0.5.x` follow-up | Fixes and consolidation | Regressions fixed; docs and package contents verified       |
 
 These are suggested version slots, not mandatory version numbers. If a provider
@@ -138,7 +139,7 @@ not mix baseline repair with a provider feature. Do not cherry-pick V2 adapter
 changes into `master` just to start provider work; V1 provider work proceeds on
 the current V1 architecture.
 
-### 2.4 Step 1 — Kimi (0.5.0)
+### 2.4 Step 1 — Kimi (0.5.0–0.5.1)
 
 Official reference to verify: Moonshot AI, *Best practices for context caching*
 (`https://www.kimi.ai/academy/best-practices-for-context-caching`).
@@ -180,7 +181,7 @@ Acceptance criterion: Kimi-specific behavior is gated to the verified request
 path, tests pass, and the implementation does not assume every Kimi endpoint uses
 the same caching mechanism.
 
-### 2.5 Step 2 — Anthropic / Claude (0.5.1)
+### 2.5 Step 2 — Anthropic / Claude (0.5.2)
 
 Official reference to verify: Anthropic, *Prompt caching*
 (`https://platform.claude.com/docs/en/build-with-claude/prompt-caching`).
@@ -219,7 +220,7 @@ documented cache-control mechanism. If the V1 hook cannot safely express the
 required shape, document the limitation and defer the mutation rather than
 introducing a brittle workaround.
 
-### 2.6 Step 3 — Gemini (0.5.2)
+### 2.6 Step 3 — Gemini (0.5.3)
 
 Official reference to verify: Google AI, *Context caching*
 (`https://ai.google.dev/gemini-api/docs/caching`).
@@ -252,7 +253,7 @@ Acceptance criterion: Gemini is recognized and its cache usage accounted for
 wherever existing OpenCode data makes that possible. No explicit cache-object
 lifecycle management in this task.
 
-### 2.7 Step 4 — Qwen (0.5.3)
+### 2.7 Step 4 — Qwen (0.5.4)
 
 Official reference to verify: Qwen Cloud, *FAQ — text generation*
 (`https://docs.qwencloud.com/resources/faq-text-generation`).
