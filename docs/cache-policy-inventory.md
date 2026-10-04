@@ -303,7 +303,56 @@ and the model endpoints API.
 
 ---
 
-## 6. OpenRouter transport facts (routing only, not model semantics)
+## 6. Anthropic Claude (Messages API)
+
+Anthropic caching is **explicit**: a request must carry `cache_control` markers
+(top-level automatic caching or per-block breakpoints). **OpenCode 1.18.34 already
+applies the breakpoints itself**, so CacheEngine is passive here. Verification date
+**2026-10-04**.
+
+| # | Question | Finding | Evidence |
+| --- | --- | --- | --- |
+| 1 | Model names/aliases | Current ids: `claude-fable-5-1`, `claude-mythos-5-1`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-fable-5`, `claude-mythos-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5` (+`-20251001`), `claude-opus-4-5` (+`-20251101`), `claude-sonnet-4-5` (+`-20250929`); older `claude-3-*`; deprecated `claude-mythos-preview`. | [D] |
+| 2 | Family identification | Literal `model` id; families opus/sonnet/haiku/fable/mythos (+ legacy `claude-3-*`). | [D]/[I] |
+| 3 | Scope (route) | Native Messages API (`/v1/messages`) and Claude-compatible routes (Bedrock `cachePoint`, Vertex, OpenRouter, Foundry). | [D] |
+| 4 | Automatic vs controls | Caching is **not** provider-managed without a marker: top-level `cache_control: {type:"ephemeral"}` (automatic; applies to the last cacheable block) or per-block `cache_control`. OpenCode uses per-block breakpoints. | [D] |
+| 5 | Cacheable-prefix rules | Prefix order `tools -> system -> messages`; a change at a level invalidates that level and all later levels. Reads look back up to 20 blocks. | [D] |
+| 6 | Minimum cacheable length | Varies by model: 512 tok (fable/mythos 5.x, opus 5.x, sonnet 5.x), 1,024 (opus 4.x, sonnet 4.x/4, opus 4.1), 2,048 (opus 4.7, haiku 3.5, mythos-preview), 4,096 (opus 4.6/4.5, haiku 4.5). | [D] |
+| 7 | Breakpoints | Max **4**. Automatic + explicit share the slots; same block + same TTL is a no-op; different TTL or >4 slots = HTTP 400. `cache_control` is valid on text/image/document content blocks, `system[]` blocks, and `tools[]`, not on thinking blocks. | [D] |
+| 8 | Cache key behavior | No user cache key; matching is by prefix content. | [D] |
+| 9 | Retention/TTL | `5m` default (write 1.25x) or `ttl:"1h"` per breakpoint (write 2x); reads 0.1x. Longer TTL must precede shorter when mixed. OpenCode uses the default 5m. | [D] |
+| 10 | Usage fields | `usage.cache_read_input_tokens` (read) and `usage.cache_creation_input_tokens` (write); TTL breakdown `cache_creation.ephemeral_5m_input_tokens` / `ephemeral_1h_input_tokens` sums to the total. | [D] |
+| 11 | Generation differences | Per-model minimum cacheable length and cache pricing differ; the mechanism is the same. | [D] |
+| 12 | Prefix-stability guidance | Stable, reusable content first; volatile content last; do not reorder tools/system/history; a breakpoint should mark a recurring prefix. | [D] |
+| 13 | Affinity/routing | No cache-affinity/session parameter. | [D] |
+| 14 | Platforms | Automatic top-level caching works everywhere except **legacy Amazon Bedrock (Opus 4.6 and earlier)**, which requires explicit breakpoints. Cache isolation differs (per-workspace on Claude API/AWS/Foundry; per-org on Bedrock/Google Cloud). | [D] |
+
+**OpenCode behavior (decisive).** `ProviderTransform.applyCaching` (v1.18.34)
+marks the first two `system` messages and the last two non-system messages
+(≤4 breakpoints, default 5m TTL) for Claude/Anthropic transports; on
+native/Bedrock it uses message-level provider options, elsewhere the last content
+block. It is bypassed when a top-level `options.cacheControl` is supplied.
+
+**CacheEngine treatment: passive (no mutation).** Because OpenCode already applies
+breakpoints, CacheEngine classifies Claude into the `claude` family for telemetry
+and relies on OpenCode's usage normalization. It deliberately does **not** send
+`cacheControl`, `cache_control`, a cache key, or a TTL; doing so would switch
+OpenCode to top-level automatic caching and could produce duplicate or
+TTL-conflicting markers (→ HTTP 400).
+
+Sources (accessed 2026-10-04): Anthropic *Prompt caching*
+(https://platform.claude.com/docs/en/build-with-claude/prompt-caching) and
+*Messages* (https://platform.claude.com/docs/en/api/messages); OpenCode
+`provider/transform.ts` + `session/session.ts` at tag `v1.18.34`.
+
+**Unresolved.** Whether `providerOptions.openrouter.cacheControl` serializes to
+Anthropic-style `cache_control` through OpenRouter is not verified; the AI SDK
+turning `options.cacheControl` into a literal top-level `cache_control` is
+inferred from OpenCode's `usesAnthropicAutomaticCaching` gate.
+
+---
+
+## 7. OpenRouter transport facts (routing only, not model semantics)
 
 These are OpenRouter routing/transport facts. They are **not** evidence of any
 creator's cache semantics.
@@ -340,7 +389,7 @@ best-effort** behavior for `providerID === "openrouter"` only, which matches
 OpenRouter's documented header name. It is not a creator-documented cache
 control and does not guarantee provider continuity.
 
-### 6a. OpenCode usage normalization (verified 2026-10-02)
+### 7a. OpenCode usage normalization (verified 2026-10-02)
 
 OpenCode V1 (1.18.34) normalizes provider cache usage into the SDK shape
 `Message.info.tokens = { input, output, reasoning, cache: { read, write } }`.
@@ -367,7 +416,7 @@ provider-specific parsing**; it reads only the normalized fields.
 
 ---
 
-## 7. CacheEngine Compatibility Matrix
+## 8. CacheEngine Compatibility Matrix
 
 Legend for "recommended family inheritance": **keep** = current treatment
 matches docs; **extend** = docs support broadening scope (a future change, not
@@ -392,10 +441,12 @@ made here); **hold** = do not inherit without first-party evidence.
 | Xiaomi | V2.5 negative control: `mimo-v2.5`, `mimo-v2.5-pro` | Documented as deprecated 2026-10-21; cache capability listed; no V2.6 policy inheritance claimed | neutral | hold | n/a | High | MiMo *Models*; *news/latest/v2-6* | 2026-09-26 |
 | Moonshot | Kimi current ids: `kimi-k3`, `kimi-k2.6`, `kimi-k2.7-code`, `kimi-k2.7-code-highspeed` (bare or gateway-prefixed) | OpenAI-compatible Chat/Responses: automatic implicit caching; optional `prompt_cache_options` write TTL (5m/1h, default 5m); Cache Write is k3-only; read/write usage fields | Passive Kimi policy (v0.5.0): no mutation, generic `read/(read+write)` accounting, no OpenRouter affinity | keep | none — passive only (no overlay) | High (docs) / Medium (treatment) | Moonshot *Best practices for context caching*; *api/chat* | 2026-10-04 |
 | Moonshot | retired/renamed: `kimi-k2*`, `kimi-k2.5`, `moonshot-v1-*`, `kimi-thinking-preview`, `kimi-latest`, `kimi-for-coding`, `k3` | Deprecated or not first-party cache-documented; no Kimi policy claimed | neutral | hold | n/a | High | Moonshot *Models* (deprecations) | 2026-10-04 |
+| Anthropic | Claude current ids: `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-4-5`, `claude-sonnet-4-5`, `claude-opus-4-8`/`4.7`/`4.6`, `claude-fable-5*`, `claude-mythos-5*`, older `claude-3-*` (bare or gateway-prefixed) | Messages API: explicit `cache_control` breakpoints (max 4; 5m default / 1h TTL); usage `cache_read_input_tokens`/`cache_creation_input_tokens`; per-model minimum prefix | Passive Claude policy (v0.5.2): no mutation — OpenCode already applies the breakpoints; generic `read/(read+write)` accounting | keep | none — passive only (OpenCode owns the breakpoints) | High (docs + OpenCode source) | Anthropic *Prompt caching*; OpenCode `provider/transform.ts` @ v1.18.34 | 2026-10-04 |
+| Anthropic | look-alikes / unsupported: `claude-opus-clone`, `myclaude-opus-5`, `claude-2`, `claude-instant` | Not a current Claude Messages id | neutral | hold | n/a | High | Anthropic *Messages* (model enum) | 2026-10-04 |
 
 ---
 
-## 8. Cases where documentation is insufficient to establish inheritance
+## 9. Cases where documentation is insufficient to establish inheritance
 
 These are explicit gaps. For each, first-party docs do **not** establish whether
 a newer model inherits an older policy. They must not be resolved by guessing.
@@ -426,11 +477,11 @@ a newer model inherits an older policy. They must not be resolved by guessing.
     MiMo-specific cache section (only generic sticky routing), and every Xiaomi
     endpoint reports `supports_implicit_caching: false` while still listing
     cache-read pricing and while MiMo docs and live requests show cached tokens.
-    The metadata's exact semantics are undefined → **UNKNOWN** (see §6).
+    The metadata's exact semantics are undefined → **UNKNOWN** (see §7).
 11. **OpenAI Chat Completions usage-field naming.** Confirmed first-party: Chat
     uses `usage.prompt_tokens_details.cached_tokens`/`cache_write_tokens`;
     Responses uses `usage.input_tokens_details.*`. OpenCode normalizes both
-    (see §6a).
+    (see §7a).
 12. **Moonshot/Kimi minimum cacheable prefix length.** Docs state only that the
     cache is stored in blocks; no numeric minimum is published → **UNKNOWN**.
 13. **Moonshot/Kimi cache-key semantics.** `prompt_cache_key` (Chat/Responses)
@@ -441,8 +492,20 @@ a newer model inherits an older policy. They must not be resolved by guessing.
     (top-level `cache_control`, `kimi-k3` only) but **not implemented** in
     v0.5.0: it is a separate request shape, and the task scope is the
     OpenAI-compatible path. A future release may add it with route-scoped tests.
+15. **Anthropic per-model minimum cacheable length.** Documented by model family
+    (512 / 1,024 / 2,048 / 4,096 tokens) but not exposed to the plugin, and the
+    rendered prompt size is not observable here — so CacheEngine cannot enforce it.
+16. **OpenRouter serialization of Anthropic cache markers.** Whether
+    `providerOptions.openrouter.cacheControl` becomes Anthropic-style
+    `cache_control` on the wire through OpenRouter is **UNVERIFIED**; the AI SDK
+    turning top-level `options.cacheControl` into a literal `cache_control` is
+    inferred from OpenCode's `usesAnthropicAutomaticCaching` gate.
+17. **Anthropic automatic vs explicit breakpoints.** Both are documented;
+    OpenCode 1.18.34 chooses explicit per-block breakpoints. CacheEngine does not
+    override this, so the choice of automatic vs explicit for a given route is
+    **OpenCode-owned**, not a CacheEngine policy.
 
-## 9. What did not change (v0.4.0 baseline, historical)
+## 10. What did not change (v0.4.0 baseline, historical)
 
 - No runtime file, test file, configuration, provider config, detection regex,
   policy logic, telemetry field, or GPT context/output limit was modified.
@@ -562,7 +625,7 @@ of this section.
   resolved. No MiMo behavior change.
 - **P-G — OpenCode normalizes cache-token fields.** OpenCode V1 (1.18.34) maps
   OpenAI Chat/Responses, Anthropic, and DeepSeek cache-usage fields into
-  `Message.info.tokens.cache.{read,write}` (see §6a). CacheEngine reads only the
+  `Message.info.tokens.cache.{read,write}` (see §7a). CacheEngine reads only the
   normalized fields, so **no provider-specific parsing is required** and no v0.5.x
   mapping change is specified. `tokens.input` is non-cached input; DeepSeek
   `cache.write` is 0.
