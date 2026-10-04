@@ -3980,3 +3980,93 @@ test("v0.5.2: disabling the Claude policy does not change passivity or leak into
   assert.equal(out.glm.systemChanged, true)
   assert.deepEqual(out.direct.options, out.preOpts)
 })
+
+// ===========================================================================
+// v0.5.2 route-support audit: CacheEngine must be passive for Claude on EVERY
+// access route (direct Anthropic, OpenCode Zen/Go, OpenRouter, Bedrock, Vertex,
+// OpenAI-compatible gateways). It injects no `cache_control`/`cacheControl` and
+// no affinity header on any of them — OpenCode owns Anthropic caching.
+// ===========================================================================
+
+async function runClaudeRouteProbe(configPolicies) {
+  const home = mkdtempSync(join(tmpdir(), "ce-claude-routes-"))
+  const pluginURL = new URL("../src/cache-engine.ts", import.meta.url).href
+  const script = `
+    import { mkdirSync, writeFileSync } from "node:fs"
+    process.env.CACHE_ENGINE_METRICS_FILE = process.env.HOME + "/claude-routes.jsonl"
+    const cfgPolicy = ${JSON.stringify(configPolicies ?? null)};
+    if (cfgPolicy) {
+      mkdirSync(process.env.HOME + "/.config/opencode", { recursive: true });
+      writeFileSync(process.env.HOME + "/.config/opencode/cache-engine.json", JSON.stringify({ policies: cfgPolicy }));
+    }
+    const { CacheEngine } = await import(${JSON.stringify(pluginURL)});
+    const fake = {
+      app: { log: async () => ({}) },
+      session: { get: async () => ({ data: { parentID: null } }), messages: async () => ({ data: [] }) },
+      tool: { list: async () => ({ data: [] }) },
+    };
+    const hooks = await CacheEngine({ client: fake, directory: process.env.HOME });
+    const SYS = ["A", "You are powered by the model named claude-sonnet-4-5", "<env>", "Today date: 2026-10-04", "</env>", "Z"].join("\\n");
+    const routes = {
+      direct: { providerID: "anthropic", id: "claude-sonnet-4-5", api: { id: "claude-sonnet-4-5", npm: "@ai-sdk/anthropic" } },
+      zen: { providerID: "opencode", id: "claude-sonnet-4-5", api: { id: "claude-sonnet-4-5", npm: "@ai-sdk/anthropic" } },
+      go: { providerID: "opencode-go", id: "claude-sonnet-4-5", api: { id: "claude-sonnet-4-5", npm: "@ai-sdk/anthropic" } },
+      openrouter: { providerID: "openrouter", id: "anthropic/claude-opus-4-8", api: { id: "anthropic/claude-opus-4-8", npm: "@openrouter/ai-sdk-provider" } },
+      bedrock: { providerID: "amazon-bedrock", id: "anthropic.claude-3-5-sonnet-20241022-v2:0", api: { id: "anthropic.claude-3-5-sonnet-20241022-v2:0", npm: "@ai-sdk/amazon-bedrock" } },
+      vertex: { providerID: "google-vertex-anthropic", id: "claude-sonnet-4-5@20250929", api: { id: "claude-sonnet-4-5@20250929", npm: "@ai-sdk/google-vertex/anthropic" } },
+      openaiCompat: { providerID: "some-gateway", id: "claude-sonnet-4-5", api: { id: "claude-sonnet-4-5", npm: "@ai-sdk/openai-compatible" } },
+      lookalike: { providerID: "acme", id: "acme/claude-opus-clone", api: { id: "acme/claude-opus-clone" } },
+    };
+    const preOpts = { promptCacheKey: "user-key", cache_control: { type: "ephemeral" }, temperature: 0.3 };
+    const preHdrs = { "x-session-id": "user-sess", "x-custom": "keep" };
+    const out = {};
+    for (const [name, model] of Object.entries(routes)) {
+      const paramsOut = { options: { ...preOpts } };
+      const sysOut = { system: [SYS] };
+      const headersOut = { headers: { ...preHdrs } };
+      const provider = { source: "config", info: { id: model.providerID }, options: {} };
+      const sid = "ses_route_" + name;
+      const message = { id: "m", sessionID: sid, role: "user", content: "x" };
+      await hooks["chat.params"]({ sessionID: sid, agent: "build", model, provider, message }, paramsOut);
+      await hooks["experimental.chat.system.transform"]({ sessionID: sid, model, provider }, sysOut);
+      await hooks["chat.headers"]({ sessionID: sid, agent: "build", model, provider, message }, headersOut);
+      out[name] = {
+        options: paramsOut.options,
+        systemChanged: sysOut.system[0] !== SYS,
+        headers: headersOut.headers,
+        addedCacheKeys: Object.keys(paramsOut.options).filter((k) => !(k in preOpts) && /cache/i.test(k)),
+      };
+    }
+    out.preOpts = preOpts;
+    out.preHdrs = preHdrs;
+    process.stdout.write(JSON.stringify(out));
+  `
+  const stdout = execFileSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], {
+    cwd: process.cwd(),
+    env: { ...process.env, HOME: home },
+    encoding: "utf8",
+  })
+  return JSON.parse(stdout.trim())
+}
+
+let claudeRouteProbe
+const claudeRouteResults = async () => (claudeRouteProbe ??= runClaudeRouteProbe(null))
+
+test("v0.5.2: CacheEngine is passive for Claude on every access route", async () => {
+  const out = await claudeRouteResults()
+  for (const name of ["direct", "zen", "go", "openrouter", "bedrock", "vertex", "openaiCompat", "lookalike"]) {
+    assert.deepEqual(out[name].options, out.preOpts, `${name}: options must be preserved`)
+    assert.equal(out[name].systemChanged, false, `${name}: system must be unchanged`)
+    assert.deepEqual(out[name].headers, out.preHdrs, `${name}: headers must be preserved`)
+    assert.deepEqual(out[name].addedCacheKeys, [], `${name}: must add no cache-control field`)
+  }
+})
+
+test("v0.5.2: disabling Claude leaves every route request unchanged", async () => {
+  const out = await runClaudeRouteProbe({ claude: { enabled: false } })
+  for (const name of ["direct", "zen", "go", "openrouter", "bedrock", "vertex", "openaiCompat"]) {
+    assert.deepEqual(out[name].options, out.preOpts, `${name}: options preserved`)
+    assert.equal(out[name].systemChanged, false, `${name}: no relocation`)
+    assert.deepEqual(out[name].headers, out.preHdrs, `${name}: headers preserved`)
+  }
+})
