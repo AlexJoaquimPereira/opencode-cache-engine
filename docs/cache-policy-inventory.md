@@ -247,7 +247,63 @@ by OpenRouter (transport) but not by Xiaomi.
 
 ---
 
-## 5. OpenRouter transport facts (routing only, not model semantics)
+## 5. Moonshot Kimi (K2.6 / K2.7-code / K3)
+
+Moonshot/Kimi exposes **three different request shapes** with different cache
+controls; they must not be collapsed. CacheEngine implements the **passive**
+OpenAI-compatible path only. Verification date **2026-10-04**.
+
+| # | Question | Finding | Evidence |
+| --- | --- | --- | --- |
+| 1 | Model names/aliases | Current ids: `kimi-k3` (1M ctx), `kimi-k2.7-code`, `kimi-k2.7-code-highspeed`, `kimi-k2.6` (256K). Deprecated: `kimi-k2.5` and all `moonshot-v1-*` (2026-08-31), the K2 series (`kimi-k2`, `kimi-k2-0905-preview`, `kimi-k2-0711-preview`, `kimi-k2-turbo-preview`, `kimi-k2-thinking*`; 2026-05-25), `kimi-latest` (2026-01-28), `kimi-thinking-preview` (2025-11-11). Global API base `https://api.moonshot.ai`; China `https://api.moonshot.cn`. Docs host moved to `platform.kimi.ai` / `platform.kimi.com`. | [D] |
+| 2 | Family identification | Literal request `model` id only; no family field. Generations are K2.6 / K2.7 / K3. | [D]/[I] |
+| 3 | Scope (route) | Chat Completions and Responses (both OpenAI-compatible) accept all current ids; the Responses API and the Anthropic-compatible Messages API currently accept **`kimi-k3` only**. | [D] |
+| 4 | Automatic vs controls | **Automatic/implicit** on the OpenAI-compatible path. Optional `prompt_cache_options: { mode: "implicit", ttl: "5m"\|"1h" }` selects only the write TTL (default `5m`); `mode` accepts only `"implicit"`; it is **not required** for caching and is not an on/off switch — omitting it auto-writes the prefix at the `5m` tier (Cache Write charges apply). `prompt_cache_breakpoint` in content is rejected (HTTP 400). | [D] |
+| 5 | Cacheable-prefix rules | Prefix-content matching; changing any part of a prefix forfeits reuse of everything after it. Org-scoped; manual clearing unsupported. | [D] |
+| 6 | Minimum cacheable length | "Cache is stored in blocks"; a portion smaller than a block is a miss. **No numeric minimum documented.** | [D]/[U] |
+| 7 | Implicit vs explicit breakpoints | Implicit only on the OpenAI-compatible path; explicit per-block breakpoints are rejected. The Anthropic-compatible path instead uses a **top-level** `cache_control { type: "ephemeral", ttl: "5m"\|"1h" }` (per-message markers are ignored); omitting it means the request is read-only at `5m` with no write and no write charge. | [D] |
+| 8 | Cache key behavior | Optional `prompt_cache_key` (string) on Chat/Responses for session/task affinity; `metadata.user_id` on the Anthropic path. Matching is fundamentally by prefix content; the key's exact partitioning semantics are undocumented. | [D]/[U] |
+| 9 | Retention/TTL | `5m` (default) and `1h` tiers, independent. TTL is locked at first write; a hit renews under the original TTL; a fully expired prefix may be rewritten with a new TTL. | [D] |
+| 10 | Usage fields | Chat: `usage.prompt_tokens_details.cached_tokens` (read) and `.cache_write_tokens` (write). Responses: `usage.input_tokens_details.cached_tokens` / `.cache_write_tokens`. Anthropic: `usage.cache_read_input_tokens` / `usage.cache_creation_input_tokens`. Streaming needs `stream_options.include_usage=true`. Cache-write is also surfaced in response headers `Msh-Usage-Cache-Write-Tokens-5m` / `-1h`. | [D] |
+| 11 | Generation differences | Cache Write (separate billing + TTL choice) is documented for **`kimi-k3` only**; `kimi-k2.7*`/`kimi-k2.6` support implicit reads only. | [D] |
+| 12 | Prefix-stability guidance | Stable system prompts, tool definitions and reference material first; per-turn/user content last; keep fixed content byte-identical within a session; no timestamps/random ids in the prefix. K3 `reasoning_effort` switching invalidates prefix hits. | [D] |
+| 13 | Affinity/routing | No provider affinity parameter documented on the native API; `prompt_cache_key` / `metadata.user_id` are session-affinity aids. | [D]/[U] |
+| 14 | Gateway (OpenRouter) | OpenRouter lists Moonshot AI as automatic caching (reads 0.25×, writes free) and reports `prompt_tokens_details.cached_tokens` / `cache_write_tokens`. Slugs: `moonshotai/kimi-k3`, `moonshotai/kimi-k2.7-code`, `moonshotai/kimi-k2.6`, `moonshotai/kimi-k2.5`, `moonshotai/kimi-k2-thinking`, `moonshotai/kimi-k2-0905`, `moonshotai/kimi-k2`. Every `moonshotai/*` endpoint fetched reports `supports_implicit_caching: false` while listing `input_cache_read` pricing — the same metadata contradiction seen for MiMo; whether the flag is stale is **UNKNOWN**. OpenRouter sticky routing is transport, best-effort. | [D]/[O]/[U] |
+
+**Conflicting first-party evidence (recorded, unresolved).**
+
+- *K2.x cache-write schema vs FAQ.* The Chat Completions OpenAPI
+  (`ChatRequestBase`) declares `prompt_cache_key`/`prompt_cache_options` for the
+  K2.x models, while the context-caching FAQ says Cache Write is `kimi-k3` only.
+  CacheEngine treats the K3-gated reading as authoritative and the K2.x schema
+  entries as generic/unused; the discrepancy is **UNRESOLVED** and is a reason to
+  keep the policy passive.
+- *Model-name spelling.* The caching academy page names `kimi-k2.7` /
+  `kimi-k2.7-highspeed`, whereas the authoritative Models page lists
+  `kimi-k2.7-code` / `kimi-k2.7-code-highspeed`. CacheEngine matches the Models
+  page ids.
+
+**CacheEngine treatment: passive.** Because caching is automatic on the
+OpenAI-compatible path, and `prompt_cache_options` only selects a write TTL (and
+Cache Write is K3-only), CacheEngine does **not** mutate the request. It
+classifies the documented current ids into the `kimi` family for telemetry and
+relies on OpenCode's usage normalization for cache accounting. The
+Anthropic-compatible `cache_control` path is **not** implemented (a different
+request shape; deferred to a future release). The OpenAI path's optional
+`prompt_cache_key`/`prompt_cache_options` are deliberately not sent, because
+caching does not require them and the task's rule is "no mutation without a
+documented, tested benefit".
+
+Sources (accessed 2026-10-04): Moonshot/Kimi *Best practices for context caching*
+(https://www.kimi.ai/academy/best-practices-for-context-caching, updated
+2026-09-28) and its mirror https://platform.kimi.ai/docs/guide/context-caching;
+API docs https://platform.kimi.ai/docs/api/{chat,responses,messages,models};
+OpenRouter *Prompt Caching* (https://openrouter.ai/docs/features/prompt-caching)
+and the model endpoints API.
+
+---
+
+## 6. OpenRouter transport facts (routing only, not model semantics)
 
 These are OpenRouter routing/transport facts. They are **not** evidence of any
 creator's cache semantics.
@@ -284,7 +340,7 @@ best-effort** behavior for `providerID === "openrouter"` only, which matches
 OpenRouter's documented header name. It is not a creator-documented cache
 control and does not guarantee provider continuity.
 
-### 5a. OpenCode usage normalization (verified 2026-10-02)
+### 6a. OpenCode usage normalization (verified 2026-10-02)
 
 OpenCode V1 (1.18.34) normalizes provider cache usage into the SDK shape
 `Message.info.tokens = { input, output, reasoning, cache: { read, write } }`.
@@ -311,7 +367,7 @@ provider-specific parsing**; it reads only the normalized fields.
 
 ---
 
-## 6. CacheEngine Compatibility Matrix
+## 7. CacheEngine Compatibility Matrix
 
 Legend for "recommended family inheritance": **keep** = current treatment
 matches docs; **extend** = docs support broadening scope (a future change, not
@@ -334,10 +390,12 @@ made here); **hold** = do not inherit without first-party evidence.
 | Xiaomi | MiMo V2.6 Pro UltraSpeed: `mimo-v2.6-pro-ultraspeed` (OR `xiaomi/mimo-v2.6-pro-ultraspeed`) | Documented as a Pro **mode**, same V2.6 series; "Context Caching" listed; no documented mechanism difference from Pro | MiMo family baseline only (cached-token telemetry, provider-change/prefix diagnostics, OpenRouter affinity); **no** `<env>` overlay (v0.4.5) | family baseline; overlay stays Flash/Pro-explicit | none — baseline only | Medium | MiMo *news/latest/v2-6*; *Models*; *Pricing* | 2026-09-27 |
 | Xiaomi | later MiMo generations: none documented beyond V2.6; V2.5 deprecates 2026-10-21 | Not documented; no inheritance rule | Passive family baseline for any future >V2.6 id (v0.4.5); no `<env>` overlay | keep passive, baseline only | none | High (no later gens documented) | MiMo *Models*; *updates/model* | 2026-09-27 |
 | Xiaomi | V2.5 negative control: `mimo-v2.5`, `mimo-v2.5-pro` | Documented as deprecated 2026-10-21; cache capability listed; no V2.6 policy inheritance claimed | neutral | hold | n/a | High | MiMo *Models*; *news/latest/v2-6* | 2026-09-26 |
+| Moonshot | Kimi current ids: `kimi-k3`, `kimi-k2.6`, `kimi-k2.7-code`, `kimi-k2.7-code-highspeed` (bare or gateway-prefixed) | OpenAI-compatible Chat/Responses: automatic implicit caching; optional `prompt_cache_options` write TTL (5m/1h, default 5m); Cache Write is k3-only; read/write usage fields | Passive Kimi policy (v0.5.0): no mutation, generic `read/(read+write)` accounting, no OpenRouter affinity | keep | none — passive only (no overlay) | High (docs) / Medium (treatment) | Moonshot *Best practices for context caching*; *api/chat* | 2026-10-04 |
+| Moonshot | retired/renamed: `kimi-k2*`, `kimi-k2.5`, `moonshot-v1-*`, `kimi-thinking-preview`, `kimi-latest`, `kimi-for-coding`, `k3` | Deprecated or not first-party cache-documented; no Kimi policy claimed | neutral | hold | n/a | High | Moonshot *Models* (deprecations) | 2026-10-04 |
 
 ---
 
-## 7. Cases where documentation is insufficient to establish inheritance
+## 8. Cases where documentation is insufficient to establish inheritance
 
 These are explicit gaps. For each, first-party docs do **not** establish whether
 a newer model inherits an older policy. They must not be resolved by guessing.
@@ -368,13 +426,23 @@ a newer model inherits an older policy. They must not be resolved by guessing.
     MiMo-specific cache section (only generic sticky routing), and every Xiaomi
     endpoint reports `supports_implicit_caching: false` while still listing
     cache-read pricing and while MiMo docs and live requests show cached tokens.
-    The metadata's exact semantics are undefined → **UNKNOWN** (see §5).
+    The metadata's exact semantics are undefined → **UNKNOWN** (see §6).
 11. **OpenAI Chat Completions usage-field naming.** Confirmed first-party: Chat
     uses `usage.prompt_tokens_details.cached_tokens`/`cache_write_tokens`;
     Responses uses `usage.input_tokens_details.*`. OpenCode normalizes both
-    (see §5a).
+    (see §6a).
+12. **Moonshot/Kimi minimum cacheable prefix length.** Docs state only that the
+    cache is stored in blocks; no numeric minimum is published → **UNKNOWN**.
+13. **Moonshot/Kimi cache-key semantics.** `prompt_cache_key` (Chat/Responses)
+    and `metadata.user_id` (Anthropic path) exist, but how they partition cache
+    entries beyond "session affinity" is undocumented → **UNKNOWN**. CacheEngine
+    sends neither (passive policy).
+14. **Moonshot/Kimi Anthropic-compatible `cache_control` route.** Documented
+    (top-level `cache_control`, `kimi-k3` only) but **not implemented** in
+    v0.5.0: it is a separate request shape, and the task scope is the
+    OpenAI-compatible path. A future release may add it with route-scoped tests.
 
-## 8. What did not change
+## 9. What did not change (v0.4.0 baseline, historical)
 
 - No runtime file, test file, configuration, provider config, detection regex,
   policy logic, telemetry field, or GPT context/output limit was modified.
@@ -494,7 +562,7 @@ of this section.
   resolved. No MiMo behavior change.
 - **P-G — OpenCode normalizes cache-token fields.** OpenCode V1 (1.18.34) maps
   OpenAI Chat/Responses, Anthropic, and DeepSeek cache-usage fields into
-  `Message.info.tokens.cache.{read,write}` (see §5a). CacheEngine reads only the
+  `Message.info.tokens.cache.{read,write}` (see §6a). CacheEngine reads only the
   normalized fields, so **no provider-specific parsing is required** and no v0.5.x
   mapping change is specified. `tokens.input` is non-cached input; DeepSeek
   `cache.write` is 0.
