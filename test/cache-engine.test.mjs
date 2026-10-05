@@ -4190,3 +4190,22 @@ test("v0.5.3: OpenRouter Gemini is classified but left unmutated (no overlay, no
   assert.deepEqual(or.headers, out.preHdrs, "OpenRouter Gemini adds no affinity header")
   assert.deepEqual(or.addedCacheKeys, [], "OpenRouter Gemini adds no cache-control field")
 })
+
+test("v0.5.4: the probed OpenRouter Gemini endpoint stays classified-but-passive", () => {
+  // Boundary established by the live probe RF-OR-004 (2026-10-05):
+  // google/gemini-2.5-flash-lite:flex classifies as the gemini family, and
+  // CacheEngine injects neither a cache_control breakpoint nor an affinity header.
+  const model = M("openrouter", "google/gemini-2.5-flash-lite:flex")
+  const caps = resolveRuntimePolicy(model)
+  assert.equal(caps.policy, "gemini")
+  assert.equal(caps.isNeutral, false)
+  assert.equal(caps.openRouterAffinity, false)
+  assert.equal(caps.gptCacheMetadata, false)
+  assert.equal(caps.envRelocation, null)
+  assert.equal(caps.cacheRatio, null)
+  const ex = explainPolicyResolution(model)
+  assert.equal(ex.family, "gemini")
+  assert.equal(ex.overlayApplied, false)
+  assert.deepEqual(ex.overlays, [])
+  assert.equal(ex.transportKind, "openrouter")
+})
