@@ -423,7 +423,7 @@ Verification date **2026-10-05**.
 | Native Vertex AI (`google-vertex`, `@ai-sdk/google-vertex`) | provider-managed implicit (2.5+); route-specific minimums | passive |
 | OpenCode Zen (`opencode`) | Gemini via `@ai-sdk/google`; Zen prices Cached Read, no Cached Write | passive |
 | OpenCode Go (`opencode-go`) | exposes **no Gemini** models (see RF-OC-011) | n/a |
-| OpenRouter → Gemini | **gateway-specific** contract; OpenRouter documents both "implicit, no `cache_control` needed" and "requires explicit `cache_control` breakpoints"; endpoints API reports `supports_implicit_caching: false` while pricing cache reads | passive — CacheEngine does **not** inject the documented breakpoint (see RF-OR-003) |
+| OpenRouter → Gemini | **gateway-specific** contract; OpenRouter documents both "implicit, no `cache_control` needed" and "requires explicit `cache_control` breakpoints"; endpoints API reports `supports_implicit_caching: false` while pricing cache reads. A live probe of `google/gemini-2.5-flash-lite:flex` (RF-OR-004) found unmarked repeats never produced cache reads, block `cache_control` was inconsistent across runs, and a session-from-start never cached — outcome inconclusive, endpoint routing opaque | passive — CacheEngine does **not** inject the documented breakpoint (see RF-OR-003, RF-OR-004) |
 | Gemini Code Assist (subscription) | no documented cache-control semantics | passive / unknown |
 | Generic OpenAI-compatible gateway | unknown protocol; model id does not imply Gemini-native fields | passive / fail closed |
 
@@ -459,7 +459,14 @@ OpenCode `provider/transform.ts`, `session/session.ts`, and
 specific 3.x models (platform-specific, not a contradiction). OpenRouter's Gemini
 page contradicts itself on whether explicit `cache_control` breakpoints are
 required, and its endpoints API reports `supports_implicit_caching: false` despite
-listing cache-read pricing; reconciliation needs a live OpenRouter Gemini probe.
+listing cache-read pricing. A live probe of `google/gemini-2.5-flash-lite:flex`
+was performed (RF-OR-004, 2026-10-05): unmarked repeated prefixes produced no
+cache reads (consistent with `supports_implicit_caching: false`), the documented
+block-level `cache_control` was honored only inconsistently across runs, and a
+`session_id` present from the first request coincided with no caching; the
+upstream endpoint is not observable (the response exposes only `provider:
+"Google"`). The probe is **inconclusive** for the marker question and is scoped
+to that one endpoint; CacheEngine therefore remains passive on OpenRouter Gemini.
 Whether OpenCode's `google-vertex` Gemini route is registered in the native
 `packages/llm` runtime is not separately confirmed.
 
