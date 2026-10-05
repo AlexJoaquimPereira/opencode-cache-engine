@@ -22,6 +22,7 @@ import {
   POLICY_KIMI,
   POLICY_MIMO26,
   POLICY_NEUTRAL,
+  POLICY_QWEN,
   affinityTelemetryFields,
   canonicalStringify,
   commonPrefixLength,
@@ -61,6 +62,7 @@ import {
   isGlm53OrLater,
   isGpt56OrLater,
   isMimoAfterV26,
+  isQwenModel,
   explainPolicyResolution,
   resolveLegacyFamily,
   resolvePolicy,
@@ -865,10 +867,11 @@ test("empty current sequence -> no anomalies", () => {
 // Config: provider policies
 // ===========================================================================
 
-test("config defaults enable all seven policies", () => {
+test("config defaults enable all eight policies", () => {
   const cfg = parseConfig({}, {})
   assert.deepEqual(cfg.policies.claude, { enabled: true })
   assert.deepEqual(cfg.policies.gemini, { enabled: true })
+  assert.deepEqual(cfg.policies.qwen, { enabled: true })
   assert.deepEqual(cfg.policies.deepseek, { enabled: true })
   assert.deepEqual(cfg.policies.glm53, { enabled: true, stabilizeSystem: true, preserveThinkingIntegrity: true })
   assert.deepEqual(cfg.policies.mimo26, {
@@ -1845,6 +1848,7 @@ test("detectPolicy remains compatible with the legacy family resolution", () => 
     kimi: POLICY_KIMI,
     claude: POLICY_CLAUDE,
     gemini: POLICY_GEMINI,
+    qwen: POLICY_QWEN,
   }
   const samples = [
     M("openrouter", "openai/gpt-5.6-luna"),
@@ -2899,6 +2903,12 @@ async function runUsageCollectionProbe() {
     await setModel(SID_GEMINI, "google", "gemini-2.5-pro")
     await idle(SID_GEMINI)
 
+    // v0.5.x: Qwen uses the same generic accounting path (read/(read+write)).
+    const SID_QWEN = "ses_usage_qwen"
+    responses[SID_QWEN] = { data: [mkAst("q1", 6000, 500, 1500)] }
+    await setModel(SID_QWEN, "alibaba", "qwen3.8-max")
+    await idle(SID_QWEN)
+
     const lines = readFileSync(process.env.CACHE_ENGINE_METRICS_FILE, "utf8").trim().split("\\n")
     const records = lines.map((l) => JSON.parse(l))
     process.stdout.write(JSON.stringify({ calls, records }))
@@ -2917,7 +2927,7 @@ const usageResults = async () => (usageProbe ??= runUsageCollectionProbe())
 test("v0.4.6 K2: session.messages is called with the V1 SDK shape and a bound receiver", async () => {
   const { calls } = await usageResults()
   assert.ok(calls.length >= 5, "collector should call session.messages per idle")
-  const sids = ["ses_usage_basic", "ses_usage_multi", "ses_usage_empty", "ses_usage_undef", "ses_usage_throw", "ses_usage_kimi", "ses_usage_claude", "ses_usage_gemini"]
+  const sids = ["ses_usage_basic", "ses_usage_multi", "ses_usage_empty", "ses_usage_undef", "ses_usage_throw", "ses_usage_kimi", "ses_usage_claude", "ses_usage_gemini", "ses_usage_qwen"]
   for (const c of calls) {
     // exactly { path: { id } }, nothing else
     assert.deepEqual(Object.keys(c.opts), ["path"])
@@ -3014,6 +3024,24 @@ test("v0.5.3: Gemini uses the generic cache accounting path (read-only, no fabri
   assert.equal(u.provider, "google")
   assert.equal(u.model, "gemini-2.5-pro")
   assert.equal(u.policy, "gemini")
+  assert.equal(u.promptTokens, undefined)
+  assert.equal(u.cacheHitRate, undefined)
+})
+
+test("v0.5.x: Qwen uses the generic cache accounting path (read/(read+write))", async () => {
+  const { records } = await usageResults()
+  const usage = records.filter((r) => r.kind === "usage" && r.sid === "ses_usage_qwen")
+  assert.equal(usage.length, 1)
+  const u = usage[0]
+  assert.equal(u.read, 6000)
+  assert.equal(u.write, 500)
+  assert.equal(u.input, 1500)
+  assert.equal(u.messages, 1)
+  assert.equal(u.sampleHitRate, 92) // round(100*6000/6500)
+  assert.equal(u.cumulativeHitRate, 92)
+  assert.equal(u.provider, "alibaba")
+  assert.equal(u.model, "qwen3.8-max")
+  assert.equal(u.policy, "qwen")
   assert.equal(u.promptTokens, undefined)
   assert.equal(u.cacheHitRate, undefined)
 })
@@ -4108,6 +4136,15 @@ async function runClaudeRouteProbe(configPolicies) {
       geminiVertex: { providerID: "google-vertex", id: "gemini-2.5-flash", api: { id: "gemini-2.5-flash", npm: "@ai-sdk/google-vertex" } },
       geminiOpenrouter: { providerID: "openrouter", id: "google/gemini-2.5-pro", api: { id: "google/gemini-2.5-pro", npm: "@openrouter/ai-sdk-provider" } },
       gemma: { providerID: "google", id: "gemma-4-31b-it", api: { id: "gemma-4-31b-it", npm: "@ai-sdk/google" } },
+      qwenDirectIntl: { providerID: "alibaba", id: "qwen3.8-max", api: { id: "qwen3.8-max", npm: "@ai-sdk/openai-compatible" } },
+      qwenDirectCn: { providerID: "alibaba-cn", id: "qwen3.8-max", api: { id: "qwen3.8-max", npm: "@ai-sdk/openai-compatible" } },
+      qwenCodingPlan: { providerID: "alibaba-coding-plan", id: "qwen3-coder-plus", api: { id: "qwen3-coder-plus", npm: "@ai-sdk/openai-compatible" } },
+      qwenTokenPlan: { providerID: "alibaba-token-plan", id: "qwen3.8-flash", api: { id: "qwen3.8-flash", npm: "@ai-sdk/openai-compatible" } },
+      qwenGo: { providerID: "opencode-go", id: "qwen3.8-max", api: { id: "qwen3.8-max", npm: "@ai-sdk/anthropic" } },
+      qwenZen: { providerID: "opencode", id: "qwen3.6-plus", api: { id: "qwen3.6-plus", npm: "@ai-sdk/anthropic" } },
+      qwenOpenrouter: { providerID: "openrouter", id: "qwen/qwen3-coder-plus", api: { id: "qwen/qwen3-coder-plus", npm: "@openrouter/ai-sdk-provider" } },
+      qwenLookalike: { providerID: "acme", id: "acme/qwenix-max", api: { id: "acme/qwenix-max" } },
+      qwenEmbedding: { providerID: "alibaba", id: "qwen3-embedding-8b", api: { id: "qwen3-embedding-8b" } },
     };
     const preOpts = { promptCacheKey: "user-key", cache_control: { type: "ephemeral" }, temperature: 0.3 };
     const preHdrs = { "x-session-id": "user-sess", "x-custom": "keep" };
@@ -4189,6 +4226,71 @@ test("v0.5.3: OpenRouter Gemini is classified but left unmutated (no overlay, no
   assert.equal(or.systemChanged, false, "OpenRouter Gemini system unchanged")
   assert.deepEqual(or.headers, out.preHdrs, "OpenRouter Gemini adds no affinity header")
   assert.deepEqual(or.addedCacheKeys, [], "OpenRouter Gemini adds no cache-control field")
+})
+
+test("v0.5.x: isQwenModel matches current Qwen families and rejects lookalikes/utilities", () => {
+  const positives = [
+    "qwen-max", "qwen-plus", "qwen-flash", "qwen-turbo", "qwen-plus-latest",
+    "qwen3-max", "qwen3-max-2026-01-23", "qwen3.8-max", "qwen3.8-max-0902",
+    "qwen3.7-plus", "qwen3.7-flash", "qwen3.6-plus", "qwen3.6-plus-free", "qwen3.5-flash",
+    "qwen3-coder", "qwen3-coder-plus", "qwen3-coder-flash", "qwen3-coder-next",
+    "qwen3-vl-plus", "qwen3.8-omni-flash", "qwen3.8-2.4t-a95b", "qwen2.5-72b-instruct",
+    "qwen/qwen3-max", "alibaba/qwen3.8-max", "qwen3.8-max:free",
+  ]
+  for (const id of positives) assert.equal(isQwenModel(id), true, `${id} should match`)
+  const negatives = [
+    "gemma-4-31b-it", "gpt-5.6", "deepseek-v3", "glm-5.3", "kimi-k3", "claude-sonnet-4-5",
+    "gemini-2.5-pro", "myqwen-max", "qwenx-3", "qwen", "qwen3.5.1", "qwen3.5foo",
+    "qwen3-embedding-8b", "qwen3-reranker", "text-embedding-v4", "",
+  ]
+  for (const id of negatives) assert.equal(isQwenModel(id), false, `${id} must not match`)
+})
+
+test("v0.5.x: Qwen resolves to the qwen family with all capabilities passive", () => {
+  for (const [provider, id] of [["alibaba", "qwen3.8-max"], ["opencode-go", "qwen3.8-max"], ["opencode", "qwen3.6-plus"], ["openrouter", "qwen/qwen3-coder-plus"], ["acme", "qwen-plus"]]) {
+    const caps = resolveRuntimePolicy(M(provider, id))
+    assert.equal(caps.policy, "qwen", `${id}: policy`)
+    assert.equal(caps.isNeutral, false)
+    assert.equal(caps.gptCacheMetadata, false)
+    assert.equal(caps.envRelocation, null)
+    assert.equal(caps.openRouterAffinity, false)
+    assert.equal(caps.cacheRatio, null)
+    assert.equal(caps.thinkingIntegrity, false)
+    assert.equal(caps.providerChange, null)
+    assert.equal(detectPolicy(M(provider, id)), POLICY_QWEN, `${id}: detectPolicy`)
+  }
+})
+
+test("v0.5.x: CacheEngine is passive for Qwen on every access route", async () => {
+  const out = await claudeRouteResults()
+  for (const name of ["qwenDirectIntl", "qwenDirectCn", "qwenCodingPlan", "qwenTokenPlan", "qwenGo", "qwenZen", "qwenOpenrouter", "qwenLookalike", "qwenEmbedding"]) {
+    assert.deepEqual(out[name].options, out.preOpts, `${name}: options must be preserved`)
+    assert.equal(out[name].systemChanged, false, `${name}: system must be unchanged`)
+    assert.deepEqual(out[name].headers, out.preHdrs, `${name}: headers must be preserved`)
+    assert.deepEqual(out[name].addedCacheKeys, [], `${name}: must add no cache-control field`)
+  }
+})
+
+test("v0.5.x: OpenRouter Qwen is classified but unmutated (no overlay, no affinity)", async () => {
+  // Decision record: OpenRouter documents explicit block-level Qwen cache
+  // markers, but the V1 chat.params hook cannot place a block-level marker and
+  // OpenCode injects none, so CacheEngine stays passive — including no
+  // x-session-id affinity header (see RF-PRV-006).
+  const caps = resolveRuntimePolicy(M("openrouter", "qwen/qwen3-coder-plus"))
+  assert.equal(caps.policy, "qwen")
+  assert.equal(caps.isNeutral, false)
+  assert.equal(caps.openRouterAffinity, false)
+  assert.equal(caps.gptCacheMetadata, false)
+  assert.equal(caps.envRelocation, null)
+  assert.equal(caps.cacheRatio, null)
+  const ex = explainPolicyResolution(M("openrouter", "qwen/qwen3-coder-plus"))
+  assert.equal(ex.family, "qwen")
+  assert.equal(ex.overlayApplied, false)
+  assert.deepEqual(ex.overlays, [])
+  assert.equal(ex.transportKind, "openrouter")
+  const out = await claudeRouteResults()
+  assert.deepEqual(out.qwenOpenrouter.options, out.preOpts, "OpenRouter Qwen options preserved")
+  assert.deepEqual(out.qwenOpenrouter.headers, out.preHdrs, "OpenRouter Qwen adds no affinity header")
 })
 
 test("v0.5.4: the probed OpenRouter Gemini endpoint stays classified-but-passive", () => {
