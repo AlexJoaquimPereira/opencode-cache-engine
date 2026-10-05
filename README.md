@@ -602,11 +602,16 @@ On **OpenRouter**, OpenRouter documents a *different*, gateway-specific Gemini
 contract: its docs both claim implicit caching needs no setup **and** say Gemini
 "requires you to insert `cache_control` breakpoints explicitly within message
 content", and its endpoints API reports `supports_implicit_caching: false` while
-listing cache-read pricing. Because OpenCode's V1 `chat.params` hook exposes only
+listing cache-read pricing. A live probe of `google/gemini-2.5-flash-lite:flex`
+(2026-10-05) was **inconclusive**: unmarked repeated prefixes never produced cache
+reads, the documented block-level `cache_control` was honored only inconsistently
+across runs, and a `session_id` present from the first request coincided with no
+caching; the upstream endpoint is not observable (the response exposes only
+`provider: "Google"`). Because OpenCode's V1 `chat.params` hook exposes only
 top-level provider options and cannot place the documented **block-level**
 `cache_control` with guaranteed serialization, CacheEngine **does not implement**
 an OpenRouter Gemini overlay and adds no `session_id`/`x-session-id` affinity. See
-`docs/research-findings.md` RF-OR-003.
+`docs/research-findings.md` RF-OR-003 and RF-OR-004.
 
 **Recognized ids** (bare, `google/`-prefixed, or Vertex): `gemini-2.5-*`,
 `gemini-3.*`, and the aliases `gemini-flash-latest` / `gemini-flash-lite-latest`.
@@ -626,7 +631,7 @@ All Gemini routes are passive for CacheEngine:
 | Google Vertex AI (`google-vertex`, `@ai-sdk/google-vertex`) | provider-managed implicit (2.5+) | per-family minimums differ |
 | OpenCode Zen (`opencode`) | provider-managed implicit (2.5+) | Gemini via `@ai-sdk/google`; Cached Read priced, no Cached Write |
 | OpenCode Go (`opencode-go`) | not applicable | exposes no Gemini models in 1.18.34 |
-| OpenRouter → Gemini | gateway-specific: docs claim implicit caching **and** explicit `cache_control` breakpoints (self-contradictory) | CacheEngine stays passive: no breakpoint, no affinity (RF-OR-003) |
+| OpenRouter → Gemini | gateway-specific: docs claim implicit caching **and** explicit `cache_control` breakpoints (self-contradictory); live probe of `google/gemini-2.5-flash-lite:flex` was inconclusive | CacheEngine stays passive: no breakpoint, no affinity (RF-OR-003, RF-OR-004) |
 | Gemini Code Assist (subscription) | unknown / passive | consumer access discontinued 2026-06-18; Standard/Enterprise expose no documented cache-control semantics |
 
 CacheEngine performs no mutation on any of these routes, so it cannot make an
@@ -635,23 +640,28 @@ owned by OpenCode and the provider — CacheEngine only classifies and accounts.
 
 ### Usage accounting
 
-Gemini reports cached reads only. OpenCode normalizes
-`usageMetadata.cachedContentTokenCount` → `tokens.cache.read`; there is no Gemini
-cache-write field, so CacheEngine never fabricates one and the generic
-`read/(read+write)` ratio reduces to `read/read` when only reads are present.
+Native Gemini reports cached reads only: OpenCode normalizes
+`usageMetadata.cachedContentTokenCount` → `tokens.cache.read`, and there is no
+native Gemini cache-write field, so CacheEngine never fabricates one. On the
+OpenRouter route the transport may expose both `cached_tokens` and
+`cache_write_tokens` (RF-OR-004); CacheEngine records only what OpenCode reports,
+and the generic `read/(read+write)` ratio applies to whatever OpenCode provides.
 
 ### Evidence and status
 
 Verified against first-party Google and OpenRouter documentation, the OpenCode
 v1.18.34 source, and the installed OpenCode Go/Zen catalogs on 2026-10-05 (see
 [docs/cache-policy-inventory.md](docs/cache-policy-inventory.md) §7 and
-`docs/research-findings.md` RF-OC-010, RF-OC-011, RF-OR-003, RF-PRV-004,
-RF-PRV-005). Status: **documented; not live-validated** (no Gemini credentials in
-the test environment). OpenRouter's Gemini guidance is internally inconsistent and
-its endpoints report `supports_implicit_caching: false`; resolving that needs a
-live OpenRouter Gemini probe, which is why CacheEngine remains passive there.
-Direct Google vs Vertex implicit minimum-token tables disagree, and OpenRouter's
-Gemini caching guidance is internally inconsistent.
+`docs/research-findings.md` RF-OC-010, RF-OC-011, RF-OR-003, RF-OR-004,
+RF-PRV-004, RF-PRV-005). The native Google/Vertex and Zen/Go routes remain
+**documented but not live-validated**. A direct live probe of the OpenRouter route
+(`google/gemini-2.5-flash-lite:flex`, 2026-10-05) was **inconclusive**: unmarked
+repeated prefixes never produced cache reads, the documented block-level
+`cache_control` was honored only inconsistently across runs, and a `session_id`
+from the first request coincided with no caching; the upstream endpoint is not
+observable. Direct Google vs Vertex implicit minimum-token tables disagree, and
+OpenRouter's Gemini caching guidance is internally inconsistent — which is why
+CacheEngine remains passive on every Gemini route.
 
 
 # Provider comparison
