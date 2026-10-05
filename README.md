@@ -25,7 +25,7 @@ opencode plugin opencode-cache-engine
 
 `CacheEngine` is an OpenCode plugin designed for long-running agent sessions where prompt-cache efficiency affects both latency and cost. It keeps the harness conservative for providers whose cache behavior is already automatic, while applying provider-specific optimizations where the provider exposes useful cache controls or where prompt structure can be safely improved.
 
-The plugin currently has six cache-policy families:
+The plugin currently has seven cache-policy families:
 
 * **DeepSeek** — passive cache observability; request structure is preserved.
 * **GPT-5.6 and later** — documented cache-key/options metadata, with prompt text
@@ -39,6 +39,9 @@ The plugin currently has six cache-policy families:
 * **Claude (Anthropic)** — passive classification and accounting; the request is
   left unchanged because OpenCode itself applies Anthropic `cache_control`
   breakpoints.
+* **Google Gemini** — passive classification and accounting; Gemini 2.5+
+  provider-managed implicit caching is left untouched. CacheEngine creates no
+  `CachedContent` resources and injects no Gemini cache-control field.
 
 Family classification is not hard-coded in the runtime. A pure policy registry
 and resolver in `src/cache-policy-core.mjs` returns a structured result
@@ -572,6 +575,70 @@ source on 2026-10-04 (see
 `cache_control` through OpenRouter is unverified.
 
 
+## Google Gemini
+
+### Policy: passive (provider-managed implicit caching)
+
+Gemini prompt caching is **implicit** for Gemini 2.5 and newer: Google enables it
+automatically, there is no request-side cache-control field, and hits are reported
+as `usageMetadata.cachedContentTokenCount`. CacheEngine therefore leaves the
+Gemini request **unchanged** — it adds no cache-control field, no cache key, no
+TTL, and no breakpoints.
+
+Google's *explicit* caching is a different mechanism: it creates a separate
+`CachedContent` resource (`POST /v1beta/cachedContents`) referenced from a later
+`generateContent` call. That is an out-of-band resource lifecycle, not an inline
+request marker, and CacheEngine **does not** create, refresh, or delete
+`cachedContents` resources on any route.
+
+The request is also left unchanged because OpenCode already handles Gemini
+completely: its `applyCaching` gate excludes Gemini/Google (`@ai-sdk/google` is
+not in the gate), so OpenCode adds no Gemini cache marker itself, and it
+normalizes `cachedContentTokenCount` into `tokens.cache.read` with no write field.
+CacheEngine adds nothing on top.
+
+**Recognized ids** (bare, `google/`-prefixed, or Vertex): `gemini-2.5-*`,
+`gemini-3.*`, and the moving aliases `gemini-flash-latest` /
+`gemini-flash-lite-latest`.
+
+**Not recognized (neutral):** Gemma (`gemma-*`), pre-2.5 generations
+(`gemini-2.0-*`, `gemini-1.5-*`), `gemini-embedding-*`, and look-alikes such as
+`mygemini-2.5`.
+
+### Routes
+
+All Gemini routes are passive for CacheEngine:
+
+| Route | Gemini caching | Notes |
+| ----- | -------------- | ----- |
+| Direct Google Gemini API (`google`, `@ai-sdk/google`) | provider-managed implicit (2.5+) | no request field; OpenCode adds none |
+| Google Vertex AI (`google-vertex`, `@ai-sdk/google-vertex`) | provider-managed implicit (2.5+) | per-family minimums differ |
+| OpenCode Zen (`opencode`) | provider-managed implicit (2.5+) | Gemini via `@ai-sdk/google`; Cached Read priced, no Cached Write |
+| OpenCode Go (`opencode-go`) | not applicable | exposes no Gemini models in 1.18.34 |
+| OpenRouter → Gemini | provider-managed implicit (2.5+) | sticky routing is best-effort; OpenRouter's Gemini guidance is internally inconsistent |
+| Gemini Code Assist (subscription) | unknown / passive | consumer access discontinued 2026-06-18; Standard/Enterprise expose no documented cache-control semantics |
+
+CacheEngine performs no mutation on any of these routes, so it cannot make an
+incompatible endpoint reject a request. Whether cache reuse actually occurs is
+owned by OpenCode and the provider — CacheEngine only classifies and accounts.
+
+### Usage accounting
+
+Gemini reports cached reads only. OpenCode normalizes
+`usageMetadata.cachedContentTokenCount` → `tokens.cache.read`; there is no Gemini
+cache-write field, so CacheEngine never fabricates one and the generic
+`read/(read+write)` ratio reduces to `read/read` when only reads are present.
+
+### Evidence and status
+
+Verified against first-party Google documentation and the OpenCode v1.18.34 source
+on 2026-10-05 (see
+[docs/cache-policy-inventory.md](docs/cache-policy-inventory.md) §7). Status:
+**documented; not live-validated** (no Gemini credentials in the test environment).
+Direct Google vs Vertex implicit minimum-token tables disagree, and OpenRouter's
+Gemini caching guidance is internally inconsistent.
+
+
 # Provider comparison
 
 | Policy family | Detection | Prompt text changed? | Cache metadata changed? | OpenRouter affinity header | Primary cache signal |
@@ -582,6 +649,7 @@ source on 2026-10-04 (see
 | MiMo V2.6 and later | `mimo-v2.6+` (family) | Yes, narrowly (`<env>` tail) on V2.6 Flash/Pro only | No: implicit caching only | `x-session-id` on OpenRouter only | `cached_tokens / prompt_tokens` |
 | Kimi K2.6 / K2.7-code / K3 | `kimi-k3`, `kimi-k2.6`, `kimi-k2.7-code(-highspeed)` (bare or gateway-prefixed) | No | No: implicit caching only | None | provider `cache.read` / `cache.write` |
 | Claude (Anthropic) | `claude-{opus,sonnet,haiku,fable,mythos}-*`, legacy `claude-3-*` (bare or gateway-prefixed) | No | No: OpenCode applies `cache_control` breakpoints | None | provider `cache.read` / `cache.write` |
+| Google Gemini | `gemini-2.5-*`, `gemini-3.*`, `gemini-flash-latest`/`gemini-flash-lite-latest` (bare, `google/`-prefixed, or Vertex) | No | No: provider-managed implicit caching | None | provider `cache.read` (no write field) |
 
 `x-session-id` is an HTTP affinity header, not a provider cache key or
 cache-control field. Non-OpenRouter endpoints do not receive CacheEngine's
@@ -976,6 +1044,9 @@ The default configuration is:
     },
     "claude": {
       "enabled": true
+    },
+    "gemini": {
+      "enabled": true
     }
   }
 }
@@ -1205,6 +1276,26 @@ OpenCode applies Anthropic `cache_control` breakpoints itself, so CacheEngine ne
 mutates the request. There are no other Claude knobs, and `cache_control`,
 `cacheControl`, cache keys, and TTLs are neither exposed nor sent.
 
+---
+
+# Gemini configuration
+
+```json
+{
+  "gemini": {
+    "enabled": true
+  }
+}
+```
+
+### `enabled`
+
+Enables the Google Gemini policy classification. Gemini is a **passive** family:
+Google's implicit caching for Gemini 2.5+ is provider-managed and OpenCode's
+`applyCaching` gate excludes Gemini, so CacheEngine never mutates the request and
+never creates `CachedContent` resources. There are no other Gemini knobs, and
+cache keys, TTLs, and cache-control fields are neither exposed nor sent.
+
 
 # Model detection
 
@@ -1403,6 +1494,7 @@ Coverage includes:
 * JSONL telemetry behavior
 * Kimi classification, passive (no-mutation) resolution, and generic usage accounting
 * Claude classification, passive (no-mutation) resolution, and generic usage accounting
+* Gemini classification, passive (no-mutation) resolution, and generic usage accounting
 
 The tests are designed around the pure core logic, while OpenCode runtime behavior is validated separately through actual plugin loading.
 
@@ -1600,7 +1692,7 @@ release, use:
 ```json
 {
   "plugin": [
-    "opencode-cache-engine@0.5.2"
+    "opencode-cache-engine@0.5.3"
   ]
 }
 ```
@@ -1773,6 +1865,7 @@ GLM-5.3+    -> family baseline; GLM-5.3 only: preserve-content <env> relocation 
 MiMo V2.6+  -> family baseline; V2.6 Flash/Pro only: preserve-content <env> relocation (+ OpenRouter affinity header)
 Kimi        -> passive; Moonshot caching is automatic (V2.6/K2.7-code/K3); request unchanged
 Claude      -> passive; OpenCode applies Anthropic cache_control breakpoints; request unchanged
+Gemini      -> passive; Google implicit caching (2.5+); request unchanged, no CachedContent created
 ```
 
 That separation is the core design of the project.
