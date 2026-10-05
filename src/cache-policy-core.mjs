@@ -148,12 +148,16 @@ export function isMimoAfterV26(slug) {
 // Google Gemini 2.5-and-later (provider-managed implicit caching; docs say
 // "Gemini 2.5 and newer"). Anchored at a slug boundary so a concatenated
 // prefix like `mygemini-2.5` does not match, while a `namespace/gemini-...`
-// gateway id does (intended). Version-typed so Gemma / `gemini-embedding-*` do
-// not match. The moving `gemini-{flash,flash-lite,pro}-latest` aliases are
-// accepted because they currently resolve to a 2.5+ model.
+// gateway id does (intended). The `(?![\w.])` guard rejects concatenated
+// suffixes (`gemini-2.5foo`) and multi-dot forms (`gemini-2.5.1`); version-typed
+// so Gemma / `gemini-embedding-*` do not match. Only `gemini-flash-latest` and
+// `gemini-flash-lite-latest` are accepted: `gemini-flash-latest` is documented
+// by Google and both are present in the installed OpenCode model catalog, while
+// `gemini-pro-latest` is neither documented nor in the catalog (verified
+// 2026-10-05) so it stays neutral.
 export function isGemini25OrLater(slug) {
   const text = String(slug ?? "").toLowerCase()
-  const re = /(?:^|\/)gemini-(\d{1,3})(?:\.(\d))?(?![\d.])/g
+  const re = /(?:^|\/)gemini-(\d{1,3})(?:\.(\d))?(?![\w.])/g
   let m
   while ((m = re.exec(text)) !== null) {
     const major = Number(m[1])
@@ -161,7 +165,7 @@ export function isGemini25OrLater(slug) {
     if (major > 2) return true
     if (major === 2 && minor >= 5) return true
   }
-  return /(?:^|\/)gemini-(?:flash|flash-lite|pro)-latest(?![\w-])/.test(text)
+  return /(?:^|\/)gemini-(?:flash|flash-lite)-latest(?![\w-])/.test(text)
 }
 
 // Candidate ids for exact/alias lookup. Includes the raw apiID/modelID, the
