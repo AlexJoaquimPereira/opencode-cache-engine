@@ -314,6 +314,82 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Superseded by: null
 - Notes: Because OpenCode adds no Gemini cache field, CacheEngine must not either.
 
+### RF-OC-011 — OpenCode Go exposes no Gemini; Zen exposes Gemini via @ai-sdk/google
+
+- Status: current
+- Verified: 2026-10-05
+- Area: opencode-runtime
+- Fact: OpenCode **Go** (`opencode-go`, `https://opencode.ai/zen/go/v1/models`)
+  exposes **no Gemini** models and asks clients to send a stable
+  `x-opencode-session` for routing/prompt caching. Its catalog (per official
+  docs) is:
+  - `@ai-sdk/openai` (`/zen/go/v1/responses`): `grok-4.7`, `grok-4.6`,
+    `gpt-6-luna`, `gpt-5.6-luna`, `muse-spark-1.3-contributor`,
+    `muse-spark-1.2-contributor` (installed catalog also lists `grok-4.5`).
+  - `@ai-sdk/anthropic` (`/zen/go/v1/messages`): `minimax-m3`, `minimax-m2.7`,
+    `qwen3.8-max`, `qwen3.8-flash`, `qwen3.7-plus` (installed catalog also lists
+    `qwen3.6-plus`).
+  - `@ai-sdk/openai-compatible` (`/zen/go/v1/chat/completions`): `glm-5.3-flash`,
+    `glm-5.3`, `glm-5.2`, `kimi-k3`, `kimi-k2.7-code`, `kimi-k2.6`,
+    `longcat-2.0`, `longcat-2.5-preview-free`, `deepseek-v4.1-flash`,
+    `deepseek-v4-pro`, `deepseek-v4-flash`, `deepseek-v4-flash-vision-exp`,
+    `mimo-v2.6-flash`, `mimo-v2.6-pro`, `mimo-v2.5`, `mimo-v2.5-pro`,
+    `hy4-preview`, `hy3`, `space-bunny-free`.
+  Go prices Cached Read for most models; Cached Write only for MiniMax M2.7,
+  Qwen3.8 Max/Flash, Qwen3.7 Plus, GPT 6 Luna, GPT 5.6 Luna.
+- OpenCode **Zen** (`opencode`, `https://opencode.ai/zen/v1/models`) **does**
+  serve Gemini via `@ai-sdk/google`. Documented transport mapping: Gemini →
+  `@ai-sdk/google`; Claude → `@ai-sdk/anthropic`; GPT/Grok/Muse → `@ai-sdk/openai`;
+  DeepSeek/MiniMax/GLM/Kimi/LongCat/Hy and the free models →
+  `@ai-sdk/openai-compatible`; Qwen mixed (`@ai-sdk/anthropic` and
+  `@ai-sdk/openai-compatible`). Zen prices Cached Read for Gemini and **no**
+  Cached Write (consistent with Gemini having no write field).
+- **Zen Gemini ids** (`@ai-sdk/google`): `gemini-3-flash`, `gemini-3-pro`,
+  `gemini-3.1-pro`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`,
+  `gemini-3.6-flash`, `gemini-3.7-flash`, `gemini-3.8-flash`.
+- **Complete installed Zen catalog** (`~/.cache/opencode/models.json`, 116 ids):
+  Claude (`claude-3-5-haiku`, `claude-fable-5`, `claude-fable-5-1`,
+  `claude-haiku-4-5`, `claude-opus-4-1`, `claude-opus-4-5`, `claude-opus-4-6`,
+  `claude-opus-4-7`, `claude-opus-4-8`, `claude-opus-5`, `claude-opus-5-5`,
+  `claude-sonnet-4`, `claude-sonnet-4-5`, `claude-sonnet-4-6`, `claude-sonnet-5`,
+  `claude-sonnet-5-5`); DeepSeek (`deepseek-v4-flash`, `deepseek-v4-flash-free`,
+  `deepseek-v4-flash-vision-exp`, `deepseek-v4-pro`, `deepseek-v4.1-flash`);
+  Gemini (above); GLM (`glm-4.6`, `glm-4.7`, `glm-4.7-free`, `glm-5`, `glm-5-free`,
+  `glm-5.1`, `glm-5.2`, `glm-5.3`, `glm-5.3-flash`); GPT (`gpt-5`, `gpt-5-codex`,
+  `gpt-5-nano`, `gpt-5.1`, `gpt-5.1-codex`, `gpt-5.1-codex-max`,
+  `gpt-5.1-codex-mini`, `gpt-5.2`, `gpt-5.2-codex`, `gpt-5.3-codex`,
+  `gpt-5.3-codex-spark`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.4-pro`,
+  `gpt-5.5`, `gpt-5.5-pro`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`,
+  `gpt-6-astra`, `gpt-6-luna`, `gpt-6-sol`, `gpt-6.1-sol`); Grok (`grok-4.5`,
+  `grok-4.6`, `grok-4.7`, `grok-build-0.1`, `grok-code`); Kimi (`kimi-k2`,
+  `kimi-k2-thinking`, `kimi-k2.5`, `kimi-k2.5-free`, `kimi-k2.6`,
+  `kimi-k2.7-code`, `kimi-k3`); MiniMax (`minimax-m2.1`, `minimax-m2.1-free`,
+  `minimax-m2.5`, `minimax-m2.5-free`, `minimax-m2.7`, `minimax-m3`,
+  `minimax-m3-free`); Muse (`muse-spark-1.2`, `muse-spark-1.2-contributor-free`,
+  `muse-spark-1.3`, `muse-spark-1.3-contributor-free`); Qwen (`qwen3-coder`,
+  `qwen3.5-plus`, `qwen3.6-plus`, `qwen3.6-plus-free`, `qwen3.8-flash`,
+  `qwen3.8-max`); LongCat (`longcat-2.0-free`, `longcat-2.5-preview-free`); Hy
+  (`hy3-free`, `hy3-preview-free`); other free/preview (`big-pickle`,
+  `fledge-alpha-free`, `laguna-s-2.1-free`, `ling-2.6-flash-free`,
+  `ling-3.0-flash-fin-free`, `ling-3.0-flash-free`, `ling-3.0-tiny-free`,
+  `ling-3.1-flash-free`, `mimo-v2-flash-free`, `mimo-v2-omni-free`,
+  `mimo-v2-pro-free`, `mimo-v2.5-free`, `mimo-v2.6-flash-free`,
+  `nemotron-3-super-free`, `nemotron-3-ultra-free`, `nemotron-3.5-lightning-free`,
+  `north-mini-code-free`, `ring-2.6-1t-free`, `space-bunny-free`,
+  `trinity-large-preview-free`, `x-preview-f-free`). The installed catalog also
+  lists 33 Go models (none matching `gemini`).
+- Evidence: [D]/[O]
+- Sources: https://opencode.ai/docs/go/ , https://opencode.ai/docs/zen/ ;
+  installed `~/.cache/opencode/models.json`. Accessed 2026-10-05.
+- Justifies: the passive Gemini policy stays correct on both hosted routes; the
+  matcher stays catalog-independent (no `opencode-go`/`opencode` special-casing).
+- Version context: OpenCode 1.18.34 (installed); the live docs may describe a
+  newer version. Hosted model catalogs change frequently.
+- Re-verify when: OpenCode Go or Zen changes its model catalog or provider routing.
+- Superseded by: null
+- Notes: These catalogs are research evidence, not classifier configuration; do
+  not hardcode Zen's current Gemini list into the matcher.
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
@@ -355,6 +431,62 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Superseded by: null
 - Notes: CacheEngine adds no `x-session-id` for Claude (`openRouterAffinity` is
   false for the Claude family).
+
+### RF-OR-003 — OpenRouter's Gemini cache contract self-contradicts (implicit vs explicit cache_control); distinct from response caching
+
+- Status: current
+- Verified: 2026-10-05
+- Area: openrouter-routing
+- Fact: OpenRouter's Prompt Caching page gives two contradictory statements for
+  Gemini. (a) "Gemini 2.5 series models and newer support implicit caching ...
+  no manual setup or additional `cache_control` breakpoints required." (b) Under
+  "How to Enable Gemini Prompt Caching": "Gemini caching in OpenRouter requires
+  you to insert `cache_control` breakpoints explicitly within message content,
+  similar to Anthropic." The documented shape is an Anthropic-style **block**
+  marker `{ "type":"text", "text":"...", "cache_control": { "type":"ephemeral" } }`
+  on a text content block inside a `system`/`developer` message's `content`
+  array or a later `user` message's `content` array. No top-level `cache_control`
+  is documented for Gemini, and no tool-block breakpoint is documented. Only the
+  **last** breakpoint is used ("OpenRouter will use only the last breakpoint for
+  Gemini caching across normal message content"). OpenRouter abstracts the cache
+  lifecycle ("You do not need to manually create, update, or delete caches") and
+  does **not** say whether it uses Google implicit caching, native
+  `CachedContent`, or a provider abstraction. Minimums: 4,096 (Gemini 2.5 Pro),
+  1,024 (Gemini 2.5 Flash); the page also says "typically a 4,096 token
+  minimum". TTL: implicit ~3–5 min; cache writes 5 min and do not refresh. Reads
+  billed 0.25× input. Sticky routing is best-effort (10-min inactivity;
+  `provider.order` disables it; key = body `session_id` > `x-session-id` header,
+  ≤256 chars, else a hash of the first system/developer + first non-system
+  message). The prompt cache lives upstream, so provider failover can lose the
+  warm cache. The endpoints API reports `supports_implicit_caching: false` for
+  every `google/gemini-2.5-*` endpoint while still listing `input_cache_read`
+  pricing, and `google/gemini-3-pro-preview` currently exposes no endpoints —
+  this **contradiction is unresolved** without a live OpenRouter Gemini probe.
+  The Gemini prompt-cache **scope** is not documented ([U]); only the
+  response-cache scope (API key) is documented. Reads refresh TTL: [U].
+- Distinct mechanism (do not conflate): OpenRouter **response caching** uses the
+  `X-OpenRouter-Cache: true` header or preset `cache_enabled`/`cache_ttl_seconds`,
+  "operates at the OpenRouter layer before the request reaches any provider",
+  keyed by API key + model + endpoint type + streaming + SHA-256(request body),
+  default TTL 300 s, hits bill zero. It is NOT provider prompt caching; Gemini's
+  caching is the provider prompt cache.
+- Evidence: [D]
+- Sources: https://openrouter.ai/docs/features/prompt-caching ,
+  https://openrouter.ai/docs/features/response-caching ,
+  https://openrouter.ai/docs/guides/routing/provider-selection ,
+  https://openrouter.ai/api/v1/models/google/gemini-2.5-pro/endpoints and
+  .../google/gemini-2.5-flash/endpoints and
+  .../google/gemini-3-pro-preview/endpoints. Accessed 2026-10-05.
+- Justifies: keeping Gemini passive on OpenRouter — CacheEngine injects neither
+  the documented `cache_control` breakpoint nor a `session_id`. The V1
+  `chat.params` hook exposes only top-level provider options (RF-OC-010), so a
+  block-level `cache_control` cannot be placed with guaranteed serialization.
+- Version context: OpenRouter docs as of 2026-10-05.
+- Re-verify when: OpenRouter resolves the implicit-vs-explicit Gemini text,
+  changes the Gemini cache field, or flips `supports_implicit_caching`.
+- Superseded by: null
+- Notes: Do not implement a Gemini OpenRouter overlay until the exact block-level
+  serialization through the installed transport is verified end to end.
 
 ## RF-SDK — AI-SDK and provider-package serialization
 
@@ -516,3 +648,38 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Re-verify when: Google changes implicit-cache models/minimums/TTL or the CachedContents API.
 - Superseded by: null
 - Notes: Do not implement `cachedContents` lifecycle management in CacheEngine.
+
+### RF-PRV-005 — Gemini implicit minimums are platform-specific; the only documented `-latest` alias is gemini-flash-latest
+
+- Status: current
+- Verified: 2026-10-05
+- Area: provider-api
+- Fact: Gemini implicit-cache **minimum token** thresholds differ by platform
+  (model/platform-specific eligibility, not a contradiction):
+  - Google Gemini Developer API (AI Studio): Gemini 2.5 Flash/Pro **2,048**;
+    Gemini 3.x Flash / 3.1 Pro Preview **4,096**. Flash-Lite variants are not
+    listed.
+  - Vertex AI: Gemini **2 family 2,048; 3 family 4,096**, plus a separate
+    **6,144** tier for `3.0 Flash Preview`, `3.1 Pro Preview`, `3.7 Flash`,
+    `3.8 Flash` (implicit-only). Vertex lists Flash-Lite as implicit-capable.
+  Aliases: Google's Models page documents the "Latest" pattern with the single
+  example **`gemini-flash-latest`**; it does **not** enumerate
+  `gemini-flash-lite-latest` or `gemini-pro-latest`. The installed OpenCode
+  catalog carries `gemini-flash-latest` and `gemini-flash-lite-latest` for
+  `google`/`google-vertex`, and no `gemini-pro-latest`. Usage: the cached-read
+  field is `usageMetadata.cachedContentTokenCount` (present for both implicit and
+  explicit hits); `UsageMetadata` has **no cache-write/creation token field**.
+- Evidence: [D]/[O]
+- Sources: https://ai.google.dev/gemini-api/docs/caching and
+  .../generate-content/caching and .../models ; Vertex
+  docs.cloud.google.com/gemini-enterprise-agent-platform/models/context-cache/context-cache-overview
+  and .../reference/rest/v1/GenerateContentResponse ; installed
+  `~/.cache/opencode/models.json`. Accessed 2026-10-05.
+- Justifies: the matcher accepts `gemini-flash-latest` and
+  `gemini-flash-lite-latest` but treats `gemini-pro-latest` as neutral, and
+  enforces no minimum (CacheEngine does not own context eligibility).
+- Version context: Google/Vertex docs as of 2026-10-05.
+- Re-verify when: Google changes implicit-cache minimums, the `-latest` alias set,
+  or the usage field; or the OpenCode catalog changes its Gemini aliases.
+- Superseded by: null
+- Notes: Do not pad prompts or inject tokens to cross a provider minimum.
