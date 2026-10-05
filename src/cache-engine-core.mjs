@@ -5,8 +5,9 @@
 // TypeScript compiler. The plugin entry (cache-engine.ts) imports this module.
 //
 // This module is PROVIDER-AWARE: it classifies a model into a cache-policy
-// family (deepseek | gpt56 | glm53 | mimo26 | kimi | neutral) and exposes small pure
-// helpers for each family's strategy. The plugin entry (cache-engine.ts) remains
+// family (deepseek | gpt56 | glm53 | mimo26 | kimi | claude | gemini | qwen |
+// neutral) and exposes small pure helpers for each family's strategy. The plugin
+// entry (cache-engine.ts) remains
 // the only place that touches OpenCode hooks; every decision here is testable in
 // Node.
 //
@@ -41,6 +42,7 @@ export const POLICY_MIMO26 = "mimo26"
 export const POLICY_KIMI = "kimi"
 export const POLICY_CLAUDE = "claude"
 export const POLICY_GEMINI = "gemini"
+export const POLICY_QWEN = "qwen"
 export const POLICY_NEUTRAL = "neutral"
 
 export const GPT56_DEFAULT_TTL = "30m"
@@ -91,6 +93,11 @@ function defaultPolicies() {
     // OpenCode's applyCaching gate excludes Gemini, so CacheEngine classifies
     // and accounts but does not mutate.
     gemini: { enabled: true },
+    // Qwen is passive on every route: Alibaba/DashScope implicit caching is
+    // provider-managed, OpenCode already applies Anthropic-style breakpoints on
+    // the Qwen Messages routes, and the V1 hook cannot place the documented
+    // block-level marker on the others. Classification/observability only.
+    qwen: { enabled: true },
   }
 }
 
@@ -141,7 +148,7 @@ export function parseConfig(raw, env) {
     if (typeof raw.logPrefixChanges === "boolean") cfg.logPrefixChanges = raw.logPrefixChanges
     if (raw.policies && typeof raw.policies === "object") {
       const d = defaultPolicies()
-      for (const fam of ["deepseek", "gpt56", "glm53", "mimo26", "kimi", "claude", "gemini"]) {
+      for (const fam of ["deepseek", "gpt56", "glm53", "mimo26", "kimi", "claude", "gemini", "qwen"]) {
         if (raw.policies[fam]) cfg.policies[fam] = parsePolicy(raw.policies[fam], d[fam])
       }
     }
@@ -237,6 +244,7 @@ const LEGACY_FAMILY_TO_POLICY = {
   kimi: POLICY_KIMI,
   claude: POLICY_CLAUDE,
   gemini: POLICY_GEMINI,
+  qwen: POLICY_QWEN,
 }
 
 // Pure classifier. Returns one of the POLICY_* keys. `model` may be a full
