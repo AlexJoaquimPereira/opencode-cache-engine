@@ -572,7 +572,11 @@ test("v0.5.3: Gemma and non-Gemini look-alikes stay neutral", () => {
   // malformed / look-alikes
   assert.equal(detectPolicy(M("acme", "mygemini-2.5")), POLICY_NEUTRAL)
   assert.equal(detectPolicy(M("acme", "gemini-2.50")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("acme", "gemini-2.5.1")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("acme", "gemini-2.5foo")), POLICY_NEUTRAL)
   assert.equal(detectPolicy(M("acme", "gemini")), POLICY_NEUTRAL)
+  // `gemini-pro-latest` is not documented by Google nor in the OpenCode catalog
+  assert.equal(detectPolicy(M("google", "gemini-pro-latest")), POLICY_NEUTRAL)
   // other providers unchanged
   assert.equal(detectPolicy(M("openai", "gpt-5.6")), POLICY_GPT56)
   assert.equal(detectPolicy(M("anthropic", "claude-sonnet-4-5")), POLICY_CLAUDE)
@@ -4167,4 +4171,22 @@ test("v0.5.3: CacheEngine is passive for Gemini on every access route", async ()
     assert.deepEqual(out[name].headers, out.preHdrs, `${name}: headers must be preserved`)
     assert.deepEqual(out[name].addedCacheKeys, [], `${name}: must add no cache-control field`)
   }
+})
+
+test("v0.5.3: OpenRouter Gemini is classified but left unmutated (no overlay, no affinity)", async () => {
+  // Decision record: OpenRouter documents a Gemini-specific cache-control
+  // contract, but CacheEngine does not implement it (see RF-OR-003). Gemini
+  // carries no transport capability and the OpenRouter request is byte-preserved,
+  // including no x-session-id affinity header.
+  const caps = resolveRuntimePolicy(M("openrouter", "google/gemini-2.5-pro"))
+  assert.equal(caps.policy, "gemini")
+  assert.equal(caps.openRouterAffinity, false)
+  assert.equal(caps.gptCacheMetadata, false)
+  assert.equal(caps.envRelocation, null)
+  const out = await claudeRouteResults()
+  const or = out.geminiOpenrouter
+  assert.deepEqual(or.options, out.preOpts, "OpenRouter Gemini options preserved")
+  assert.equal(or.systemChanged, false, "OpenRouter Gemini system unchanged")
+  assert.deepEqual(or.headers, out.preHdrs, "OpenRouter Gemini adds no affinity header")
+  assert.deepEqual(or.addedCacheKeys, [], "OpenRouter Gemini adds no cache-control field")
 })
