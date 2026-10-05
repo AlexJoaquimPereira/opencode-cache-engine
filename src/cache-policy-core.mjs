@@ -145,6 +145,25 @@ export function isMimoAfterV26(slug) {
   return false
 }
 
+// Google Gemini 2.5-and-later (provider-managed implicit caching; docs say
+// "Gemini 2.5 and newer"). Anchored at a slug boundary so a concatenated
+// prefix like `mygemini-2.5` does not match, while a `namespace/gemini-...`
+// gateway id does (intended). Version-typed so Gemma / `gemini-embedding-*` do
+// not match. The moving `gemini-{flash,flash-lite,pro}-latest` aliases are
+// accepted because they currently resolve to a 2.5+ model.
+export function isGemini25OrLater(slug) {
+  const text = String(slug ?? "").toLowerCase()
+  const re = /(?:^|\/)gemini-(\d{1,3})(?:\.(\d))?(?![\d.])/g
+  let m
+  while ((m = re.exec(text)) !== null) {
+    const major = Number(m[1])
+    const minor = m[2] === undefined ? 0 : Number(m[2])
+    if (major > 2) return true
+    if (major === 2 && minor >= 5) return true
+  }
+  return /(?:^|\/)gemini-(?:flash|flash-lite|pro)-latest(?![\w-])/.test(text)
+}
+
 // Candidate ids for exact/alias lookup. Includes the raw apiID/modelID, the
 // lower-cased forms, and a single stripped transport/vendor prefix
 // (e.g. "openai/gpt-5.6-luna" -> "gpt-5.6-luna", "xiaomi/mimo-v2.6-flash" ->
@@ -264,6 +283,24 @@ export const BASELINES = {
     ],
     inventoryRef: "§6 Anthropic Claude",
   },
+  "google.gemini-implicit": {
+    id: "google.gemini-implicit",
+    creator: "google",
+    appliesTo:
+      "Google Gemini 2.5 and later (provider-managed implicit caching; no request field)",
+    automatic: true,
+    defaultMode: "implicit",
+    supportsExplicitBreakpoints: false,
+    minCacheTokens: null,
+    ttl: null,
+    cacheKeyOptional: false,
+    cacheWriteBilled: false,
+    usageFields: [
+      "usageMetadata.cachedContentTokenCount",
+      "prompt_tokens_details.cached_tokens",
+    ],
+    inventoryRef: "§7 Google Gemini",
+  },
   "neutral.none": {
     id: "neutral.none",
     creator: "unknown",
@@ -276,7 +313,7 @@ export const BASELINES = {
     cacheKeyOptional: false,
     cacheWriteBilled: false,
     usageFields: [],
-    inventoryRef: "§8 Compatibility Matrix",
+    inventoryRef: "§9 Compatibility Matrix",
   },
 }
 
@@ -323,7 +360,7 @@ export const TRANSPORTS = {
     kind: "openrouter",
     sessionAffinityHeader: "x-session-id",
     stickyRouting: true,
-    inventoryRef: "§7 OpenRouter transport",
+    inventoryRef: "§8 OpenRouter transport",
   },
 }
 
@@ -331,9 +368,9 @@ function resolveTransport(s) {
   const p = String(s.providerID ?? "").toLowerCase()
   if (p === "openrouter") return { ...TRANSPORTS.openrouter }
   if (!p) {
-    return { id: "unknown", kind: "unknown", sessionAffinityHeader: null, stickyRouting: false, inventoryRef: "§7 OpenRouter transport" }
+    return { id: "unknown", kind: "unknown", sessionAffinityHeader: null, stickyRouting: false, inventoryRef: "§8 OpenRouter transport" }
   }
-  return { id: p, kind: "direct", sessionAffinityHeader: null, stickyRouting: false, inventoryRef: "§7 OpenRouter transport" }
+  return { id: p, kind: "direct", sessionAffinityHeader: null, stickyRouting: false, inventoryRef: "§8 OpenRouter transport" }
 }
 
 // ---------------------------------------------------------------------------
@@ -590,6 +627,27 @@ export const POLICY_REGISTRY = [
     boundary: "Anthropic Claude (Messages API / Claude-compatible routes)",
     note: "OpenCode 1.18.34 already applies Anthropic cache_control breakpoints for Claude/Anthropic transports (native @ai-sdk/anthropic, google-vertex-anthropic, Bedrock cachePoint, and OpenRouter when the model id contains anthropic/claude) and normalizes cache_read_input_tokens/cache_creation_input_tokens. CacheEngine therefore stays passive: no cache_control, no cache key, no TTL, no breakpoint injection. Verified 2026-10-04.",
     inventoryRef: "§6 Anthropic Claude",
+  },
+  {
+    // v0.5.3: Google Gemini. Caching is provider-managed implicit (Gemini 2.5+
+    // and newer): there is no request-side cache-control field, and OpenCode's
+    // applyCaching gate EXCLUDES Gemini/Google (Gemini is a no-op for OpenCode's
+    // cache markers). Google's explicit caching is a separate cachedContents
+    // resource, deliberately NOT managed here. CacheEngine is therefore PASSIVE:
+    // classification + accounting only, no mutation on any route.
+    id: "google.gemini",
+    creator: "google",
+    family: "gemini",
+    kind: "family",
+    predicate: isGemini25OrLater,
+    exactIds: ["gemini-flash-latest", "gemini-flash-lite-latest"],
+    baseline: "google.gemini-implicit",
+    overlays: [],
+    legacy: true,
+    runtime: rt("gemini"),
+    boundary: "Google Gemini 2.5 and later (implicit caching)",
+    note: "Gemini caches implicitly for 2.5+; no request-side cache-control field exists, OpenCode's applyCaching gate excludes Gemini, and OpenCode normalizes usageMetadata.cachedContentTokenCount into tokens.cache.read (there is no Gemini write field). Google's explicit `cachedContents` API is a separate resource lifecycle and is intentionally not managed. Verified 2026-10-05.",
+    inventoryRef: "§7 Google Gemini",
   },
 ]
 
