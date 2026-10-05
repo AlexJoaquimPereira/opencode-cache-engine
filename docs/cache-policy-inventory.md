@@ -386,42 +386,62 @@ CacheEngine mutation.
 
 ## 7. Google Gemini
 
-Gemini's prompt caching is **provider-managed implicit** for Gemini 2.5 and
-later: there is no request-side cache-control field. Google's explicit
-`cachedContents` API is a separate resource mechanism. Verification date
-**2026-10-05**.
+Gemini prompt caching is **route-dependent**:
+
+- On the **native Google Gemini Developer API and Vertex AI**, caching is
+  **provider-managed implicit** for Gemini 2.5 and later — there is no
+  request-side cache-control field. Google's explicit `cachedContents` API is a
+  separate resource mechanism.
+- On **OpenRouter**, OpenRouter documents a *different*, gateway-specific Gemini
+  contract (see the OpenRouter subsection below) — so "Gemini is implicit" is
+  **not** a universal statement across gateways.
+
+Verification date **2026-10-05**.
 
 | # | Question | Finding | Evidence |
 | --- | --- | --- | --- |
-| 1 | Model names/aliases | Current text/chat ids: `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.5-flash-lite`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.6-flash`, `gemini-3.1-pro-preview`, plus moving aliases `gemini-flash-latest`/`gemini-flash-lite-latest`/`gemini-pro-latest`. Gemini 2.0 models are shut down. **Gemma is a separate family** (`gemma-*`). | [D] |
+| 1 | Model names/aliases | Current text/chat ids: `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.5-flash-lite`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.6-flash`, `gemini-3.1-pro-preview`. Google documents the "Latest" alias pattern (`gemini-flash-latest`); the installed OpenCode catalog also carries `gemini-flash-lite-latest`. `gemini-pro-latest` is neither documented by Google nor present in the catalog → not matched. Gemini 2.0 models are shut down. **Gemma is a separate family** (`gemma-*`). | [D]/[O] |
 | 2 | Family identification | Literal `model` id; generation from the version token (`gemini-<major>[.<minor>]`). Provider ids: `google` (`@ai-sdk/google`), `google-vertex` (`@ai-sdk/google-vertex`). | [D] |
 | 3 | Scope | Implicit caching is family-wide for 2.5+ but minimum sizes are per-model; explicit caching is a separate resource. | [D] |
-| 4 | Automatic vs controls | Implicit: enabled by default, **no request field**. Explicit: `POST /v1beta/cachedContents` creating a `CachedContent` resource, then `generateContent` with top-level `cachedContent: <name>` — a resource lifecycle, not an inline marker. | [D] |
+| 4 | Automatic vs controls | Native implicit: enabled by default, **no request field**. Native explicit: `POST /v1beta/cachedContents` creating a `CachedContent` resource, then `generateContent` with top-level `cachedContent: <name>` — a resource lifecycle, not an inline marker. OpenRouter (gateway): see below. | [D] |
 | 5 | Cacheable-prefix rules | Cached content is treated as a prefix; recommend large/common content first and similar prefixes close together. | [D] |
-| 6 | Minimum cacheable length | Per-model: AI Studio 2.5 Flash/Pro 2,048, 3.x 4,096; Vertex lists 2,048 (2.x), 4,096 (3.x), and a 6,144 tier for some previews. Treat exact numbers as model/platform-specific. | [D]/[U] |
-| 7 | Implicit vs explicit | Implicit (default) and explicit (`CachedContent` resource) are separate mechanisms. | [D] |
-| 8 | Cache key behavior | No user cache key for implicit caching. | [D] |
-| 9 | Retention/TTL | Implicit TTL is provider-managed (OpenRouter reports ~3–5 min; write TTL 5 min); explicit `CachedContent` default TTL 1 hour (Vertex 60 min, min 1 min). | [D]/[U] |
-| 10 | Usage fields | `usageMetadata.cachedContentTokenCount` (read). **No cache-write/creation token field** for implicit caching. OpenRouter surfaces `prompt_tokens_details.cached_tokens`/`cache_write_tokens`. | [D] |
-| 11 | Generation differences | Implicit applies to 2.5+; 2.0 and earlier do not (and 2.0 is shut down). Gemini 3.x has higher minimums. | [D] |
+| 6 | Minimum cacheable length | Platform-specific, not a contradiction: **Developer API** — 2.5 Flash/Pro 2,048, 3.x 4,096. **Vertex** — Gemini 2 family 2,048, Gemini 3 family 4,096, and a separate **6,144** tier for `3.0 Flash Preview`/`3.1 Pro Preview`/`3.7 Flash`/`3.8 Flash`. | [D] |
+| 7 | Implicit vs explicit | Native: implicit (default) and explicit (`CachedContent` resource) are separate mechanisms. | [D] |
+| 8 | Cache key behavior | No user cache key for native implicit caching. | [D] |
+| 9 | Retention/TTL | Native implicit TTL is provider-managed; explicit `CachedContent` default TTL 1 hour (Vertex 60 min, min 1 min). OpenRouter reports implicit ~3–5 min, writes 5 min (no refresh). | [D]/[U] |
+| 10 | Usage fields | `usageMetadata.cachedContentTokenCount` (read), present for **both** implicit and explicit hits. **No cache-write/creation token field exists** for Gemini. (Interactions API instead exposes `usage.total_cached_tokens`.) | [D] |
+| 11 | Generation differences | Native implicit applies to 2.5+; 2.0 and earlier do not (and 2.0 is shut down). Minimums are route/platform/model-specific. | [D] |
 | 12 | Prefix-stability guidance | Stable/common content first; similar prefixes close together; cached content is a prefix. | [D] |
-| 13 | Affinity/routing | No provider affinity parameter. OpenRouter sticky routing is transport, best-effort. | [D] |
-| 14 | Subscription / Code Assist | Gemini Code Assist for **individuals / Google AI Pro / Ultra was discontinued 2026-06-18** (IDE + CLI); Standard/Enterprise remain (Cloud-managed). Subscription routes expose no documented cache-control semantics → passive/unknown. | [D] |
+| 13 | Affinity/routing | No native affinity parameter. OpenRouter sticky routing is transport, best-effort (see below). | [D] |
+| 14 | Subscription / Code Assist | Gemini Code Assist for **individuals / Google AI Pro / Ultra was discontinued 2026-06-18** (IDE + CLI); Standard/Enterprise remain (Cloud-managed). No cache-control semantics are documented for these routes → passive/unknown. | [D] |
+
+### 7a. Route-specific Gemini caching contracts
+
+| Route | Mechanism | CacheEngine treatment |
+| --- | --- | --- |
+| Native Google Gemini Developer API (`google`, `@ai-sdk/google`) | provider-managed implicit (2.5+); no request field | passive |
+| Native Vertex AI (`google-vertex`, `@ai-sdk/google-vertex`) | provider-managed implicit (2.5+); route-specific minimums | passive |
+| OpenCode Zen (`opencode`) | Gemini via `@ai-sdk/google`; Zen prices Cached Read, no Cached Write | passive |
+| OpenCode Go (`opencode-go`) | exposes **no Gemini** models (see RF-OC-011) | n/a |
+| OpenRouter → Gemini | **gateway-specific** contract; OpenRouter documents both "implicit, no `cache_control` needed" and "requires explicit `cache_control` breakpoints"; endpoints API reports `supports_implicit_caching: false` while pricing cache reads | passive — CacheEngine does **not** inject the documented breakpoint (see RF-OR-003) |
+| Gemini Code Assist (subscription) | no documented cache-control semantics | passive / unknown |
+| Generic OpenAI-compatible gateway | unknown protocol; model id does not imply Gemini-native fields | passive / fail closed |
 
 **OpenCode behavior (decisive).** OpenCode 1.18.34's `applyCaching` gate does
-**not** include Gemini/Google — Gemini is a **no-op** for OpenCode's cache
-markers. The native Gemini protocol body has no cache-control field, and the
-usage mapper normalizes `cachedContentTokenCount` → `tokens.cache.read` with
-**no write** (upstream `@ai-sdk/google` `convertGoogleUsage` sets `cacheWrite:
-undefined`). Google's explicit `CachedContent` API is intentionally not wired up
-by OpenCode.
+**not** include Gemini/Google (`@ai-sdk/google`, `@ai-sdk/google-vertex` are
+absent) — Gemini is a **no-op** for OpenCode's cache markers. The native Gemini
+protocol body has no cache-control field, and the usage mapper normalizes
+`cachedContentTokenCount` → `tokens.cache.read` with **no write** (upstream
+`@ai-sdk/google` `convertGoogleUsage` sets `cacheWrite: undefined`; the native
+`packages/llm/src/protocols/gemini.ts` `mapUsage` does the same). Google's
+explicit `CachedContent` API is intentionally not wired up by OpenCode.
 
-**CacheEngine treatment: passive (no mutation).** Because caching is
-provider-managed implicit and OpenCode adds no Gemini cache marker, CacheEngine
-classifies the 2.5+ family for telemetry and relies on OpenCode's usage
-normalization. It injects no cache-control field, no cache key, no TTL, and
-creates no `cachedContents` resources on any route (direct Google, Vertex,
-OpenRouter, Zen).
+**CacheEngine treatment: passive (no mutation) on every route.** Because native
+caching is provider-managed implicit and OpenCode adds no Gemini cache marker,
+CacheEngine classifies the 2.5+ family for telemetry and relies on OpenCode's
+usage normalization. It injects no cache-control field, no cache key, no TTL, and
+creates no `cachedContents` resources. On OpenRouter it also adds **no**
+`cache_control` breakpoint and **no** `x-session-id` affinity (RF-OR-003).
 
 Sources (accessed 2026-10-05): Google *Context caching*
 (https://ai.google.dev/gemini-api/docs/caching) and *Models*
@@ -430,12 +450,16 @@ Sources (accessed 2026-10-05): Google *Context caching*
 Google *Gemini Code Assist deprecations*
 (https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals);
 OpenCode `provider/transform.ts`, `session/session.ts`, and
-`packages/llm/src/protocols/gemini.ts` @ v1.18.34; OpenRouter *Prompt Caching*
-(https://openrouter.ai/docs/features/prompt-caching).
+`packages/llm/src/protocols/gemini.ts` @ v1.18.34; OpenCode Zen/Go model catalogs
+(https://opencode.ai/docs/zen/, https://opencode.ai/docs/go/); OpenRouter
+*Prompt Caching* (https://openrouter.ai/docs/features/prompt-caching) and
+*Response Caching* (https://openrouter.ai/docs/features/response-caching).
 
-**Unresolved.** AI Studio vs Vertex implicit minimum-token tables disagree (2.5 =
-2,048 on both; Vertex adds a 6,144 tier). OpenRouter's Gemini page is internally
-contradictory about whether explicit `cache_control` breakpoints are required.
+**Unresolved.** Native `google-vertex` minimums use a separate 6,144 tier for
+specific 3.x models (platform-specific, not a contradiction). OpenRouter's Gemini
+page contradicts itself on whether explicit `cache_control` breakpoints are
+required, and its endpoints API reports `supports_implicit_caching: false` despite
+listing cache-read pricing; reconciliation needs a live OpenRouter Gemini probe.
 Whether OpenCode's `google-vertex` Gemini route is registered in the native
 `packages/llm` runtime is not separately confirmed.
 
