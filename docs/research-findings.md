@@ -100,7 +100,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Sources: local — `@opencode-ai/sdk` types 1.18.34; OpenCode source tag
   `v1.18.34` (`packages/opencode/src/session/llm/ai-sdk.ts`,
   `session/session.ts` getUsage); full per-provider field map in
-  `docs/cache-policy-inventory.md` §8a.
+  `docs/cache-policy-inventory.md` §9a.
 - Justifies: the GLM ratio `read/(read+write+input)` and the MiMo
   `promptTokens = read + input` formulas in `src/cache-engine.ts`.
 - Version context: OpenCode 1.18.34.
@@ -390,6 +390,45 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Notes: These catalogs are research evidence, not classifier configuration; do
   not hardcode Zen's current Gemini list into the matcher.
 
+### RF-OC-012 — OpenCode applies caching to Qwen only on the Messages routes; no installed provider uses `@ai-sdk/alibaba`
+
+- Status: current
+- Verified: 2026-10-05
+- Area: opencode-runtime
+- Fact: In the installed 1.18.34 catalog every Alibaba provider (`alibaba`,
+  `alibaba-cn`, `alibaba-coding-plan`, `alibaba-coding-plan-cn`,
+  `alibaba-token-plan`, `alibaba-token-plan-cn`) declares
+  `@ai-sdk/openai-compatible`, and **no** provider or model anywhere declares
+  `@ai-sdk/alibaba` (0 entries). Therefore `ProviderTransform.applyCaching`
+  (RF-OC-008) cannot fire for direct DashScope / Coding-Plan / Token-Plan Qwen —
+  none of its `providerID` / `api.id` / `model.id` / `api.npm` branches match — and
+  OpenCode adds no cache marker there. It **does** fire on the OpenCode Messages
+  routes, where the per-model `provider.npm` is overridden to
+  `@ai-sdk/anthropic`: Go `qwen3.8-max` / `qwen3.8-flash` / `qwen3.7-plus`, and
+  Zen `qwen3.5-plus` / `qwen3.6-plus` / `qwen3.6-plus-free` / `qwen3.8-flash`.
+  There it marks the last content block with the `@ai-sdk/anthropic`
+  `cacheControl:{type:"ephemeral"}` option (RF-OC-008). `getUsage` (RF-OC-008) has
+  no `metadata.alibaba` / `metadata.dashscope` fallback, so a Qwen cache-write
+  count is populated only on the Anthropic Messages route
+  (`cache_creation_input_tokens`); OpenAI-compatible / DashScope reports reads
+  only (`cache.read`), with `cache.write = 0`.
+- Evidence: [O]/[D]
+- Sources: installed `~/.cache/opencode/models.json` walked 2026-10-05;
+  OpenCode `v1.18.34` `packages/opencode/src/provider/transform.ts` +
+  `packages/opencode/src/session/session.ts` (per RF-OC-008); OpenCode Go/Zen
+  route tables https://opencode.ai/docs/go/ and https://opencode.ai/docs/zen/ ;
+  accessed 2026-10-05.
+- Justifies: `src/cache-policy-core.mjs` `alibaba.qwen` staying passive on every
+  Qwen route (no overlay, no affinity); the passive Qwen route tests in
+  `test/cache-engine.test.mjs`; the inventory §8a Qwen route rows.
+- Version context: OpenCode 1.18.34 (installed); catalog walked 2026-10-05.
+- Re-verify when: OpenCode adds an `@ai-sdk/alibaba` provider or model override,
+  changes `applyCaching`/`getUsage`, or changes the Go/Zen Qwen model set.
+- Superseded by: null
+- Notes: Harness-side confirmation of RF-PRV-006; the Go/Zen catalog itself is
+  RF-OC-011. The `@ai-sdk/alibaba` branch exists in the bundled source but is
+  dormant for the installed catalog today.
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
@@ -400,7 +439,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Fact: Which upstream OpenRouter picks is not observable from a plugin, so
   CacheEngine must never claim or override routing.
 - Evidence: [O]
-- Sources: local — recorded in `docs/cache-policy-inventory.md` §8; consistent
+- Sources: local — recorded in `docs/cache-policy-inventory.md` §9; consistent
   with RF-OC-003.
 - Justifies: the "never override routing" invariant.
 - Version context: OpenCode 1.18.34.
@@ -565,6 +604,52 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Notes: Distinguish live-observed behavior from documentation; the RF-OR-003
   contradiction is preserved. Scoped to one endpoint only — do not generalize.
 
+### RF-OR-005 — OpenRouter documents Qwen/Alibaba caching as explicit-only block `cache_control`, contradicted by per-endpoint metadata
+
+- Status: current
+- Verified: 2026-10-05
+- Area: openrouter-transport
+- Fact: OpenRouter's prompt-caching page documents Alibaba/Qwen caching as
+  **explicit-only**: add `cache_control:{type:"ephemeral"}` **inside a text content
+  block** (Anthropic-style), with a **5-minute** write TTL; the marker is
+  block-level, not top-level. Explicitly cacheable slugs listed: `qwen/qwen3-max`,
+  `qwen/qwen-plus`, `qwen/qwen3.6-plus`, `qwen/qwen3-coder-plus`,
+  `qwen/qwen3-coder-flash` (plus `deepseek/deepseek-v3.2`); snapshots
+  `qwen/qwen3.5-plus-02-15` and `qwen/qwen3.5-flash-02-23` are excluded. Usage is
+  reported as `usage.prompt_tokens_details.cached_tokens` (read) and
+  `.cache_write_tokens` (write) — separate fields. This contradicts the per-endpoint
+  API metadata: `supports_implicit_caching` is `true` for `qwen/qwen3-coder-plus`
+  and `qwen/qwen3-max` but `false` for `qwen/qwen-plus`, `qwen/qwen3-coder-flash`,
+  and `qwen/qwen3.6-plus` (which also lists `input_cache_write` with no
+  `input_cache_read`). Generic sticky routing applies to both implicit and explicit
+  caching (body `session_id` > `x-session-id`, ≤256 chars; `provider.order`
+  disables it; 10-minute inactivity expiry), but OpenRouter gives **no** Qwen-specific
+  `session_id` recommendation.
+- Evidence: [D] (docs/API) / [U] (the unknowns below)
+- Sources: OpenRouter Prompt Caching
+  https://openrouter.ai/docs/features/prompt-caching (Alibaba section: block
+  marker, 5m TTL, slugs; sticky routing); usage accounting
+  https://openrouter.ai/docs/cookbook/administration/usage-accounting ; per-model
+  endpoints https://openrouter.ai/api/v1/models/qwen/<id>/endpoints
+  (`supports_implicit_caching` contradiction); catalog
+  https://openrouter.ai/api/v1/models . Accessed 2026-10-05.
+- Justifies: `src/cache-policy-core.mjs` `alibaba.qwen` staying passive on the
+  OpenRouter route — the V1 `chat.params` hook exposes only top-level
+  `providerOptions`, which cannot place the documented block-level marker
+  (RF-SDK-001/RF-OR-002) — and no Qwen affinity.
+- Version context: OpenRouter live docs/API as of 2026-10-05; OpenCode 1.18.34.
+- Unknowns: minimum cacheable prefix; maximum breakpoints; eligible roles/content
+  types; whether OpenRouter translates the marker to Alibaba-native caching; and
+  which `supports_implicit_caching` value (docs vs endpoint metadata) is
+  authoritative.
+- Re-verify when: OpenRouter resolves or changes the Qwen cache contract, flips
+  `supports_implicit_caching` for the Qwen slugs, or adds a Qwen `session_id`
+  recommendation; or a live Qwen probe establishes the actual behavior.
+- Superseded by: null
+- Notes: Complements RF-PRV-006 (provider-side semantics) and mirrors RF-OR-003
+  (the same implicit-vs-explicit documentation conflict for Gemini). No
+  Qwen-specific live probe has been run.
+
 ## RF-SDK — AI-SDK and provider-package serialization
 
 ### RF-SDK-001 — `@openrouter/ai-sdk-provider` forwards `providerOptions.openrouter` verbatim, so OpenRouter needs snake_case keys
@@ -651,7 +736,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Notes: Do NOT apply Anthropic-style `cache_control` to the OpenAI-compatible
   request, and do NOT apply `prompt_cache_options` to unrelated
   OpenAI-compatible providers. CacheEngine stays passive because caching does not
-  require a mutation; the Anthropic path is deferred (inventory §10 item 14).
+  require a mutation; the Anthropic path is deferred (inventory §11 item 14).
   Conflicting first-party evidence is preserved: the K2.x Chat OpenAPI declares
   `prompt_cache_key`/`prompt_cache_options` while the caching FAQ gates Cache
   Write to `kimi-k3` (unresolved), and the caching academy page names
@@ -760,3 +845,78 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   or the usage field; or the OpenCode catalog changes its Gemini aliases.
 - Superseded by: null
 - Notes: Do not pad prompts or inject tokens to cross a provider minimum.
+
+### RF-PRV-006 — Alibaba/Qwen caching is provider-managed implicit on every route; CacheEngine stays passive
+
+- Status: current
+- Verified: 2026-10-05
+- Area: provider-api
+- Fact: Alibaba Model Studio / DashScope / QwenCloud document two context-cache
+  modes:
+  - **Implicit:** provider-managed, automatic, **cannot be disabled**; common
+    prefix matching; minimum **~1,024 tokens** (the QwenCloud text FAQ table says
+    256 — a first-party inconsistency; the detailed guide and the Model Studio
+    page say 1,024); **no fixed TTL** (evicted after long disuse); hit probability
+    is not guaranteed; cached-token usage is reported.
+  - **Explicit:** opt-in marker `cache_control:{type:"ephemeral"}` placed **inside
+    a `content` block of a `messages[]` item** (system/user/assistant/tool); the
+    Anthropic-compatible route also accepts it in the top-level `system` array.
+    Minimum **1,024** tokens; **5-minute** validity, refreshed by each hit;
+    **≤4** markers (only the last four take effect); tool definitions are
+    serialized into the system-message cache and cannot be marked independently.
+  - **Session cache** (Responses API only): header
+    `x-dashscope-session-cache: enable` + `previous_response_id`; not available on
+    the Chat Completions / DashScope / Anthropic routes.
+  Implicit and explicit are mutually exclusive on the Chat/Anthropic routes.
+  Usage: OpenAI-compatible `usage.prompt_tokens_details.cached_tokens` (read) +
+  `.cache_creation_input_tokens` (write); DashScope native `input_tokens` +
+  `prompt_tokens_details.cached_tokens`/`cache_creation_input_tokens` (some VL
+  models report `cached_tokens` in Singapore); Anthropic-compatible
+  `cache_read_input_tokens` + `cache_creation_input_tokens` (read excluded from
+  `input_tokens`). Cache is isolated **per account and per model**. No
+  routing/stickiness key is documented. Prefix guidance: static content first,
+  variable last; keep `tools` order and JSON field order stable; merge consecutive
+  tool messages to stay within the 20-block lookback.
+- Evidence: [D]/[I]
+- Sources: Model Studio *Context Cache*
+  https://www.alibabacloud.com/help/en/model-studio/context-cache ; QwenCloud
+  context-cache https://docs.qwencloud.com/developer-guides/run-and-scale/context-cache ;
+  QwenCloud text FAQ https://docs.qwencloud.com/resources/faq-text-generation ;
+  QwenCloud Anthropic API https://docs.qwencloud.com/api-reference/chat/anthropic ;
+  Model Studio Coding Plan https://www.alibabacloud.com/help/en/model-studio/coding-plan
+  and .../coding-plan-faq ; Qwen Code auth
+  https://qwenlm.github.io/qwen-code-docs/en/users/configuration/auth/ ; Qwen Code
+  token caching https://qwenlm.github.io/qwen-code-docs/en/users/features/token-caching/ ;
+  OpenRouter Prompt Caching https://openrouter.ai/docs/features/prompt-caching and
+  per-model endpoints https://openrouter.ai/api/v1/models/qwen/<id>/endpoints ;
+  OpenCode `provider/transform.ts` + `session/session.ts` @ v1.18.34. Accessed
+  2026-10-05.
+- Justifies: the `alibaba.qwen` registry entry is passive (`rt("qwen")`: no
+  `gptCacheMetadata`, no `envRelocation`, no affinity, `cacheRatio` null); the
+  matcher `isQwenModel` classifies Qwen chat families; no explicit-marker overlay
+  is implemented.
+- Version context: Alibaba/QwenCloud docs as of 2026-10-05; OpenCode 1.18.34.
+- Re-verify when: Alibaba changes the implicit/explicit mechanisms, minimum, TTL,
+  marker location, or the Qwen model list; OpenCode changes its `applyCaching`
+  gate or Qwen provider routes; or OpenRouter changes its Qwen cache contract.
+- Superseded by: null
+- Notes: **Coding Plan** (`https://coding[-intl].dashscope.aliyuncs.com/v1` OpenAI
+  / `.../apps/anthropic` Anthropic) and **Token Plan**
+  (`https://token-plan[-cn-beijing].maas.../compatible-mode/v1`) endpoints are
+  documented, but their cache semantics are **not** → passive/unknown. Legacy
+  **Qwen OAuth** free tier was discontinued 2026-04-15 → not a current route.
+  **OpenCode Go** Qwen (`qwen3.8-max`, `qwen3.8-flash`, `qwen3.7-plus`) uses
+  `@ai-sdk/anthropic` → OpenCode already applies Anthropic-style breakpoints, so
+  CacheEngine must not duplicate. **Zen** Qwen mixes `@ai-sdk/anthropic` and
+  `@ai-sdk/openai-compatible`. **OpenRouter** Qwen documents explicit block
+  markers (`qwen/qwen3-max`, `qwen/qwen-plus`, `qwen/qwen3.6-plus`,
+  `qwen/qwen3-coder-plus`, `qwen/qwen3-coder-flash`; 5m TTL; reads
+  `prompt_tokens_details.cached_tokens`, writes `cache_write_tokens`) but its
+  endpoint `supports_implicit_caching` metadata contradicts the docs and no
+  `session_id` recommendation exists; OpenRouter's Qwen minimum cacheable prefix,
+  maximum breakpoints, eligible roles/content types, Alibaba-native translation,
+  and which cache-mode statement is authoritative are all **[U]** (see RF-OR-005);
+  the V1 `chat.params` hook cannot place a block-level marker
+  (`experimental.chat.messages.transform` block serialization unverified), so
+  CacheEngine stays passive. `qwen3-embedding-*` and rerankers are excluded from
+  the matcher. Harness-side provider/`npm` evidence is RF-OC-012.
