@@ -100,7 +100,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Sources: local — `@opencode-ai/sdk` types 1.18.34; OpenCode source tag
   `v1.18.34` (`packages/opencode/src/session/llm/ai-sdk.ts`,
   `session/session.ts` getUsage); full per-provider field map in
-  `docs/cache-policy-inventory.md` §7a.
+  `docs/cache-policy-inventory.md` §8a.
 - Justifies: the GLM ratio `read/(read+write+input)` and the MiMo
   `promptTokens = read + input` formulas in `src/cache-engine.ts`.
 - Version context: OpenCode 1.18.34.
@@ -284,6 +284,36 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Notes: A route may serve a Claude model without exposing Anthropic caching; do
   not infer cache support from the model catalogue.
 
+### RF-OC-010 — OpenCode is a no-op for Gemini caching and normalizes cachedContentTokenCount to cache.read
+
+- Status: current
+- Verified: 2026-10-05
+- Area: opencode-runtime
+- Fact: In OpenCode 1.18.34 the `applyCaching` gate does **not** include
+  Gemini/Google (the gate covers `anthropic`, `google-vertex-anthropic`,
+  `anthropic`/`claude` ids, `@ai-sdk/anthropic`, and `@ai-sdk/alibaba`; it
+  excludes `@ai-sdk/gateway`), so Gemini is a **no-op** for OpenCode's cache
+  markers. The native Gemini protocol body has no cache-control field, and usage
+  is normalized from `usageMetadata.cachedContentTokenCount` → `tokens.cache.read`
+  with **no write** (upstream `@ai-sdk/google` `convertGoogleUsage` sets
+  `cacheWrite: undefined`; the native `packages/llm/src/protocols/gemini.ts`
+  `mapUsage` does the same). OpenCode's Gemini protocol comments call the
+  `CacheHint` layer "a no-op for Gemini" and the explicit `CachedContent` API
+  "intentionally not wired up". Provider ids: `google` → `@ai-sdk/google`,
+  `google-vertex` → `@ai-sdk/google-vertex`. Zen (`opencode`) serves Gemini via
+  `@ai-sdk/google`; Go (`opencode-go`) exposes no Gemini.
+- Evidence: [D]/[O]
+- Sources: OpenCode tag `v1.18.34` — `packages/opencode/src/provider/transform.ts`,
+  `packages/opencode/src/session/session.ts`,
+  `packages/opencode/src/session/llm/ai-sdk.ts`,
+  `packages/llm/src/protocols/gemini.ts` and its recorded cache test; local
+  `opencode@1.18.34` binary and `~/.cache/opencode/models.json`. Accessed 2026-10-05.
+- Justifies: the passive `google.gemini` policy in `src/cache-policy-core.mjs`.
+- Version context: OpenCode 1.18.34.
+- Re-verify when: OpenCode adds a Gemini cache marker or changes the native Gemini runtime.
+- Superseded by: null
+- Notes: Because OpenCode adds no Gemini cache field, CacheEngine must not either.
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
@@ -294,7 +324,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Fact: Which upstream OpenRouter picks is not observable from a plugin, so
   CacheEngine must never claim or override routing.
 - Evidence: [O]
-- Sources: local — recorded in `docs/cache-policy-inventory.md` §7; consistent
+- Sources: local — recorded in `docs/cache-policy-inventory.md` §8; consistent
   with RF-OC-003.
 - Justifies: the "never override routing" invariant.
 - Version context: OpenCode 1.18.34.
@@ -412,7 +442,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Notes: Do NOT apply Anthropic-style `cache_control` to the OpenAI-compatible
   request, and do NOT apply `prompt_cache_options` to unrelated
   OpenAI-compatible providers. CacheEngine stays passive because caching does not
-  require a mutation; the Anthropic path is deferred (inventory §9 item 14).
+  require a mutation; the Anthropic path is deferred (inventory §10 item 14).
   Conflicting first-party evidence is preserved: the K2.x Chat OpenAPI declares
   `prompt_cache_key`/`prompt_cache_options` while the caching FAQ gates Cache
   Write to `kimi-k3` (unresolved), and the caching academy page names
@@ -454,3 +484,35 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Re-verify when: Anthropic changes cache_control, TTLs, breakpoint caps, or usage fields.
 - Superseded by: null
 - Notes: CacheEngine sends no cache_control because OpenCode already does (RF-OC-008).
+
+### RF-PRV-004 — Gemini prompt caching is provider-managed implicit (2.5+); explicit caching is a separate resource
+
+- Status: current
+- Verified: 2026-10-05
+- Area: provider-api
+- Fact: Google enables **implicit** context caching by default for Gemini 2.5 and
+  newer; there is no request-side cache-control field, and cache hits surface as
+  `usageMetadata.cachedContentTokenCount` (no write/creation token field).
+  Minimum cacheable input is per-model (AI Studio: 2.5 Flash/Pro 2,048, 3.x
+  4,096; Vertex also lists a 6,144 tier for some previews) — model/platform
+  specific. Google recommends large/common content first and similar prefixes
+  close together. **Explicit** caching is a separate resource lifecycle: `POST
+  /v1beta/cachedContents` with `{model, contents, systemInstruction, ttl}`
+  (default 1 hour; Vertex default 60 min, min 1 min) returning a `name`, then
+  `generateContent` with top-level `cachedContent`. Gemini 2.0 and earlier do
+  not have implicit caching (2.0 is shut down). **Gemma is a separate family.**
+  Subscription: Gemini Code Assist for individuals / Google AI Pro / Ultra was
+  discontinued **2026-06-18**; Standard/Enterprise remain but expose no
+  documented cache-control semantics.
+- Evidence: [D]
+- Sources: https://ai.google.dev/gemini-api/docs/caching ;
+  https://ai.google.dev/gemini-api/docs/models ; Vertex context-cache docs
+  (docs.cloud.google.com/gemini-enterprise-agent-platform/models/context-cache/context-cache-overview);
+  https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals .
+  Accessed 2026-10-05.
+- Justifies: the `google.gemini-implicit` baseline and the passive Gemini policy;
+  explicitly NOT managing `cachedContents`.
+- Version context: Google docs as of 2026-10-05.
+- Re-verify when: Google changes implicit-cache models/minimums/TTL or the CachedContents API.
+- Superseded by: null
+- Notes: Do not implement `cachedContents` lifecycle management in CacheEngine.
