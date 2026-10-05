@@ -650,7 +650,7 @@ export const POLICY_REGISTRY = [
     legacy: true,
     runtime: rt("gemini"),
     boundary: "Google Gemini 2.5 and later (implicit caching)",
-    note: "Gemini caches implicitly for 2.5+; no request-side cache-control field exists, OpenCode's applyCaching gate excludes Gemini, and OpenCode normalizes usageMetadata.cachedContentTokenCount into tokens.cache.read (there is no Gemini write field). Google's explicit `cachedContents` API is a separate resource lifecycle and is intentionally not managed. Verified 2026-10-05.",
+    note: "Native Gemini caching is provider-managed implicit for 2.5+; no request-side cache-control field exists, OpenCode's applyCaching gate excludes Gemini, and OpenCode normalizes usageMetadata.cachedContentTokenCount into tokens.cache.read (there is no native Gemini write field). Google's explicit `cachedContents` API is a separate resource lifecycle and is intentionally not managed. OpenRouter is gateway-specific and remains passive (RF-OR-003/RF-OR-004). Verified 2026-10-05.",
     inventoryRef: "§7 Google Gemini",
   },
 ]
