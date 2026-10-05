@@ -25,7 +25,7 @@ opencode plugin opencode-cache-engine
 
 `CacheEngine` is an OpenCode plugin designed for long-running agent sessions where prompt-cache efficiency affects both latency and cost. It keeps the harness conservative for providers whose cache behavior is already automatic, while applying provider-specific optimizations where the provider exposes useful cache controls or where prompt structure can be safely improved.
 
-The plugin currently has seven cache-policy families:
+The plugin currently has eight cache-policy families:
 
 * **DeepSeek** — passive cache observability; request structure is preserved.
 * **GPT-5.6 and later** — documented cache-key/options metadata, with prompt text
@@ -42,6 +42,11 @@ The plugin currently has seven cache-policy families:
 * **Google Gemini** — passive classification and accounting; Gemini 2.5+
   provider-managed implicit caching is left untouched. CacheEngine creates no
   `CachedContent` resources and injects no Gemini cache-control field.
+* **Alibaba Qwen** — passive classification and accounting; Qwen's
+  provider-managed implicit caching is left untouched on every route. CacheEngine
+  places no explicit block-level `cache_control` marker and adds no affinity,
+  because the V1 hook cannot reach message content blocks and OpenCode already
+  applies breakpoints on the Qwen Messages routes.
 
 Family classification is not hard-coded in the runtime. A pure policy registry
 and resolver in `src/cache-policy-core.mjs` returns a structured result
@@ -664,6 +669,70 @@ OpenRouter's Gemini caching guidance is internally inconsistent — which is why
 CacheEngine remains passive on every Gemini route.
 
 
+## Alibaba Qwen (Qwen3.x / Max / Plus / Flash / Coder / VL)
+
+### Policy: passive (provider-managed implicit caching)
+
+Alibaba Model Studio / DashScope enables **implicit** prefix caching automatically
+for Qwen; it cannot be disabled, has a ~1,024-token minimum, and reports hits as
+`prompt_tokens_details.cached_tokens` (OpenAI-compatible) or
+`cache_read_input_tokens` (Anthropic-compatible). CacheEngine leaves the Qwen
+request **unchanged** on every route — it adds no cache-control field, no cache
+key, no TTL, and no breakpoints.
+
+Alibaba also documents an **explicit** marker
+(`cache_control:{type:"ephemeral"}`) inside a message content block (1,024-token
+minimum, 5-minute TTL, ≤4 markers). CacheEngine does **not** place it: the V1
+`chat.params` hook exposes only top-level provider options and cannot reach
+content blocks, and OpenCode already applies Anthropic-style breakpoints on the
+Qwen **Messages** routes (`@ai-sdk/anthropic`), so adding one would duplicate or
+replace OpenCode's breakpoints.
+
+**Recognized ids** (bare, `qwen/`-prefixed, or gateway): the `qwen-<family>`
+aliases (`qwen-max`, `qwen-plus`, `qwen-flash`, `qwen-turbo`, `qwen-plus-latest`)
+and version-typed ids (`qwen3-max`, `qwen3.8-max`, `qwen3.7-plus`, `qwen3.6-plus`,
+`qwen3.5-flash`, `qwen3-coder-plus`, `qwen3-vl-plus`, `qwen3.8-omni-flash`, …).
+
+**Not recognized (neutral):** embeddings and rerankers (`qwen3-embedding-*`,
+`qwen3-reranker`), malformed versions (`qwen3.5.1`, `qwen3.5foo`), bare `qwen`,
+and look-alikes such as `myqwen-max` / `qwenx-3`.
+
+### Routes
+
+All Qwen routes are passive for CacheEngine:
+
+| Route | Qwen caching | Notes |
+| ----- | ------------ | ----- |
+| Alibaba Model Studio / DashScope (intl + CN, OpenAI-compatible) | provider-managed implicit | no request field; CacheEngine adds none |
+| Alibaba Anthropic-compatible | implicit; explicit top-level `cache_control` supported | CacheEngine adds none |
+| Alibaba Coding Plan (intl + CN) | undocumented → passive/unknown | subscription/billing route |
+| Alibaba Token Plan | undocumented → passive/unknown | subscription/billing route |
+| OpenCode Go (`opencode-go`) | OpenCode applies Anthropic-style breakpoints (`@ai-sdk/anthropic`) | CacheEngine must not duplicate |
+| OpenCode Zen (`opencode`) | Messages routes → OpenCode breakpoints; `qwen3.8-max` is OpenAI-compatible → provider implicit | mixed transport, all passive |
+| OpenRouter → Qwen | explicit block `cache_control` documented; endpoint metadata contradicts the docs | CacheEngine stays passive (V1 hook cannot place block markers); no affinity |
+| Qwen OAuth (legacy) | discontinued 2026-04-15 | not implemented |
+
+### Usage accounting
+
+OpenCode normalizes the provider's cache fields into `tokens.cache.read` /
+`tokens.cache.write`; the generic `read/(read+write)` ratio applies. Implicit
+caching reports reads only (no distinct write field); explicit caching on the
+Anthropic-compatible route reports `cache_creation_input_tokens` as the write.
+CacheEngine never fabricates a write.
+
+### Evidence and status
+
+Verified against first-party Alibaba Model Studio / QwenCloud documentation, the
+OpenRouter prompt-caching docs and endpoint metadata, and the OpenCode v1.18.34
+source/catalogs on 2026-10-05 (see
+[docs/cache-policy-inventory.md](docs/cache-policy-inventory.md) §8 and
+`docs/research-findings.md` RF-PRV-006, RF-OC-008, RF-OC-011, RF-OC-012,
+RF-OR-005). No live Qwen probe
+was performed: every route is provider-managed implicit or OpenCode-managed, and
+the explicit marker cannot be placed through the V1 hook, so there is no
+implementation decision a live probe would change.
+
+
 # Provider comparison
 
 | Policy family | Detection | Prompt text changed? | Cache metadata changed? | OpenRouter affinity header | Primary cache signal |
@@ -675,6 +744,7 @@ CacheEngine remains passive on every Gemini route.
 | Kimi K2.6 / K2.7-code / K3 | `kimi-k3`, `kimi-k2.6`, `kimi-k2.7-code(-highspeed)` (bare or gateway-prefixed) | No | No: implicit caching only | None | provider `cache.read` / `cache.write` |
 | Claude (Anthropic) | `claude-{opus,sonnet,haiku,fable,mythos}-*`, legacy `claude-3-*` (bare or gateway-prefixed) | No | No: OpenCode applies `cache_control` breakpoints | None | provider `cache.read` / `cache.write` |
 | Google Gemini | `gemini-2.5-*`, `gemini-3.*`, `gemini-flash-latest`/`gemini-flash-lite-latest` (bare, `google/`-prefixed, or Vertex) | No | No: provider-managed implicit caching | None | provider `cache.read` (no write field) |
+| Alibaba Qwen | `qwen-<family>` aliases + version-typed ids (`qwen3.*`, `qwen-max`, `qwen3-coder*`, `qwen3-vl-*`, …; bare, `qwen/`-prefixed, or gateway) | No | No: provider-managed implicit caching; OpenCode applies breakpoints on Messages routes | None | provider `cache.read` / `cache.write` |
 
 `x-session-id` is an HTTP affinity header, not a provider cache key or
 cache-control field. Non-OpenRouter endpoints do not receive CacheEngine's
@@ -1322,6 +1392,27 @@ never creates `CachedContent` resources. There are no other Gemini knobs, and
 cache keys, TTLs, and cache-control fields are neither exposed nor sent.
 
 
+# Qwen configuration
+
+```json
+{
+  "qwen": {
+    "enabled": true
+  }
+}
+```
+
+### `enabled`
+
+Enables the Alibaba/Qwen policy classification. Qwen is a **passive** family on
+every route: Alibaba/DashScope implicit caching is provider-managed, OpenCode
+already applies Anthropic-style breakpoints on the Qwen Messages routes
+(`@ai-sdk/anthropic`), and the V1 hook cannot place the documented block-level
+marker on the others. CacheEngine never mutates the Qwen request. There are no
+other Qwen knobs, and cache keys, TTLs, and cache-control fields are neither
+exposed nor sent.
+
+
 # Model detection
 
 The plugin classifies requests into:
@@ -1333,6 +1424,8 @@ glm53
 mimo26
 kimi
 claude
+gemini
+qwen
 neutral
 ```
 
@@ -1344,6 +1437,8 @@ The model detector recognizes:
 * MiMo V2.6-and-later family (`mimo-v2.6-flash`, `mimo-v2.6-pro`, `mimo-v2.6-pro-ultraspeed`, ...)
 * Kimi current ids (`kimi-k3`, `kimi-k2.6`, `kimi-k2.7-code`, `kimi-k2.7-code-highspeed`; bare or gateway-prefixed)
 * Claude current ids (`claude-opus-*`, `claude-sonnet-*`, `claude-haiku-*`, `claude-fable-*`, `claude-mythos-*`, legacy `claude-3-*`; bare or gateway-prefixed)
+* Gemini 2.5-and-later ids (`gemini-2.5-*`, `gemini-3.*`, `gemini-flash-latest`, `gemini-flash-lite-latest`; bare, `google/`-prefixed, or Vertex)
+* Alibaba/Qwen ids (`qwen-max`, `qwen-plus`, `qwen-flash`, `qwen-turbo`, `qwen3.*`, `qwen3-coder-*`, `qwen3-vl-*`, ...; bare, `qwen/`-prefixed, or gateway)
 
 The GPT-5.6-and-later family has an additional OpenAI/Azure-context check, so a string containing a qualifying GPT version (for example `gpt-5.6` or `gpt-6`) does not automatically cause GPT-specific fields to be sent to an unrelated endpoint.
 
@@ -1484,6 +1579,7 @@ model resolves as follows:
 | Unknown MiMo model after V2.6 | Family baseline only. The `<env>` relocation overlay is not applied unless the model is validated for it |
 | Unknown Kimi model after V2.6 | Family baseline only; Moonshot caching is automatic, so no overlay is registered |
 | Unknown Claude model after the current families | Family baseline only; OpenCode applies Anthropic `cache_control` itself, so CacheEngine mutates nothing |
+| Unknown Qwen model (`qwen-*` / `qwen3.*`) | Family baseline only; Alibaba caching is provider-managed implicit and no overlay is registered |
 | Unknown creator or provider | Fully neutral. No guessed cache controls, and no OpenRouter-specific header unless the actual provider identity is `openrouter` and the family is already eligible |
 
 Two rules follow from this. A model-specific prompt transformation always
@@ -1520,6 +1616,7 @@ Coverage includes:
 * Kimi classification, passive (no-mutation) resolution, and generic usage accounting
 * Claude classification, passive (no-mutation) resolution, and generic usage accounting
 * Gemini classification, passive (no-mutation) resolution, and generic usage accounting
+* Qwen classification, matcher boundaries, passive (no-mutation) route resolution, and generic usage accounting
 
 The tests are designed around the pure core logic, while OpenCode runtime behavior is validated separately through actual plugin loading.
 
