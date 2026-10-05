@@ -168,6 +168,29 @@ export function isGemini25OrLater(slug) {
   return /(?:^|\/)gemini-(?:flash|flash-lite)-latest(?![\w-])/.test(text)
 }
 
+// Alibaba / Qwen chat families (provider-managed implicit prefix caching; an
+// explicit block-level `cache_control` marker also exists, but CacheEngine does
+// not mutate any Qwen route). Boundary-anchored so a concatenated prefix like
+// `myqwen-max` does not match, while a `namespace/qwen-...` gateway id does
+// (intended). Accepts the `qwen-<family>` aliases (`qwen-max`, `qwen-plus-latest`)
+// and version-typed ids (`qwen3.8-max`, `qwen3.5-397b-a17b`, `qwen2.5-72b-instruct`).
+// The version form requires the version to be followed by `-` or end-of-token,
+// so malformed ids (`qwen3.5.1`, `qwen3.5foo`) stay neutral. Embeddings and
+// rerankers are non-generative and excluded. Verified 2026-10-05 (RF-PRV-006).
+export function isQwenModel(slug) {
+  const text = String(slug ?? "").toLowerCase()
+  if (!text) return false
+  if (/embedding|rerank/.test(text)) return false
+  const re = /(?:^|[\/.])qwen/gi
+  let m
+  while ((m = re.exec(text)) !== null) {
+    const rest = text.slice(m.index + m[0].length)
+    if (rest.startsWith("-")) return true
+    if (/^\d+(?:\.\d+)?(?:-|$)/.test(rest)) return true
+  }
+  return false
+}
+
 // Candidate ids for exact/alias lookup. Includes the raw apiID/modelID, the
 // lower-cased forms, and a single stripped transport/vendor prefix
 // (e.g. "openai/gpt-5.6-luna" -> "gpt-5.6-luna", "xiaomi/mimo-v2.6-flash" ->
@@ -305,6 +328,28 @@ export const BASELINES = {
     ],
     inventoryRef: "§7 Google Gemini",
   },
+  "alibaba.qwen-cache": {
+    id: "alibaba.qwen-cache",
+    creator: "alibaba",
+    appliesTo:
+      "Alibaba Model Studio / DashScope Qwen (provider-managed implicit prefix caching; explicit block-level cache_control also documented)",
+    automatic: true,
+    defaultMode: "implicit",
+    supportsExplicitBreakpoints: true,
+    minCacheTokens: 1024,
+    ttl: null,
+    cacheKeyOptional: false,
+    // Explicit caching reports cache_creation; implicit caching reports reads
+    // only (created at standard input price with no distinct creation field).
+    cacheWriteBilled: true,
+    usageFields: [
+      "prompt_tokens_details.cached_tokens",
+      "prompt_tokens_details.cache_creation_input_tokens",
+      "cache_read_input_tokens",
+      "cache_creation_input_tokens",
+    ],
+    inventoryRef: "§8 Alibaba Qwen",
+  },
   "neutral.none": {
     id: "neutral.none",
     creator: "unknown",
@@ -317,7 +362,7 @@ export const BASELINES = {
     cacheKeyOptional: false,
     cacheWriteBilled: false,
     usageFields: [],
-    inventoryRef: "§9 Compatibility Matrix",
+    inventoryRef: "§10 Compatibility Matrix",
   },
 }
 
@@ -364,7 +409,7 @@ export const TRANSPORTS = {
     kind: "openrouter",
     sessionAffinityHeader: "x-session-id",
     stickyRouting: true,
-    inventoryRef: "§8 OpenRouter transport",
+    inventoryRef: "§9 OpenRouter transport",
   },
 }
 
@@ -372,9 +417,9 @@ function resolveTransport(s) {
   const p = String(s.providerID ?? "").toLowerCase()
   if (p === "openrouter") return { ...TRANSPORTS.openrouter }
   if (!p) {
-    return { id: "unknown", kind: "unknown", sessionAffinityHeader: null, stickyRouting: false, inventoryRef: "§8 OpenRouter transport" }
+    return { id: "unknown", kind: "unknown", sessionAffinityHeader: null, stickyRouting: false, inventoryRef: "§9 OpenRouter transport" }
   }
-  return { id: p, kind: "direct", sessionAffinityHeader: null, stickyRouting: false, inventoryRef: "§8 OpenRouter transport" }
+  return { id: p, kind: "direct", sessionAffinityHeader: null, stickyRouting: false, inventoryRef: "§9 OpenRouter transport" }
 }
 
 // ---------------------------------------------------------------------------
@@ -652,6 +697,26 @@ export const POLICY_REGISTRY = [
     boundary: "Google Gemini 2.5 and later (implicit caching)",
     note: "Native Gemini caching is provider-managed implicit for 2.5+; no request-side cache-control field exists, OpenCode's applyCaching gate excludes Gemini, and OpenCode normalizes usageMetadata.cachedContentTokenCount into tokens.cache.read (there is no native Gemini write field). Google's explicit `cachedContents` API is a separate resource lifecycle and is intentionally not managed. OpenRouter is gateway-specific and remains passive (RF-OR-003/RF-OR-004). Verified 2026-10-05.",
     inventoryRef: "§7 Google Gemini",
+  },
+  {
+    // v0.5.x: Alibaba / Qwen. Caching is provider-managed implicit on every
+    // route; the explicit block-level `cache_control` marker exists but cannot be
+    // placed through the V1 `chat.params` hook (top-level options only), and
+    // OpenCode already applies Anthropic-style breakpoints on the Qwen Messages
+    // routes. CacheEngine is therefore PASSIVE: classification + accounting, no
+    // mutation on any route. See inventory §8 and RF-PRV-006.
+    id: "alibaba.qwen",
+    creator: "alibaba",
+    family: "qwen",
+    kind: "family",
+    predicate: isQwenModel,
+    baseline: "alibaba.qwen-cache",
+    overlays: [],
+    legacy: true,
+    runtime: rt("qwen"),
+    boundary: "Alibaba / Qwen (all transports)",
+    note: "Qwen caching is provider-managed: implicit prefix caching is automatic and non-disableable (~1024-token minimum, no fixed TTL), and explicit block-level cache_control:{type:ephemeral} exists (1024 min, 5m, <=4 markers) but is not placed by CacheEngine because the V1 chat.params hook cannot reach content blocks. OpenCode already applies Anthropic-style breakpoints on the Qwen Messages routes (OpenCode Go/Zen via @ai-sdk/anthropic), so CacheEngine must not duplicate them. Coding Plan / Token Plan cache semantics are undocumented -> passive. OpenRouter Qwen documents explicit block markers, but OpenCode injects none and the V1 hook cannot reach blocks -> passive. No Qwen affinity. Verified 2026-10-05 (RF-PRV-006).",
+    inventoryRef: "§8 Alibaba Qwen",
   },
 ]
 
