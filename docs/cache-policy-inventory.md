@@ -472,7 +472,38 @@ Whether OpenCode's `google-vertex` Gemini route is registered in the native
 
 ---
 
-## 8. OpenRouter transport facts (routing only, not model semantics)
+## 8. Alibaba Qwen (Qwen3.x / Qwen Max / Plus / Flash / Coder / VL)
+
+Source: Alibaba Model Studio *Context Cache* and QwenCloud context-cache, plus
+the Anthropic-compatible API and Coding/Token Plan pages, consulted 2026-10-05
+(see RF-PRV-006). Tags per the legend.
+
+| # | Aspect | Documented | Tag |
+| --- | --- | --- | --- |
+| 1 | Model names/aliases | `qwen-max`, `qwen-plus`, `qwen-flash`, `qwen-turbo`; versioned `qwen3-max`, `qwen3.8-max`/`-0902`, `qwen3.7-max`/`plus`/`flash`, `qwen3.6-plus`/`flash`, `qwen3.5-plus`/`flash`; `qwen3-coder`, `qwen3-coder-plus`/`-flash`/`-next`; VL `qwen3-vl-plus`/`flash`, `qwen-vl-max`/`plus`; `qwen3.8-omni-flash`; open-source `qwen3.8-*`/`qwen3.5-*`; `qwen-plus-latest`. OpenRouter `qwen/<id>`. | [D] |
+| 2 | Implicit caching | Automatic, provider-managed, **cannot be disabled**; common-prefix matching; ~1,024-token minimum; no fixed TTL; hit probability not guaranteed. | [D] |
+| 3 | Explicit caching | `cache_control:{type:"ephemeral"}` **inside a content block** of a message (system/user/assistant/tool); 1,024 min; 5m TTL refreshed on hit; ≤4 markers; tool definitions counted in the system cache and not independently markable. | [D] |
+| 4 | Session cache | Responses API only: `x-dashscope-session-cache: enable` + `previous_response_id`; not on Chat/Anthropic routes. | [D] |
+| 5 | Usage fields | OpenAI-compatible `prompt_tokens_details.cached_tokens` (read) / `.cache_creation_input_tokens` (write); DashScope `input_tokens` + `prompt_tokens_details.*`; Anthropic-compatible `cache_read_input_tokens` / `cache_creation_input_tokens`. Reads and writes are separate. | [D] |
+| 6 | Isolation/routing | Cache isolated **per account and per model**; no documented routing/stickiness key. | [D]/[U] |
+| 7 | Prefix guidance | Static content first, variable last; keep `tools` order and JSON field order stable; merge consecutive tool messages (20-block lookback). | [D] |
+
+### 8a. Route-specific Qwen caching contracts
+
+| Route | Protocol / endpoint | Cache mode | CacheEngine behavior | Evidence |
+| --- | --- | --- | --- | --- |
+| Alibaba Model Studio / DashScope (intl + CN, OpenAI-compatible) | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`, `https://dashscope.aliyuncs.com/compatible-mode/v1` | provider-managed implicit | passive (preserve prefix, observe usage) | [D] RF-PRV-006 |
+| Alibaba Anthropic-compatible | `https://{workspace}.{region}.maas.aliyuncs.com/apps/anthropic`, `https://maas.qwencloudapi.com/apps/anthropic` | implicit; explicit top-level `cache_control` also supported | passive | [D] RF-PRV-006 |
+| Coding Plan (intl + CN) | `https://coding-intl.dashscope.aliyuncs.com/v1` (OpenAI) / `.../apps/anthropic` (Anthropic) | undocumented | passive/unknown | [U] RF-PRV-006 |
+| Token Plan | `https://token-plan[-cn-beijing].maas.../compatible-mode/v1` | undocumented | passive/unknown | [U] RF-PRV-006 |
+| OpenCode Go | `https://opencode.ai/zen/go/v1/messages`, `@ai-sdk/anthropic` | OpenCode applies Anthropic-style breakpoints | passive (do not duplicate) | [D] RF-OC-008/011, RF-PRV-006 |
+| OpenCode Zen | `/zen/v1/messages` (`@ai-sdk/anthropic`) and `/zen/v1/chat/completions` (`@ai-sdk/openai-compatible`) | OpenCode applies breakpoints only on the Messages routes | passive | [D] RF-OC-011, RF-PRV-006 |
+| OpenRouter | `https://openrouter.ai/api/v1/chat/completions`; slugs `qwen/qwen3-max`, `qwen/qwen-plus`, `qwen/qwen3.6-plus`, `qwen/qwen3-coder-plus`, `qwen/qwen3-coder-flash` | explicit block `cache_control`; 5m; endpoint metadata contradicts the docs | passive (V1 hook cannot place block markers; no affinity) | [D]/[U] RF-PRV-006 |
+| Qwen OAuth (legacy) | discontinued 2026-04-15 | n/a | not implemented | [D] RF-PRV-006 |
+
+---
+
+## 9. OpenRouter transport facts (routing only, not model semantics)
 
 These are OpenRouter routing/transport facts. They are **not** evidence of any
 creator's cache semantics.
@@ -509,7 +540,7 @@ best-effort** behavior for `providerID === "openrouter"` only, which matches
 OpenRouter's documented header name. It is not a creator-documented cache
 control and does not guarantee provider continuity.
 
-### 8a. OpenCode usage normalization (verified 2026-10-02)
+### 9a. OpenCode usage normalization (verified 2026-10-02)
 
 OpenCode V1 (1.18.34) normalizes provider cache usage into the SDK shape
 `Message.info.tokens = { input, output, reasoning, cache: { read, write } }`.
@@ -536,7 +567,7 @@ provider-specific parsing**; it reads only the normalized fields.
 
 ---
 
-## 9. CacheEngine Compatibility Matrix
+## 10. CacheEngine Compatibility Matrix
 
 Legend for "recommended family inheritance": **keep** = current treatment
 matches docs; **extend** = docs support broadening scope (a future change, not
@@ -565,10 +596,12 @@ made here); **hold** = do not inherit without first-party evidence.
 | Anthropic | look-alikes / unsupported: `claude-opus-clone`, `myclaude-opus-5`, `claude-2`, `claude-instant` | Not a current Claude Messages id | neutral | hold | n/a | High | Anthropic *Messages* (model enum) | 2026-10-04 |
 | Google | Gemini current text/chat ids: `gemini-2.5-*`, `gemini-3.*`, `gemini-flash-latest`/`gemini-flash-lite-latest` (bare, `google/`-prefixed, or Vertex) | Provider-managed **implicit** caching (2.5+); no request field; usage `usageMetadata.cachedContentTokenCount` (read only, no write) | Passive Gemini policy (v0.5.3): no mutation; generic `read/(read+write)` accounting | keep | none — passive only | High (docs + OpenCode source) | Google *Context caching*; OpenCode `transform.ts`/`gemini.ts` @ v1.18.34 | 2026-10-05 |
 | Google | Gemma and non-2.5+ Gemini: `gemma-*`, `gemini-2.0-*`, `gemini-1.5-*`, `gemini-embedding-*` | Gemma is a separate family; implicit caching is 2.5+ | neutral | hold | n/a | High | Google *Models* | 2026-10-05 |
+| Alibaba | Qwen current chat ids: `qwen-max`, `qwen-plus`, `qwen-flash`, `qwen-turbo`, `qwen3-max`, `qwen3.8-max`/`flash`, `qwen3.7-*`, `qwen3.6-plus`/`flash`, `qwen3.5-plus`/`flash`, `qwen3-coder*`, `qwen3-vl-*`, `qwen3.8-omni-flash`, `qwen-plus-latest` (bare, `qwen/`-prefixed, or gateway) | Provider-managed **implicit** prefix caching (2.5+/3.x); explicit block-level `cache_control` also documented; ~1,024 min; usage `prompt_tokens_details.cached_tokens` (+ `cache_creation_input_tokens`) | Passive Qwen policy: no mutation; generic `read/(read+write)` accounting; no affinity | keep | none — passive only | High (docs + OpenCode source) | Alibaba *Context Cache*; QwenCloud; OpenCode `transform.ts` @ v1.18.34 | 2026-10-05 |
+| Alibaba | look-alikes/utilities: `qwen3-embedding-*`, `qwen3-reranker`, `myqwen-max`, `qwen3.5.1`, `qwen` (bare) | Not a Qwen chat family or malformed version | neutral | hold | n/a | High | Alibaba *Models*; local matcher tests | 2026-10-05 |
 
 ---
 
-## 10. Cases where documentation is insufficient to establish inheritance
+## 11. Cases where documentation is insufficient to establish inheritance
 
 These are explicit gaps. For each, first-party docs do **not** establish whether
 a newer model inherits an older policy. They must not be resolved by guessing.
@@ -599,11 +632,11 @@ a newer model inherits an older policy. They must not be resolved by guessing.
     MiMo-specific cache section (only generic sticky routing), and every Xiaomi
     endpoint reports `supports_implicit_caching: false` while still listing
     cache-read pricing and while MiMo docs and live requests show cached tokens.
-    The metadata's exact semantics are undefined → **UNKNOWN** (see §8).
+    The metadata's exact semantics are undefined → **UNKNOWN** (see §9).
 11. **OpenAI Chat Completions usage-field naming.** Confirmed first-party: Chat
     uses `usage.prompt_tokens_details.cached_tokens`/`cache_write_tokens`;
     Responses uses `usage.input_tokens_details.*`. OpenCode normalizes both
-    (see §8a).
+    (see §9a).
 12. **Moonshot/Kimi minimum cacheable prefix length.** Docs state only that the
     cache is stored in blocks; no numeric minimum is published → **UNKNOWN**.
 13. **Moonshot/Kimi cache-key semantics.** `prompt_cache_key` (Chat/Responses)
@@ -636,7 +669,7 @@ a newer model inherits an older policy. They must not be resolved by guessing.
     discontinued 2026-06-18; Standard/Enterprise remain but expose no documented
     cache-control semantics → passive / **UNKNOWN**.
 
-## 11. What did not change (v0.4.0 baseline, historical)
+## 12. What did not change (v0.4.0 baseline, historical)
 
 - No runtime file, test file, configuration, provider config, detection regex,
   policy logic, telemetry field, or GPT context/output limit was modified.
@@ -756,7 +789,7 @@ of this section.
   resolved. No MiMo behavior change.
 - **P-G — OpenCode normalizes cache-token fields.** OpenCode V1 (1.18.34) maps
   OpenAI Chat/Responses, Anthropic, and DeepSeek cache-usage fields into
-  `Message.info.tokens.cache.{read,write}` (see §8a). CacheEngine reads only the
+  `Message.info.tokens.cache.{read,write}` (see §9a). CacheEngine reads only the
   normalized fields, so **no provider-specific parsing is required** and no v0.5.x
   mapping change is specified. `tokens.input` is non-cached input; DeepSeek
   `cache.write` is 0.
