@@ -16,6 +16,7 @@ import { join } from "node:path"
 import {
   POLICY_CLAUDE,
   POLICY_DEEPSEEK,
+  POLICY_GEMINI,
   POLICY_GLM53,
   POLICY_GPT56,
   POLICY_KIMI,
@@ -542,6 +543,58 @@ test("v0.5.2: the Claude policy is passive (no overlays, no mutation capabilitie
   assert.equal(caps.policy, detectPolicy(M("anthropic", "claude-sonnet-4-5")))
 })
 
+// --- v0.5.3 Google Gemini (passive) ---------------------------------------
+// Gemini caches implicitly for 2.5+; there is no request-side cache-control
+// field and OpenCode's applyCaching gate excludes Gemini, so CacheEngine
+// classifies and accounts but does not mutate.
+test("v0.5.3: current Google Gemini models match the Gemini policy", () => {
+  const ids = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite", "gemini-3.6-flash", "gemini-3.1-pro-preview", "gemini-3.5-flash-lite"]
+  for (const id of ids) {
+    assert.equal(detectPolicy(M("google", id)), POLICY_GEMINI, id)
+    assert.equal(detectPolicy(M("google-vertex", id)), POLICY_GEMINI, "google-vertex/" + id)
+    assert.equal(detectPolicy(M("openrouter", "google/" + id)), POLICY_GEMINI, "google/" + id)
+  }
+  // versioned snapshots / region suffixes / moving aliases
+  assert.equal(detectPolicy(M("google", "gemini-2.5-pro-002")), POLICY_GEMINI)
+  assert.equal(detectPolicy(M("google", "gemini-2.5-flash@eu")), POLICY_GEMINI)
+  assert.equal(detectPolicy(M("google", "gemini-flash-latest")), POLICY_GEMINI)
+  assert.equal(detectPolicy(M("google", "gemini-flash-lite-latest")), POLICY_GEMINI)
+})
+
+test("v0.5.3: Gemma and non-Gemini look-alikes stay neutral", () => {
+  // Gemma is a separate family.
+  assert.equal(detectPolicy(M("google", "gemma-4-31b-it")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("google-vertex", "gemma-3-27b-it")), POLICY_NEUTRAL)
+  // pre-2.5 generations and non-text variants
+  assert.equal(detectPolicy(M("google", "gemini-2.0-flash")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("google", "gemini-1.5-pro")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("google", "gemini-embedding-2")), POLICY_NEUTRAL)
+  // malformed / look-alikes
+  assert.equal(detectPolicy(M("acme", "mygemini-2.5")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("acme", "gemini-2.50")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("acme", "gemini")), POLICY_NEUTRAL)
+  // other providers unchanged
+  assert.equal(detectPolicy(M("openai", "gpt-5.6")), POLICY_GPT56)
+  assert.equal(detectPolicy(M("anthropic", "claude-sonnet-4-5")), POLICY_CLAUDE)
+})
+
+test("v0.5.3: the Gemini policy is passive (no overlays, no mutation capabilities)", () => {
+  const r = resolvePolicy(M("google", "gemini-2.5-pro"))
+  assert.equal(r.creator, "google")
+  assert.equal(r.family, "gemini")
+  assert.equal(r.baseline.id, "google.gemini-implicit")
+  assert.deepEqual(r.overlays, [])
+  const caps = resolveRuntimePolicy(M("google", "gemini-2.5-pro"))
+  assert.equal(caps.policy, "gemini")
+  assert.equal(caps.isNeutral, false)
+  assert.equal(caps.gptCacheMetadata, false)
+  assert.equal(caps.envRelocation, null)
+  assert.equal(caps.thinkingIntegrity, false)
+  assert.equal(caps.cacheRatio, null) // generic read/(read+write)
+  assert.equal(caps.openRouterAffinity, false)
+  assert.equal(caps.policy, detectPolicy(M("google", "gemini-2.5-pro")))
+})
+
 test("unrelated models match neutral policy", () => {
   assert.equal(detectPolicy(M("mistral", "mistral-large-latest")), POLICY_NEUTRAL)
   assert.equal(detectPolicy(M("openrouter", "x-ai/grok-4")), POLICY_NEUTRAL)
@@ -808,8 +861,10 @@ test("empty current sequence -> no anomalies", () => {
 // Config: provider policies
 // ===========================================================================
 
-test("config defaults enable all six policies", () => {
+test("config defaults enable all seven policies", () => {
   const cfg = parseConfig({}, {})
+  assert.deepEqual(cfg.policies.claude, { enabled: true })
+  assert.deepEqual(cfg.policies.gemini, { enabled: true })
   assert.deepEqual(cfg.policies.deepseek, { enabled: true })
   assert.deepEqual(cfg.policies.glm53, { enabled: true, stabilizeSystem: true, preserveThinkingIntegrity: true })
   assert.deepEqual(cfg.policies.mimo26, {
@@ -1785,6 +1840,7 @@ test("detectPolicy remains compatible with the legacy family resolution", () => 
     deepseek: POLICY_DEEPSEEK,
     kimi: POLICY_KIMI,
     claude: POLICY_CLAUDE,
+    gemini: POLICY_GEMINI,
   }
   const samples = [
     M("openrouter", "openai/gpt-5.6-luna"),
@@ -1800,6 +1856,7 @@ test("detectPolicy remains compatible with the legacy family resolution", () => 
     M("moonshot", "kimi-k3"),
     M("openrouter", "x-ai/grok-4"),
     M("anthropic", "claude-sonnet-4-5"),
+    M("google", "gemini-2.5-pro"),
     {},
     null,
     undefined,
@@ -1950,6 +2007,10 @@ async function runPolicyMigrationProbe() {
       { name: "claude-sonnet-direct", model: { providerID: "anthropic", id: "claude-sonnet-4-5", api: { id: "claude-sonnet-4-5", npm: "@ai-sdk/anthropic" } }, expect: { policy: "claude", env: false, gpt: false, header: false } },
       { name: "claude-opus-openrouter", model: { providerID: "openrouter", id: "anthropic/claude-opus-4-8", api: { id: "anthropic/claude-opus-4-8" } }, expect: { policy: "claude", env: false, gpt: false, header: false } },
       { name: "claude-lookalike", model: { providerID: "acme", id: "acme/claude-opus-clone", api: { id: "acme/claude-opus-clone" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
+      { name: "gemini-2.5-pro", model: { providerID: "google", id: "gemini-2.5-pro", api: { id: "gemini-2.5-pro", npm: "@ai-sdk/google" } }, expect: { policy: "gemini", env: false, gpt: false, header: false } },
+      { name: "gemini-vertex", model: { providerID: "google-vertex", id: "gemini-2.5-flash", api: { id: "gemini-2.5-flash", npm: "@ai-sdk/google-vertex" } }, expect: { policy: "gemini", env: false, gpt: false, header: false } },
+      { name: "gemini-openrouter", model: { providerID: "openrouter", id: "google/gemini-2.5-pro", api: { id: "google/gemini-2.5-pro", npm: "@openrouter/ai-sdk-provider" } }, expect: { policy: "gemini", env: false, gpt: false, header: false } },
+      { name: "gemma-negative", model: { providerID: "google", id: "gemma-4-31b-it", api: { id: "gemma-4-31b-it", npm: "@ai-sdk/google" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
     ]
     const results = []
     for (const c of CASES) {
@@ -2828,6 +2889,12 @@ async function runUsageCollectionProbe() {
     await setModel(SID_CLAUDE, "anthropic", "claude-sonnet-4-5")
     await idle(SID_CLAUDE)
 
+    // v0.5.3: Gemini reports cache reads only (no write field); generic path.
+    const SID_GEMINI = "ses_usage_gemini"
+    responses[SID_GEMINI] = { data: [mkAst("g1", 3000, 0, 5000)] }
+    await setModel(SID_GEMINI, "google", "gemini-2.5-pro")
+    await idle(SID_GEMINI)
+
     const lines = readFileSync(process.env.CACHE_ENGINE_METRICS_FILE, "utf8").trim().split("\\n")
     const records = lines.map((l) => JSON.parse(l))
     process.stdout.write(JSON.stringify({ calls, records }))
@@ -2846,7 +2913,7 @@ const usageResults = async () => (usageProbe ??= runUsageCollectionProbe())
 test("v0.4.6 K2: session.messages is called with the V1 SDK shape and a bound receiver", async () => {
   const { calls } = await usageResults()
   assert.ok(calls.length >= 5, "collector should call session.messages per idle")
-  const sids = ["ses_usage_basic", "ses_usage_multi", "ses_usage_empty", "ses_usage_undef", "ses_usage_throw", "ses_usage_kimi", "ses_usage_claude"]
+  const sids = ["ses_usage_basic", "ses_usage_multi", "ses_usage_empty", "ses_usage_undef", "ses_usage_throw", "ses_usage_kimi", "ses_usage_claude", "ses_usage_gemini"]
   for (const c of calls) {
     // exactly { path: { id } }, nothing else
     assert.deepEqual(Object.keys(c.opts), ["path"])
@@ -2928,6 +2995,23 @@ test("v0.5.2: Claude uses the generic cache accounting path (read/(read+write))"
   assert.equal(u.glmHitRate, undefined)
   assert.equal(u.cacheHitRate, undefined)
   assert.equal(u.stickySessionId, undefined)
+})
+
+test("v0.5.3: Gemini uses the generic cache accounting path (read-only, no fabricated write)", async () => {
+  const { records } = await usageResults()
+  const usage = records.filter((r) => r.kind === "usage" && r.sid === "ses_usage_gemini")
+  assert.equal(usage.length, 1)
+  const u = usage[0]
+  assert.equal(u.read, 3000)
+  assert.equal(u.write, 0) // Gemini exposes no cache-write field; not fabricated
+  assert.equal(u.input, 5000)
+  assert.equal(u.messages, 1)
+  assert.equal(u.sampleHitRate, 100) // round(100*3000/3000); write is 0
+  assert.equal(u.provider, "google")
+  assert.equal(u.model, "gemini-2.5-pro")
+  assert.equal(u.policy, "gemini")
+  assert.equal(u.promptTokens, undefined)
+  assert.equal(u.cacheHitRate, undefined)
 })
 
 test("v0.4.6 K1: empty/undefined/throwing messages fail safely without breaking the plugin", async () => {
@@ -4016,6 +4100,10 @@ async function runClaudeRouteProbe(configPolicies) {
       vertex: { providerID: "google-vertex-anthropic", id: "claude-sonnet-4-5@20250929", api: { id: "claude-sonnet-4-5@20250929", npm: "@ai-sdk/google-vertex/anthropic" } },
       openaiCompat: { providerID: "some-gateway", id: "claude-sonnet-4-5", api: { id: "claude-sonnet-4-5", npm: "@ai-sdk/openai-compatible" } },
       lookalike: { providerID: "acme", id: "acme/claude-opus-clone", api: { id: "acme/claude-opus-clone" } },
+      geminiGoogle: { providerID: "google", id: "gemini-2.5-pro", api: { id: "gemini-2.5-pro", npm: "@ai-sdk/google" } },
+      geminiVertex: { providerID: "google-vertex", id: "gemini-2.5-flash", api: { id: "gemini-2.5-flash", npm: "@ai-sdk/google-vertex" } },
+      geminiOpenrouter: { providerID: "openrouter", id: "google/gemini-2.5-pro", api: { id: "google/gemini-2.5-pro", npm: "@openrouter/ai-sdk-provider" } },
+      gemma: { providerID: "google", id: "gemma-4-31b-it", api: { id: "gemma-4-31b-it", npm: "@ai-sdk/google" } },
     };
     const preOpts = { promptCacheKey: "user-key", cache_control: { type: "ephemeral" }, temperature: 0.3 };
     const preHdrs = { "x-session-id": "user-sess", "x-custom": "keep" };
@@ -4068,5 +4156,15 @@ test("v0.5.2: disabling Claude leaves every route request unchanged", async () =
     assert.deepEqual(out[name].options, out.preOpts, `${name}: options preserved`)
     assert.equal(out[name].systemChanged, false, `${name}: no relocation`)
     assert.deepEqual(out[name].headers, out.preHdrs, `${name}: headers preserved`)
+  }
+})
+
+test("v0.5.3: CacheEngine is passive for Gemini on every access route", async () => {
+  const out = await claudeRouteResults()
+  for (const name of ["geminiGoogle", "geminiVertex", "geminiOpenrouter", "gemma"]) {
+    assert.deepEqual(out[name].options, out.preOpts, `${name}: options must be preserved`)
+    assert.equal(out[name].systemChanged, false, `${name}: system must be unchanged`)
+    assert.deepEqual(out[name].headers, out.preHdrs, `${name}: headers must be preserved`)
+    assert.deepEqual(out[name].addedCacheKeys, [], `${name}: must add no cache-control field`)
   }
 })
