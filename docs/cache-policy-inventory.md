@@ -384,7 +384,64 @@ CacheEngine mutation.
 
 ---
 
-## 7. OpenRouter transport facts (routing only, not model semantics)
+## 7. Google Gemini
+
+Gemini's prompt caching is **provider-managed implicit** for Gemini 2.5 and
+later: there is no request-side cache-control field. Google's explicit
+`cachedContents` API is a separate resource mechanism. Verification date
+**2026-10-05**.
+
+| # | Question | Finding | Evidence |
+| --- | --- | --- | --- |
+| 1 | Model names/aliases | Current text/chat ids: `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.5-flash-lite`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.6-flash`, `gemini-3.1-pro-preview`, plus moving aliases `gemini-flash-latest`/`gemini-flash-lite-latest`/`gemini-pro-latest`. Gemini 2.0 models are shut down. **Gemma is a separate family** (`gemma-*`). | [D] |
+| 2 | Family identification | Literal `model` id; generation from the version token (`gemini-<major>[.<minor>]`). Provider ids: `google` (`@ai-sdk/google`), `google-vertex` (`@ai-sdk/google-vertex`). | [D] |
+| 3 | Scope | Implicit caching is family-wide for 2.5+ but minimum sizes are per-model; explicit caching is a separate resource. | [D] |
+| 4 | Automatic vs controls | Implicit: enabled by default, **no request field**. Explicit: `POST /v1beta/cachedContents` creating a `CachedContent` resource, then `generateContent` with top-level `cachedContent: <name>` — a resource lifecycle, not an inline marker. | [D] |
+| 5 | Cacheable-prefix rules | Cached content is treated as a prefix; recommend large/common content first and similar prefixes close together. | [D] |
+| 6 | Minimum cacheable length | Per-model: AI Studio 2.5 Flash/Pro 2,048, 3.x 4,096; Vertex lists 2,048 (2.x), 4,096 (3.x), and a 6,144 tier for some previews. Treat exact numbers as model/platform-specific. | [D]/[U] |
+| 7 | Implicit vs explicit | Implicit (default) and explicit (`CachedContent` resource) are separate mechanisms. | [D] |
+| 8 | Cache key behavior | No user cache key for implicit caching. | [D] |
+| 9 | Retention/TTL | Implicit TTL is provider-managed (OpenRouter reports ~3–5 min; write TTL 5 min); explicit `CachedContent` default TTL 1 hour (Vertex 60 min, min 1 min). | [D]/[U] |
+| 10 | Usage fields | `usageMetadata.cachedContentTokenCount` (read). **No cache-write/creation token field** for implicit caching. OpenRouter surfaces `prompt_tokens_details.cached_tokens`/`cache_write_tokens`. | [D] |
+| 11 | Generation differences | Implicit applies to 2.5+; 2.0 and earlier do not (and 2.0 is shut down). Gemini 3.x has higher minimums. | [D] |
+| 12 | Prefix-stability guidance | Stable/common content first; similar prefixes close together; cached content is a prefix. | [D] |
+| 13 | Affinity/routing | No provider affinity parameter. OpenRouter sticky routing is transport, best-effort. | [D] |
+| 14 | Subscription / Code Assist | Gemini Code Assist for **individuals / Google AI Pro / Ultra was discontinued 2026-06-18** (IDE + CLI); Standard/Enterprise remain (Cloud-managed). Subscription routes expose no documented cache-control semantics → passive/unknown. | [D] |
+
+**OpenCode behavior (decisive).** OpenCode 1.18.34's `applyCaching` gate does
+**not** include Gemini/Google — Gemini is a **no-op** for OpenCode's cache
+markers. The native Gemini protocol body has no cache-control field, and the
+usage mapper normalizes `cachedContentTokenCount` → `tokens.cache.read` with
+**no write** (upstream `@ai-sdk/google` `convertGoogleUsage` sets `cacheWrite:
+undefined`). Google's explicit `CachedContent` API is intentionally not wired up
+by OpenCode.
+
+**CacheEngine treatment: passive (no mutation).** Because caching is
+provider-managed implicit and OpenCode adds no Gemini cache marker, CacheEngine
+classifies the 2.5+ family for telemetry and relies on OpenCode's usage
+normalization. It injects no cache-control field, no cache key, no TTL, and
+creates no `cachedContents` resources on any route (direct Google, Vertex,
+OpenRouter, Zen).
+
+Sources (accessed 2026-10-05): Google *Context caching*
+(https://ai.google.dev/gemini-api/docs/caching) and *Models*
+(https://ai.google.dev/gemini-api/docs/models); Vertex context-cache docs
+(https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/context-cache/context-cache-overview);
+Google *Gemini Code Assist deprecations*
+(https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals);
+OpenCode `provider/transform.ts`, `session/session.ts`, and
+`packages/llm/src/protocols/gemini.ts` @ v1.18.34; OpenRouter *Prompt Caching*
+(https://openrouter.ai/docs/features/prompt-caching).
+
+**Unresolved.** AI Studio vs Vertex implicit minimum-token tables disagree (2.5 =
+2,048 on both; Vertex adds a 6,144 tier). OpenRouter's Gemini page is internally
+contradictory about whether explicit `cache_control` breakpoints are required.
+Whether OpenCode's `google-vertex` Gemini route is registered in the native
+`packages/llm` runtime is not separately confirmed.
+
+---
+
+## 8. OpenRouter transport facts (routing only, not model semantics)
 
 These are OpenRouter routing/transport facts. They are **not** evidence of any
 creator's cache semantics.
@@ -421,7 +478,7 @@ best-effort** behavior for `providerID === "openrouter"` only, which matches
 OpenRouter's documented header name. It is not a creator-documented cache
 control and does not guarantee provider continuity.
 
-### 7a. OpenCode usage normalization (verified 2026-10-02)
+### 8a. OpenCode usage normalization (verified 2026-10-02)
 
 OpenCode V1 (1.18.34) normalizes provider cache usage into the SDK shape
 `Message.info.tokens = { input, output, reasoning, cache: { read, write } }`.
@@ -448,7 +505,7 @@ provider-specific parsing**; it reads only the normalized fields.
 
 ---
 
-## 8. CacheEngine Compatibility Matrix
+## 9. CacheEngine Compatibility Matrix
 
 Legend for "recommended family inheritance": **keep** = current treatment
 matches docs; **extend** = docs support broadening scope (a future change, not
@@ -475,10 +532,12 @@ made here); **hold** = do not inherit without first-party evidence.
 | Moonshot | retired/renamed: `kimi-k2*`, `kimi-k2.5`, `moonshot-v1-*`, `kimi-thinking-preview`, `kimi-latest`, `kimi-for-coding`, `k3` | Deprecated or not first-party cache-documented; no Kimi policy claimed | neutral | hold | n/a | High | Moonshot *Models* (deprecations) | 2026-10-04 |
 | Anthropic | Claude current ids: `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-4-5`, `claude-sonnet-4-5`, `claude-opus-4-8`/`4.7`/`4.6`, `claude-fable-5*`, `claude-mythos-5*`, older `claude-3-*` (bare or gateway-prefixed) | Messages API: explicit `cache_control` breakpoints (max 4; 5m default / 1h TTL); usage `cache_read_input_tokens`/`cache_creation_input_tokens`; per-model minimum prefix | Passive Claude policy (v0.5.2): no mutation — OpenCode already applies the breakpoints; generic `read/(read+write)` accounting | keep | none — passive only (OpenCode owns the breakpoints) | High (docs + OpenCode source) | Anthropic *Prompt caching*; OpenCode `provider/transform.ts` @ v1.18.34 | 2026-10-04 |
 | Anthropic | look-alikes / unsupported: `claude-opus-clone`, `myclaude-opus-5`, `claude-2`, `claude-instant` | Not a current Claude Messages id | neutral | hold | n/a | High | Anthropic *Messages* (model enum) | 2026-10-04 |
+| Google | Gemini current text/chat ids: `gemini-2.5-*`, `gemini-3.*`, `gemini-flash-latest`/`gemini-flash-lite-latest` (bare, `google/`-prefixed, or Vertex) | Provider-managed **implicit** caching (2.5+); no request field; usage `usageMetadata.cachedContentTokenCount` (read only, no write) | Passive Gemini policy (v0.5.3): no mutation; generic `read/(read+write)` accounting | keep | none — passive only | High (docs + OpenCode source) | Google *Context caching*; OpenCode `transform.ts`/`gemini.ts` @ v1.18.34 | 2026-10-05 |
+| Google | Gemma and non-2.5+ Gemini: `gemma-*`, `gemini-2.0-*`, `gemini-1.5-*`, `gemini-embedding-*` | Gemma is a separate family; implicit caching is 2.5+ | neutral | hold | n/a | High | Google *Models* | 2026-10-05 |
 
 ---
 
-## 9. Cases where documentation is insufficient to establish inheritance
+## 10. Cases where documentation is insufficient to establish inheritance
 
 These are explicit gaps. For each, first-party docs do **not** establish whether
 a newer model inherits an older policy. They must not be resolved by guessing.
@@ -509,11 +568,11 @@ a newer model inherits an older policy. They must not be resolved by guessing.
     MiMo-specific cache section (only generic sticky routing), and every Xiaomi
     endpoint reports `supports_implicit_caching: false` while still listing
     cache-read pricing and while MiMo docs and live requests show cached tokens.
-    The metadata's exact semantics are undefined → **UNKNOWN** (see §7).
+    The metadata's exact semantics are undefined → **UNKNOWN** (see §8).
 11. **OpenAI Chat Completions usage-field naming.** Confirmed first-party: Chat
     uses `usage.prompt_tokens_details.cached_tokens`/`cache_write_tokens`;
     Responses uses `usage.input_tokens_details.*`. OpenCode normalizes both
-    (see §7a).
+    (see §8a).
 12. **Moonshot/Kimi minimum cacheable prefix length.** Docs state only that the
     cache is stored in blocks; no numeric minimum is published → **UNKNOWN**.
 13. **Moonshot/Kimi cache-key semantics.** `prompt_cache_key` (Chat/Responses)
@@ -536,8 +595,17 @@ a newer model inherits an older policy. They must not be resolved by guessing.
     OpenCode 1.18.34 chooses explicit per-block breakpoints. CacheEngine does not
     override this, so the choice of automatic vs explicit for a given route is
     **OpenCode-owned**, not a CacheEngine policy.
+18. **Gemini implicit minimum cacheable length.** Documented per model, but the
+    AI Studio and Vertex tables disagree and the numbers are model/platform
+    specific → treat as **UNKNOWN** precisely; CacheEngine enforces nothing.
+19. **Gemini implicit TTL.** Provider-managed and not user-controllable; no
+    first-party numeric TTL for the direct API (OpenRouter reports ~3–5 min) →
+    **UNKNOWN**.
+20. **Gemini subscription / Code Assist cache semantics.** Consumer access was
+    discontinued 2026-06-18; Standard/Enterprise remain but expose no documented
+    cache-control semantics → passive / **UNKNOWN**.
 
-## 10. What did not change (v0.4.0 baseline, historical)
+## 11. What did not change (v0.4.0 baseline, historical)
 
 - No runtime file, test file, configuration, provider config, detection regex,
   policy logic, telemetry field, or GPT context/output limit was modified.
@@ -657,7 +725,7 @@ of this section.
   resolved. No MiMo behavior change.
 - **P-G — OpenCode normalizes cache-token fields.** OpenCode V1 (1.18.34) maps
   OpenAI Chat/Responses, Anthropic, and DeepSeek cache-usage fields into
-  `Message.info.tokens.cache.{read,write}` (see §7a). CacheEngine reads only the
+  `Message.info.tokens.cache.{read,write}` (see §8a). CacheEngine reads only the
   normalized fields, so **no provider-specific parsing is required** and no v0.5.x
   mapping change is specified. `tokens.input` is non-cached input; DeepSeek
   `cache.write` is 0.
