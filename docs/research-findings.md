@@ -461,7 +461,8 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   warm cache. The endpoints API reports `supports_implicit_caching: false` for
   every `google/gemini-2.5-*` endpoint while still listing `input_cache_read`
   pricing, and `google/gemini-3-pro-preview` currently exposes no endpoints —
-  this **contradiction is unresolved** without a live OpenRouter Gemini probe.
+  this **contradiction remains unresolved** after a live probe of one endpoint
+  (RF-OR-004).
   The Gemini prompt-cache **scope** is not documented ([U]); only the
   response-cache scope (API key) is documented. Reads refresh TTL: [U].
 - Distinct mechanism (do not conflate): OpenRouter **response caching** uses the
@@ -486,7 +487,83 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   changes the Gemini cache field, or flips `supports_implicit_caching`.
 - Superseded by: null
 - Notes: Do not implement a Gemini OpenRouter overlay until the exact block-level
-  serialization through the installed transport is verified end to end.
+  serialization through the installed transport is verified end to end. A live
+  probe of one endpoint was recorded in RF-OR-004 (2026-10-05) with inconclusive
+  results; the documentation contradiction above is preserved.
+
+### RF-OR-004 — Live OpenRouter × Gemini probe (`google/gemini-2.5-flash-lite:flex`): unmarked repeats produced no cache reads; block `cache_control` was inconsistent; session-from-start never cached
+
+- Status: current
+- Verified: 2026-10-05
+- Area: openrouter-routing
+- Scope: OpenRouter `google/gemini-2.5-flash-lite:flex` only (direct
+  `/api/v1/chat/completions`, not through OpenCode).
+- Question: does repeated use of the same large prefix produce prompt-cache reads
+  (a) without `cache_control`, (b) with the documented block-level
+  `cache_control`, and (c) with a stable `session_id`?
+- Experimental design: a locally-generated, deterministic ~10.6k-token stable
+  prefix (unique per case, byte-identical within a case) followed by a small
+  differing suffix (WARM/ALPHA/BETA/GAMMA). Marker placed **inside** the `system`
+  content block as `{ "type":"text", "text":"<prefix>", "cache_control": {
+  "type":"ephemeral" } }` — never top-level. No `X-OpenRouter-Cache` /
+  `cache_enabled`. Cases ran sequentially with a warm-up + 3 requests each, plus
+  isolation and reprobe runs; ~37 requests total, all HTTP 200.
+- Cases tested: A no marker / no session; B no marker / stable body `session_id`;
+  C block marker / no session; D block marker / stable body `session_id`; E
+  isolation (marker, no-session first then session on the same prefix); F reprobe
+  (flex vs base model, marker vs no marker, marker + session).
+- Wire representation: the marker was on a message content block (harness-
+  constructed body), verified in the sanitized request shape; not a top-level
+  field and not only `providerOptions`.
+- Observed usage: `usage.prompt_tokens_details.cached_tokens` and
+  `cache_write_tokens` are **present** (value `0` when there is no cache). No
+  `x-openrouter-provider` / `x-openrouter-model` / `x-openrouter-cache` response
+  headers are exposed.
+- Provider routing observations: the response body `provider` field always read
+  `"Google"`; the finer upstream endpoint (Google vs Google AI Studio) is **not
+  observable**. Cache behavior varied between otherwise-identical runs with no
+  exposed routing change → endpoint selection is opaque.
+- Response-cache distinction: suffixes differed per request, so no two whole
+  requests were identical, and `X-OpenRouter-Cache` was not set. Hits were
+  prompt-cache reads (`cached_tokens`), not the OpenRouter response cache.
+- Session-ID observations: (i) no marker → 0 cached tokens with or without a
+  session (8/8). (ii) block marker + `session_id` from the **first** request → 0
+  cached tokens in every run (Case D 4/4; reprobe body `session_id` 3/3; reprobe
+  `x-session-id` header 2/2; reprobe marker+session 2/2 → 11/11). (iii) block
+  marker **without** a session → variable: Case C wrote and read (4/4);
+  isolation probe wrote and read (5/5); reprobe G1 wrote on the 2nd request;
+  probe3 no-session marker missed (2/2). (iv) a session added **after** the cache
+  exists did not prevent reads (isolation steps 3/4/6 all read 10,575). So
+  `session_id` did not stabilize reuse; starting a session coincided with no
+  caching, but the mechanism is not observable.
+- Result: **Outcome D — inconclusive** for the marker question, with one
+  consistent negative signal for unmarked requests.
+- Conclusion: for the tested `:flex` route, unmarked repeated prefixes produced
+  no cache reads in any observation; the documented block-level `cache_control`
+  was not reliably honored (mixed across runs); a stable `session_id` from the
+  first request coincided with no caching. Provider endpoint routing is opaque.
+- Implications for CacheEngine: **remain passive.** The effect is provider- and
+  endpoint-dependent, and the V1 `chat.params` hook cannot place the documented
+  block-level `cache_control` anyway (RF-OC-010, RF-SDK-001). Do not add a Gemini
+  overlay or Gemini `session_id`/`x-session-id` affinity.
+- Evidence: [O]
+- Sources: live OpenRouter calls to
+  `https://openrouter.ai/api/v1/chat/completions` with model
+  `google/gemini-2.5-flash-lite:flex` and a redacted environment/OpenCode-auth
+  credential, 2026-10-05; OpenRouter prompt-caching documentation (RF-OR-003).
+- Justifies: keeping Gemini passive on OpenRouter; no `cache_control` overlay and
+  no Gemini affinity.
+- Version context: OpenCode 1.18.34; OpenRouter live API 2026-10-05; probed
+  directly over HTTP (no OpenCode serialization path involved).
+- Unknowns: which upstream endpoint served each request; why a session from the
+  start coincided with no cache writes (mechanism unresolved); whether behavior
+  generalizes to other Gemini models/routes or the non-flex endpoint; whether
+  the mixed block-marker results are time/route-dependent.
+- Re-verify when: OpenRouter resolves the Gemini cache contract, flips
+  `supports_implicit_caching`, or a non-flex / other-model Gemini route is probed.
+- Superseded by: null
+- Notes: Distinguish live-observed behavior from documentation; the RF-OR-003
+  contradiction is preserved. Scoped to one endpoint only — do not generalize.
 
 ## RF-SDK — AI-SDK and provider-package serialization
 
