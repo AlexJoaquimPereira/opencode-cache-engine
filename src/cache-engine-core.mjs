@@ -40,6 +40,7 @@ export const POLICY_GLM53 = "glm53"
 export const POLICY_MIMO26 = "mimo26"
 export const POLICY_KIMI = "kimi"
 export const POLICY_CLAUDE = "claude"
+export const POLICY_GEMINI = "gemini"
 export const POLICY_NEUTRAL = "neutral"
 
 export const GPT56_DEFAULT_TTL = "30m"
@@ -86,6 +87,10 @@ function defaultPolicies() {
     // Claude is passive: OpenCode already applies Anthropic cache_control
     // breakpoints, so CacheEngine classifies and accounts but does not mutate.
     claude: { enabled: true },
+    // Gemini is passive: Google's implicit caching is provider-managed and
+    // OpenCode's applyCaching gate excludes Gemini, so CacheEngine classifies
+    // and accounts but does not mutate.
+    gemini: { enabled: true },
   }
 }
 
@@ -136,7 +141,7 @@ export function parseConfig(raw, env) {
     if (typeof raw.logPrefixChanges === "boolean") cfg.logPrefixChanges = raw.logPrefixChanges
     if (raw.policies && typeof raw.policies === "object") {
       const d = defaultPolicies()
-      for (const fam of ["deepseek", "gpt56", "glm53", "mimo26", "kimi", "claude"]) {
+      for (const fam of ["deepseek", "gpt56", "glm53", "mimo26", "kimi", "claude", "gemini"]) {
         if (raw.policies[fam]) cfg.policies[fam] = parsePolicy(raw.policies[fam], d[fam])
       }
     }
@@ -231,6 +236,7 @@ const LEGACY_FAMILY_TO_POLICY = {
   deepseek: POLICY_DEEPSEEK,
   kimi: POLICY_KIMI,
   claude: POLICY_CLAUDE,
+  gemini: POLICY_GEMINI,
 }
 
 // Pure classifier. Returns one of the POLICY_* keys. `model` may be a full
