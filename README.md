@@ -25,7 +25,7 @@ opencode plugin opencode-cache-engine
 
 `CacheEngine` is an OpenCode plugin designed for long-running agent sessions where prompt-cache efficiency affects both latency and cost. It keeps the harness conservative for providers whose cache behavior is already automatic, while applying provider-specific optimizations where the provider exposes useful cache controls or where prompt structure can be safely improved.
 
-The plugin currently has eight cache-policy families:
+The plugin currently has nine cache-policy families:
 
 * **DeepSeek** — passive cache observability; request structure is preserved.
 * **GPT-5.6 and later** — documented cache-key/options metadata, with prompt text
@@ -47,6 +47,10 @@ The plugin currently has eight cache-policy families:
   places no explicit block-level `cache_control` marker and adds no affinity,
   because the V1 hook cannot reach message content blocks and OpenCode already
   applies breakpoints on the Qwen Messages routes.
+* **xAI Grok** — passive classification and accounting. Grok caching is
+  automatic on all Grok language models, and direct xAI already receives a stable
+  conversation affinity key from OpenCode itself, so CacheEngine injects no
+  header or key and rewrites nothing.
 
 Family classification is not hard-coded in the runtime. A pure policy registry
 and resolver in `src/cache-policy-core.mjs` returns a structured result
@@ -733,6 +737,69 @@ the explicit marker cannot be placed through the V1 hook, so there is no
 implementation decision a live probe would change.
 
 
+## xAI Grok (Grok-4.x language models)
+
+### Policy: passive (provider-managed automatic caching)
+
+xAI's Prompt Caching is **automatic** on all `grok` language models: consecutive
+requests that share the same starting messages reuse the cached prefix, entries
+are server-local and best-effort (evictable under load/restart), and xAI reports
+hits as cached reads only. There is **no** explicit cache-breakpoint mechanism,
+**no** documented TTL, and **no** documented minimum. CacheEngine leaves the Grok
+request **unchanged** on every route — no cache key, no affinity header, no TTL,
+no breakpoints, and no prompt rewriting.
+
+**Affinity is route-specific and, for direct xAI, harness-owned.** xAI documents
+Chat Completions `x-grok-conv-id` and Responses `prompt_cache_key` as optional
+"best-effort sticky routing" hints. In OpenCode 1.18.34, direct xAI
+(`providerID: xai`, `@ai-sdk/xai`) is driven through the **Responses API**, and
+OpenCode itself sets `providerOptions.xai.promptCacheKey = sessionID`, which
+`@ai-sdk/xai` serializes to the wire `prompt_cache_key`. CacheEngine therefore
+**preserves** that stable conversation affinity rather than overwriting it. The
+Chat Completions header path is not reachable in this runtime, so it is not
+implemented.
+
+**Recognized ids** (bare, `xai/`- or `x-ai/`-prefixed, or gateway): version-typed
+`grok-<major>[.<minor>]` (`grok-4`, `grok-4.7`, `grok-4.3`,
+`grok-4.20-0309-reasoning`, `grok-4.7-latest`, …) and the generative aliases
+`grok-build-0.1` and `grok-code`.
+
+**Not recognized (neutral):** non-language products (`grok-imagine-image`,
+`grok-imagine-video`, `grok-voice-*`, audio/TTS), embeddings, malformed ids
+(`grok-4..7`, `grok-4foo`, bare `grok`), and look-alikes such as `mygrok-4` /
+`grokster-4`.
+
+### Routes
+
+All Grok routes are passive for CacheEngine:
+
+| Route | Grok caching | Notes |
+| ----- | ------------ | ----- |
+| Direct xAI (API key or SuperGrok / X Premium) | automatic; affinity `prompt_cache_key` on Responses | OpenCode supplies the key; CacheEngine preserves it. Auth method is not a policy distinction |
+| Direct xAI Chat Completions | automatic; affinity `x-grok-conv-id` | xAI labels this endpoint legacy/deprecated; not reachable in OpenCode 1.18.34 (xai always uses Responses) |
+| OpenCode Go | Go routing uses `x-opencode-session` | not direct xAI; CacheEngine sends no xAI header/key and does not duplicate the Go session header |
+| OpenCode Zen | OpenCode-owned | not direct xAI |
+| OpenRouter → Grok | automated caching (writes no-cost, reads 0.25× input); OpenRouter sticky routing | no xAI-specific field and no `x-session-id`; no Grok affinity policy |
+| Generic OpenAI-compatible gateway | unknown | passive (fail closed): provider identity not verified as direct xAI |
+
+### Usage accounting
+
+xAI reports cached reads only (`prompt_tokens_details.cached_tokens` on Chat
+Completions, `input_tokens_details.cached_tokens` on Responses); OpenCode
+normalizes these into `tokens.cache.read`. There is no cache-write field, so the
+generic `read/(read+write)` ratio applies with `write = 0`, and CacheEngine never
+fabricates a write.
+
+### Evidence and status
+
+Verified against first-party xAI prompt-caching documentation (2026-10-06) and
+the OpenCode 1.18.34 runtime (see
+[docs/cache-policy-inventory.md](docs/cache-policy-inventory.md) §8b and
+`docs/research-findings.md` RF-PRV-007, RF-OC-013). No live xAI probe was
+performed: the direct route is harness-managed and CacheEngine performs no
+mutation, so a live probe would not change the implementation.
+
+
 # Provider comparison
 
 | Policy family | Detection | Prompt text changed? | Cache metadata changed? | OpenRouter affinity header | Primary cache signal |
@@ -745,6 +812,7 @@ implementation decision a live probe would change.
 | Claude (Anthropic) | `claude-{opus,sonnet,haiku,fable,mythos}-*`, legacy `claude-3-*` (bare or gateway-prefixed) | No | No: OpenCode applies `cache_control` breakpoints | None | provider `cache.read` / `cache.write` |
 | Google Gemini | `gemini-2.5-*`, `gemini-3.*`, `gemini-flash-latest`/`gemini-flash-lite-latest` (bare, `google/`-prefixed, or Vertex) | No | No: provider-managed implicit caching | None | provider `cache.read` (no write field) |
 | Alibaba Qwen | `qwen-<family>` aliases + version-typed ids (`qwen3.*`, `qwen-max`, `qwen3-coder*`, `qwen3-vl-*`, …; bare, `qwen/`-prefixed, or gateway) | No | No: provider-managed implicit caching; OpenCode applies breakpoints on Messages routes | None | provider `cache.read` / `cache.write` |
+| xAI Grok | `grok-<version>` + generative aliases (`grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-*`, `grok-build-0.1`, `grok-code`; bare, `xai/`/`x-ai/`-prefixed, or gateway) | No | No: automatic provider-managed caching; OpenCode supplies the Responses affinity key | None | provider `cache.read` (no write field) |
 
 `x-session-id` is an HTTP affinity header, not a provider cache key or
 cache-control field. Non-OpenRouter endpoints do not receive CacheEngine's
@@ -1411,6 +1479,26 @@ already applies Anthropic-style breakpoints on the Qwen Messages routes
 marker on the others. CacheEngine never mutates the Qwen request. There are no
 other Qwen knobs, and cache keys, TTLs, and cache-control fields are neither
 exposed nor sent.
+
+
+# Grok configuration
+
+```json
+{
+  "grok": {
+    "enabled": true
+  }
+}
+```
+
+### `enabled`
+
+Enables the xAI/Grok policy classification. Grok is a **passive** family on every
+route: caching is automatic and provider-managed, and on the direct xAI Responses
+route OpenCode itself supplies the stable conversation affinity key, so
+CacheEngine never mutates the Grok request. There are no other Grok knobs, and
+cache keys, TTLs, affinity headers, and cache-control fields are neither exposed
+nor sent.
 
 
 # Model detection
