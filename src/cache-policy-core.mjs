@@ -191,6 +191,38 @@ export function isQwenModel(slug) {
   return false
 }
 
+// xAI / Grok language models (provider-managed automatic prefix caching). xAI
+// documents caching for "all grok language models"; the affinity hint is route
+// specific (Chat Completions header `x-grok-conv-id`, Responses body
+// `prompt_cache_key`). CacheEngine classifies the family but never mutates the
+// request: OpenCode 1.18.34 drives direct xAI through the Responses API and
+// pre-sets `providerOptions.xai.promptCacheKey = sessionID`, which @ai-sdk/xai
+// serializes to the wire `prompt_cache_key`, so the harness already supplies the
+// stable conversation affinity (RF-PRV-007/RF-OC-013). Boundary-anchored and
+// non-language-product aware: `mygrok-4`, `grokster-4`, `grok-imagine-image`,
+// `grok-voice-*`, `grok-3-embedding`, and malformed ids (`grok-4..7`,
+// `grok-4foo`) stay neutral.
+export function isGrokModel(slug) {
+  const text = String(slug ?? "").toLowerCase()
+  if (!text) return false
+  const re = /(?:^|[\/.])grok-([a-z0-9][a-z0-9.-]*)/g
+  let m
+  while ((m = re.exec(text)) !== null) {
+    const tail = m[1]
+    // Non-language Grok products (image/video/voice/audio/embedding) are not
+    // generative text models. Test only the matched model token, never the
+    // surrounding namespace (e.g. `some-image-co/grok-4.7` is a language model).
+    if (/imagine|image|video|voice|transcribe|speech|tts|embedding|rerank/.test(tail)) continue
+    // Version-typed ids: grok-4, grok-4.7, grok-4.20-0309-reasoning,
+    // grok-4.7-latest. Requires a real digit-led version with no empty or
+    // duplicated separators.
+    if (/^\d+(?:\.\d+)*(?:-[a-z0-9]+)*$/.test(tail)) return true
+    // Documented generative aliases that are not version-typed.
+    if (/^(?:build|code|beta)(?:-|$)/.test(tail)) return true
+  }
+  return false
+}
+
 // Candidate ids for exact/alias lookup. Includes the raw apiID/modelID, the
 // lower-cased forms, and a single stripped transport/vendor prefix
 // (e.g. "openai/gpt-5.6-luna" -> "gpt-5.6-luna", "xiaomi/mimo-v2.6-flash" ->
@@ -350,6 +382,27 @@ export const BASELINES = {
     ],
     inventoryRef: "§8 Alibaba Qwen",
   },
+  "xai.grok-cache": {
+    id: "xai.grok-cache",
+    creator: "xai",
+    appliesTo:
+      "xAI Grok language models (provider-managed automatic prefix caching; route-specific affinity hint)",
+    automatic: true,
+    defaultMode: "implicit",
+    // xAI documents no explicit breakpoint mechanism, only routing hints
+    // (`x-grok-conv-id` / `prompt_cache_key`), and no TTL or minimum.
+    supportsExplicitBreakpoints: false,
+    minCacheTokens: null,
+    ttl: null,
+    cacheKeyOptional: true,
+    // xAI reports only cached reads; there is no cache-write/creation field.
+    cacheWriteBilled: false,
+    usageFields: [
+      "input_tokens_details.cached_tokens", // Responses
+      "prompt_tokens_details.cached_tokens", // Chat Completions
+    ],
+    inventoryRef: "§8b xAI Grok",
+  },
   "neutral.none": {
     id: "neutral.none",
     creator: "unknown",
@@ -443,6 +496,11 @@ const NEUTRAL_RUNTIME = Object.freeze({
   providerChange: null,
   prefixDiagnostics: false,
   openRouterAffinity: false,
+  // Grok capability flags are intentionally separate from `openRouterAffinity`
+  // and `gptCacheMetadata`: Grok affinity is provider/harness-managed and
+  // route-aware, and CacheEngine never injects a key or header for it.
+  grokCacheAffinity: false,
+  grokRouteAware: false,
 })
 
 const rt = (policy, overrides = {}) => ({
@@ -717,6 +775,29 @@ export const POLICY_REGISTRY = [
     boundary: "Alibaba / Qwen (all transports)",
     note: "Qwen caching is provider-managed: implicit prefix caching is automatic and non-disableable (~1024-token minimum, no fixed TTL), and explicit block-level cache_control:{type:ephemeral} exists (1024 min, 5m, <=4 markers) but is not placed by CacheEngine because the V1 chat.params hook cannot reach content blocks. OpenCode already applies Anthropic-style breakpoints on the Qwen Messages routes (OpenCode Go/Zen via @ai-sdk/anthropic), so CacheEngine must not duplicate them. Coding Plan / Token Plan cache semantics are undocumented -> passive. OpenRouter Qwen documents explicit block markers, but OpenCode injects none and the V1 hook cannot reach blocks -> passive. No Qwen affinity. Verified 2026-10-05 (RF-PRV-006).",
     inventoryRef: "§8 Alibaba Qwen",
+  },
+  {
+    // v0.5.x: xAI / Grok. Caching is automatic and provider-managed on all Grok
+    // language models; xAI exposes only cache reads. CacheEngine is PASSIVE on
+    // every route: OpenCode 1.18.34 drives direct xAI through the Responses API
+    // and already sets providerOptions.xai.promptCacheKey = sessionID, which
+    // @ai-sdk/xai serializes to the wire `prompt_cache_key`, so the harness owns
+    // the stable conversation affinity and CacheEngine must preserve it. The
+    // Chat Completions header `x-grok-conv-id` is not reachable in this runtime.
+    // Go/Zen/OpenRouter/gateways are not direct xAI. See inventory §8b and
+    // RF-PRV-007 / RF-OC-013.
+    id: "xai.grok",
+    creator: "xai",
+    family: "grok",
+    kind: "family",
+    predicate: isGrokModel,
+    baseline: "xai.grok-cache",
+    overlays: [],
+    legacy: true,
+    runtime: rt("grok", { grokCacheAffinity: true, grokRouteAware: true }),
+    boundary: "xAI / Grok language models (all transports)",
+    note: "Grok prompt caching is automatic/provider-managed on all grok language models and xAI reports only cached reads (no write/creation field, so no write token is ever fabricated). CacheEngine never mutates the request. OpenCode 1.18.34 routes direct xAI (providerID xai, npm @ai-sdk/xai) through the Responses API and pre-sets providerOptions.xai.promptCacheKey = sessionID, serialized to wire prompt_cache_key by @ai-sdk/xai — so the harness already provides the stable conversation affinity and CacheEngine must not overwrite it. The Chat Completions header x-grok-conv-id is not reachable in this runtime. OpenCode Go/Zen/OpenRouter and generic gateways are not direct xAI and stay passive. Auth method (API key vs SuperGrok/X Premium) is not a policy distinction. No TTL or minimum is documented, so none is invented. Verified 2026-10-06 (RF-PRV-007 / RF-OC-013).",
+    inventoryRef: "§8b xAI Grok",
   },
 ]
 

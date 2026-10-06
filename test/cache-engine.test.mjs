@@ -19,6 +19,7 @@ import {
   POLICY_GEMINI,
   POLICY_GLM53,
   POLICY_GPT56,
+  POLICY_GROK,
   POLICY_KIMI,
   POLICY_MIMO26,
   POLICY_NEUTRAL,
@@ -63,6 +64,7 @@ import {
   isGpt56OrLater,
   isMimoAfterV26,
   isQwenModel,
+  isGrokModel,
   explainPolicyResolution,
   resolveLegacyFamily,
   resolvePolicy,
@@ -603,7 +605,10 @@ test("v0.5.3: the Gemini policy is passive (no overlays, no mutation capabilitie
 
 test("unrelated models match neutral policy", () => {
   assert.equal(detectPolicy(M("mistral", "mistral-large-latest")), POLICY_NEUTRAL)
-  assert.equal(detectPolicy(M("openrouter", "x-ai/grok-4")), POLICY_NEUTRAL)
+  // Non-language Grok products and lookalikes stay neutral.
+  assert.equal(detectPolicy(M("xai", "grok-imagine-image")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("xai", "grok-voice-think-fast-2.0")), POLICY_NEUTRAL)
+  assert.equal(detectPolicy(M("acme", "mygrok-4")), POLICY_NEUTRAL)
   assert.equal(detectPolicy(undefined), POLICY_NEUTRAL)
   assert.equal(detectPolicy(null), POLICY_NEUTRAL)
   assert.equal(detectPolicy({}), POLICY_NEUTRAL)
@@ -867,11 +872,12 @@ test("empty current sequence -> no anomalies", () => {
 // Config: provider policies
 // ===========================================================================
 
-test("config defaults enable all eight policies", () => {
+test("config defaults enable all nine policies", () => {
   const cfg = parseConfig({}, {})
   assert.deepEqual(cfg.policies.claude, { enabled: true })
   assert.deepEqual(cfg.policies.gemini, { enabled: true })
   assert.deepEqual(cfg.policies.qwen, { enabled: true })
+  assert.deepEqual(cfg.policies.grok, { enabled: true })
   assert.deepEqual(cfg.policies.deepseek, { enabled: true })
   assert.deepEqual(cfg.policies.glm53, { enabled: true, stabilizeSystem: true, preserveThinkingIntegrity: true })
   assert.deepEqual(cfg.policies.mimo26, {
@@ -1849,6 +1855,7 @@ test("detectPolicy remains compatible with the legacy family resolution", () => 
     claude: POLICY_CLAUDE,
     gemini: POLICY_GEMINI,
     qwen: POLICY_QWEN,
+    grok: POLICY_GROK,
   }
   const samples = [
     M("openrouter", "openai/gpt-5.6-luna"),
@@ -2909,6 +2916,13 @@ async function runUsageCollectionProbe() {
     await setModel(SID_QWEN, "alibaba", "qwen3.8-max")
     await idle(SID_QWEN)
 
+    // v0.5.x: xAI/Grok reports cache reads only (Responses
+    // input_tokens_details.cached_tokens); generic read path, no write fabricated.
+    const SID_GROK = "ses_usage_grok"
+    responses[SID_GROK] = { data: [mkAst("x1", 98, 0, 27)] }
+    await setModel(SID_GROK, "xai", "grok-4.7")
+    await idle(SID_GROK)
+
     const lines = readFileSync(process.env.CACHE_ENGINE_METRICS_FILE, "utf8").trim().split("\\n")
     const records = lines.map((l) => JSON.parse(l))
     process.stdout.write(JSON.stringify({ calls, records }))
@@ -2927,7 +2941,7 @@ const usageResults = async () => (usageProbe ??= runUsageCollectionProbe())
 test("v0.4.6 K2: session.messages is called with the V1 SDK shape and a bound receiver", async () => {
   const { calls } = await usageResults()
   assert.ok(calls.length >= 5, "collector should call session.messages per idle")
-  const sids = ["ses_usage_basic", "ses_usage_multi", "ses_usage_empty", "ses_usage_undef", "ses_usage_throw", "ses_usage_kimi", "ses_usage_claude", "ses_usage_gemini", "ses_usage_qwen"]
+  const sids = ["ses_usage_basic", "ses_usage_multi", "ses_usage_empty", "ses_usage_undef", "ses_usage_throw", "ses_usage_kimi", "ses_usage_claude", "ses_usage_gemini", "ses_usage_qwen", "ses_usage_grok"]
   for (const c of calls) {
     // exactly { path: { id } }, nothing else
     assert.deepEqual(Object.keys(c.opts), ["path"])
@@ -3042,6 +3056,25 @@ test("v0.5.x: Qwen uses the generic cache accounting path (read/(read+write))", 
   assert.equal(u.provider, "alibaba")
   assert.equal(u.model, "qwen3.8-max")
   assert.equal(u.policy, "qwen")
+  assert.equal(u.promptTokens, undefined)
+  assert.equal(u.cacheHitRate, undefined)
+})
+
+test("v0.5.x: Grok uses the generic cache-read accounting path (no fabricated write)", async () => {
+  // xAI reports cached tokens only as reads (Responses
+  // usage.input_tokens_details.cached_tokens). OpenCode normalizes that into
+  // tokens.cache.read; CacheEngine must not invent a write bucket.
+  const { records } = await usageResults()
+  const usage = records.filter((r) => r.kind === "usage" && r.sid === "ses_usage_grok")
+  assert.equal(usage.length, 1)
+  const u = usage[0]
+  assert.equal(u.read, 98)
+  assert.equal(u.write, 0)
+  assert.equal(u.input, 27)
+  assert.equal(u.messages, 1)
+  assert.equal(u.provider, "xai")
+  assert.equal(u.model, "grok-4.7")
+  assert.equal(u.policy, "grok")
   assert.equal(u.promptTokens, undefined)
   assert.equal(u.cacheHitRate, undefined)
 })
@@ -4108,7 +4141,7 @@ async function runClaudeRouteProbe(configPolicies) {
   const home = mkdtempSync(join(tmpdir(), "ce-claude-routes-"))
   const pluginURL = new URL("../src/cache-engine.ts", import.meta.url).href
   const script = `
-    import { mkdirSync, writeFileSync } from "node:fs"
+    import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
     process.env.CACHE_ENGINE_METRICS_FILE = process.env.HOME + "/claude-routes.jsonl"
     const cfgPolicy = ${JSON.stringify(configPolicies ?? null)};
     if (cfgPolicy) {
@@ -4145,6 +4178,13 @@ async function runClaudeRouteProbe(configPolicies) {
       qwenOpenrouter: { providerID: "openrouter", id: "qwen/qwen3-coder-plus", api: { id: "qwen/qwen3-coder-plus", npm: "@openrouter/ai-sdk-provider" } },
       qwenLookalike: { providerID: "acme", id: "acme/qwenix-max", api: { id: "acme/qwenix-max" } },
       qwenEmbedding: { providerID: "alibaba", id: "qwen3-embedding-8b", api: { id: "qwen3-embedding-8b" } },
+      grokDirect: { providerID: "xai", id: "grok-4.7", api: { id: "grok-4.7", npm: "@ai-sdk/xai" } },
+      grokGo: { providerID: "opencode-go", id: "grok-4.6", api: { id: "grok-4.6", npm: "@ai-sdk/openai" } },
+      grokZen: { providerID: "opencode", id: "grok-4.5", api: { id: "grok-4.5", npm: "@ai-sdk/openai" } },
+      grokOpenrouter: { providerID: "openrouter", id: "x-ai/grok-4.7", api: { id: "x-ai/grok-4.7", npm: "@openrouter/ai-sdk-provider" } },
+      grokGateway: { providerID: "some-gateway", id: "grok-4.7", api: { id: "grok-4.7", npm: "@ai-sdk/openai-compatible" } },
+      grokImage: { providerID: "xai", id: "grok-imagine-image", api: { id: "grok-imagine-image", npm: "@ai-sdk/xai" } },
+      grokXaiUnknownTransport: { providerID: "xai", id: "grok-4.7", api: { id: "grok-4.7" } },
     };
     const preOpts = { promptCacheKey: "user-key", cache_control: { type: "ephemeral" }, temperature: 0.3 };
     const preHdrs = { "x-session-id": "user-sess", "x-custom": "keep" };
@@ -4168,6 +4208,9 @@ async function runClaudeRouteProbe(configPolicies) {
     }
     out.preOpts = preOpts;
     out.preHdrs = preHdrs;
+    try {
+      out.metrics = readFileSync(process.env.CACHE_ENGINE_METRICS_FILE, "utf8").trim().split("\\n").filter(Boolean).map((l) => JSON.parse(l));
+    } catch { out.metrics = []; }
     process.stdout.write(JSON.stringify(out));
   `
   const stdout = execFileSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], {
@@ -4310,4 +4353,104 @@ test("v0.5.4: the probed OpenRouter Gemini endpoint stays classified-but-passive
   assert.equal(ex.overlayApplied, false)
   assert.deepEqual(ex.overlays, [])
   assert.equal(ex.transportKind, "openrouter")
+})
+
+// ===========================================================================
+// v0.5.x xAI / Grok audit: caching is automatic/provider-managed and xAI reports
+// only cached reads. CacheEngine classifies Grok and records the route
+// disposition, but never mutates the prompt: OpenCode 1.18.34 drives direct xAI
+// through the Responses API and pre-sets providerOptions.xai.promptCacheKey =
+// sessionID (serialized to wire prompt_cache_key by @ai-sdk/xai), so the harness
+// owns the stable conversation affinity. The Chat Completions header
+// x-grok-conv-id is not reachable in this runtime. (RF-PRV-007 / RF-OC-013)
+// ===========================================================================
+
+test("v0.5.x: isGrokModel matches Grok language models and rejects non-language/lookalikes", () => {
+  const positives = [
+    "grok-4.7", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4",
+    "grok-4.20-0309-reasoning", "grok-4.20-0309-non-reasoning",
+    "grok-4.20-multi-agent-0309", "grok-4.7-latest", "grok-build-0.1", "grok-code",
+    "x-ai/grok-4.7", "xai/grok-4.7", "opencode-go/grok-4.6", "openrouter/x-ai/grok-4.5",
+    "some-image-co/grok-4.7",
+  ]
+  for (const id of positives) assert.equal(isGrokModel(id), true, `${id} should match`)
+  const negatives = [
+    "grok-imagine-image", "grok-imagine-image-quality", "grok-imagine-video",
+    "grok-imagine-video-1.5", "grok-voice-think-fast-2.0", "grok-voice-transcribe-2.0",
+    "grok-3-embedding", "mygrok-4", "grokster-4", "grok-4..7", "grok-4foo", "grok-", "grok",
+    "grok-latest", "mistral-large-latest", "gpt-5.6", "gemini-2.5-pro", "",
+  ]
+  for (const id of negatives) assert.equal(isGrokModel(id), false, `${id} must not match`)
+})
+
+test("v0.5.x: Grok resolves to the grok family with route-aware, non-mutating capabilities", () => {
+  const cases = [
+    ["xai", "grok-4.7", "@ai-sdk/xai"],
+    ["opencode-go", "grok-4.6", "@ai-sdk/openai"],
+    ["opencode", "grok-4.5", "@ai-sdk/openai"],
+    ["openrouter", "x-ai/grok-4.7", "@openrouter/ai-sdk-provider"],
+    ["some-gateway", "grok-4.7", "@ai-sdk/openai-compatible"],
+  ]
+  for (const [provider, id, npm] of cases) {
+    const model = { providerID: provider, id, api: { id, npm } }
+    const caps = resolveRuntimePolicy(model)
+    assert.equal(caps.policy, "grok", `${provider}/${id}: policy`)
+    assert.equal(caps.isNeutral, false)
+    assert.equal(caps.grokCacheAffinity, true, `${provider}/${id}: grokCacheAffinity`)
+    assert.equal(caps.grokRouteAware, true, `${provider}/${id}: grokRouteAware`)
+    // Grok must not overload the GPT / OpenRouter / env-relocation capabilities.
+    assert.equal(caps.gptCacheMetadata, false)
+    assert.equal(caps.openRouterAffinity, false)
+    assert.equal(caps.envRelocation, null)
+    assert.equal(caps.cacheRatio, null)
+    assert.equal(caps.providerChange, null)
+    assert.equal(caps.thinkingIntegrity, false)
+    assert.equal(detectPolicy(model), POLICY_GROK, `${provider}/${id}: detectPolicy`)
+  }
+})
+
+test("v0.5.x: CacheEngine is passive for Grok on every access route (prefix preserved)", async () => {
+  const out = await claudeRouteResults()
+  for (const name of ["grokDirect", "grokGo", "grokZen", "grokOpenrouter", "grokGateway", "grokXaiUnknownTransport", "grokImage"]) {
+    assert.deepEqual(out[name].options, out.preOpts, `${name}: options must be preserved`)
+    assert.equal(out[name].systemChanged, false, `${name}: system must be unchanged`)
+    assert.deepEqual(out[name].headers, out.preHdrs, `${name}: headers must be preserved`)
+    assert.deepEqual(out[name].addedCacheKeys, [], `${name}: must add no cache field`)
+  }
+})
+
+test("v0.5.x: Grok affinity is observed as harness-provided on direct xAI and bypassed elsewhere", async () => {
+  const out = await claudeRouteResults()
+  const bySid = new Map(out.metrics.filter((r) => r.reason === "grok_affinity").map((r) => [r.sid, r]))
+  const expected = {
+    ses_route_grokDirect: "preexisting",
+    ses_route_grokGo: "not_direct_xai",
+    ses_route_grokZen: "not_direct_xai",
+    ses_route_grokOpenrouter: "not_direct_xai",
+    ses_route_grokGateway: "not_direct_xai",
+    ses_route_grokXaiUnknownTransport: "unknown_provider",
+  }
+  for (const [sid, source] of Object.entries(expected)) {
+    const r = bySid.get(sid)
+    assert.ok(r, `${sid}: a grok_affinity record is expected`)
+    assert.equal(r.policy, "grok", `${sid}: policy`)
+    assert.equal(r.affinitySource, source, `${sid}: affinitySource`)
+  }
+  const direct = bySid.get("ses_route_grokDirect")
+  assert.equal(direct.provider, "xai")
+  assert.equal(direct.model, "grok-4.7")
+  // Non-language Grok stays neutral and emits no Grok affinity record.
+  assert.equal(bySid.has("ses_route_grokImage"), false)
+  // The raw affinity value must never be recorded.
+  assert.ok(!JSON.stringify(out.metrics).includes("user-key"), "the affinity value must not be recorded")
+})
+
+test("v0.5.x: disabling Grok leaves every route unchanged and emits no affinity telemetry", async () => {
+  const out = await runClaudeRouteProbe({ grok: { enabled: false } })
+  for (const name of ["grokDirect", "grokGo", "grokZen", "grokOpenrouter", "grokGateway"]) {
+    assert.deepEqual(out[name].options, out.preOpts, `${name}: options preserved`)
+    assert.equal(out[name].systemChanged, false, `${name}: no relocation`)
+    assert.deepEqual(out[name].headers, out.preHdrs, `${name}: headers preserved`)
+  }
+  assert.equal(out.metrics.filter((r) => r.reason === "grok_affinity").length, 0)
 })
