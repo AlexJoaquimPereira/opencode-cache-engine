@@ -89,6 +89,15 @@ npm pack --dry-run
   cache key, or cache-control field. `mimo26.stickySession` gates the derived
   ID in telemetry, not header injection. Never invent MiMo cache keys,
   breakpoints, or TTLs, and never override routing.
+- **xAI Grok:** passive only. Caching is automatic/provider-managed on all Grok
+  language models; xAI documents no explicit breakpoint, TTL, or minimum and
+  reports cached reads only. OpenCode 1.18.34 drives direct xAI (`providerID
+  "xai"` + `@ai-sdk/xai`) through the Responses API and itself sets
+  `providerOptions.xai.promptCacheKey = sessionID`, so CacheEngine preserves that
+  harness affinity and never injects a key or the Chat Completions
+  `x-grok-conv-id` header. Never fabricate a Grok TTL or write token. Gate on the
+  verified identity; Go/Zen/OpenRouter/gateways stay passive. See RF-PRV-007 and
+  RF-OC-013.
 - Fail closed on unknown provider identity. Model availability through
   OpenRouter does not authorize sending OpenRouter-specific fields to direct
   endpoints.
