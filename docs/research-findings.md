@@ -429,6 +429,55 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   RF-OC-011. The `@ai-sdk/alibaba` branch exists in the bundled source but is
   dormant for the installed catalog today.
 
+### RF-OC-013 — OpenCode 1.18.34 routes direct xAI through the Responses API and pre-sets `promptCacheKey = sessionID`
+
+- Status: current
+- Verified: 2026-10-06
+- Area: opencode-runtime
+- Fact: In the installed OpenCode 1.18.34 binary the provider effect for
+  `providerID === "xai"` sets `language = sdk.responses(model.api.id)` — direct
+  xAI is **always the Responses API** (`https://api.x.ai/v1/responses`), never
+  Chat Completions. The xai effect has **no** Chat/Responses branch (unlike
+  `github-copilot`, which branches on `options.endpoint`). The provider
+  `options()` also sets `providerOptions.xai.promptCacheKey = sessionID` for
+  `@ai-sdk/xai` when `setCacheKey !== false` (the same branch as `@ai-sdk/openai`,
+  `@ai-sdk/azure`, `@ai-sdk/mistral`, `venice-ai-sdk-provider`). The bundled
+  `@ai-sdk/xai` Responses request builder then emits the wire field
+  `prompt_cache_key` from `promptCacheKey` (xAI chunk, near `createXai`; also
+  `...previous_response_id:J.previousResponseId,...prompt_cache_key:J.promptCacheKey`
+  and `...B.promptCacheKey!=null&&{prompt_cache_key:B.promptCacheKey}`). The string
+  `x-grok-conv-id` appears **zero** times in the binary. OpenCode also sets
+  `store = false` for xai. Consequences for CacheEngine: (1) the direct-xAI Chat
+  Completions `x-grok-conv-id` path is **unreachable** and is not implemented;
+  (2) the Responses affinity key is already supplied by the harness and must be
+  **preserved**, never overwritten; (3) no Grok-specific usage parser is needed —
+  xAI Responses reports `usage.input_tokens_details.cached_tokens`, which the AI
+  SDK surfaces as `cachedInputTokens`/`inputTokenDetails.cacheReadTokens` and
+  OpenCode normalizes into `tokens.cache.read` (the same generic path as
+  RF-OC-002/RF-OC-010; `cache_creation_input_tokens` exists only in Anthropic
+  schemas, so xAI has no write bucket).
+- Evidence: [O]
+- Sources: local `opencode@1.18.34` binary (`~/.opencode/bin/opencode`),
+  inspected 2026-10-06 via embedded-JS extraction: the `{id:"xai"}` provider
+  effect (`e.language=e.sdk.responses(e.model.api.id)`), the `options()`
+  `promptCacheKey=$.sessionID` branch, and the `@ai-sdk/xai`
+  `prompt_cache_key` serializer. Complements RF-OC-008 (Anthropic gate) and
+  RF-OC-012 (Qwen routes).
+- Justifies: keeping `xai.grok` passive in `src/cache-policy-core.mjs` and
+  injecting no header/key in `src/cache-engine.ts`; the `grok_affinity` telemetry
+  `affinitySource: "preexisting"`; the Grok route tests.
+- Version context: OpenCode 1.18.34 (bundled `@ai-sdk/xai`).
+- Re-verify when: OpenCode changes the xai provider effect (`responses` vs
+  `chat`), the `options()` `promptCacheKey` branch, or the bundled `@ai-sdk/xai`
+  serializer.
+- Superseded by: null
+- Notes: The binary also contains the string `1.19.101` (likely update metadata)
+  while the running version is `1.18.34`. Do not assume the Chat Completions
+  path — the exact runtime route is Responses. This makes the xAI case the
+  mirror image of OpenAI: both use a `prompt_cache_key` wire field, but for xAI
+  it is a routing/affinity hint supplied on the harness side, not an
+  OpenAI-style `prompt_cache_options` policy (do not reuse GPT semantics).
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
@@ -920,3 +969,136 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   (`experimental.chat.messages.transform` block serialization unverified), so
   CacheEngine stays passive. `qwen3-embedding-*` and rerankers are excluded from
   the matcher. Harness-side provider/`npm` evidence is RF-OC-012.
+
+### RF-PRV-007 — xAI Grok caching is automatic prefix caching with route-specific affinity hints
+
+- Status: current
+- Verified: 2026-10-06
+- Area: provider-mechanics
+- Fact: xAI's mechanism is **"Prompt Caching"**, and it is **automatic** ("the
+  xAI API automatically caches them"; "Prompt caching is available on all `grok`
+  language models"). It works from the **start of the messages array**:
+  consecutive requests that share the same starting messages reuse the cached
+  prefix; any edit, removal, or reorder of earlier messages breaks it
+  (append-only). Cache entries are **server-local** and **not guaranteed** —
+  they can be evicted due to memory pressure, server load, or restarts (no
+  numeric TTL is documented; "at any time"). There is **no explicit breakpoint /
+  `cache_control` mechanism**, **no documented TTL**, and **no documented minimum
+  token threshold**. The only client inputs are optional, *recommended* routing
+  hints ("we recommend setting the `x-grok-conv-id` HTTP header"; best practices
+  "Always set `x-grok-conv-id` (or `prompt_cache_key` for Responses API)"), both
+  described as "best-effort sticky routing" — routing/affinity, **not** cache
+  creation or eligibility:
+  - Chat Completions HTTP header **`x-grok-conv-id`** ("routes requests with the
+    same conversation ID to the same server").
+  - Responses top-level body field **`prompt_cache_key`** ("functions identically
+    to setting `x-grok-conv-id`").
+  - The Chat Completions REST reference also documents a body **`prompt_cache_key`**
+    ("Plumbed to `x-grok-conv-id`, same as on `/v1/responses`").
+  - The Vercel AI SDK provider-option name is **`promptCacheKey`**
+    (`providerOptions: { xai: { promptCacheKey } }`); the SDK serializes it to the
+    wire `prompt_cache_key`.
+  - No length/charset constraint on the value is documented; a UUID or the
+    application's session ID is suggested.
+  - These are the **only** cache-affinity inputs. `safety_identifier` and the
+    legacy `user` field are abuse-attribution identifiers, **not** cache affinity.
+
+  Endpoints: `POST https://api.x.ai/v1/chat/completions` (xAI labels Chat
+  Completions a **legacy/deprecated** endpoint — "new features will come to the
+  Responses API first"); `POST https://api.x.ai/v1/responses` and `POST
+  https://api.x.ai/v1/responses/compact`; base `https://api.x.ai/v1`. Regional
+  `https://us.api.x.ai/v1` (currently `grok-4.7`/`grok-4.6` only, 1.1× token
+  price). Prompt hits are not guaranteed across endpoints.
+
+  First-party inconsistency (flag): xAI's `model-capabilities/text/comparison`
+  page claims Chat Completions returns "No reasoning content" and bills "Full
+  history … on each request", contradicting the Chat Completions reference
+  (`message.reasoning_content`, `prompt_tokens_details.cached_tokens`) and the
+  prompt-caching pages. Treat the prompt-caching and API-reference pages as
+  authoritative for cache behavior; the comparison table appears stale.
+
+  Economics: cached input is billed at a lower **cached-input** rate (e.g.
+  `grok-4.7` $2.00 input / $0.50 cached / $6.00 output per 1M tokens; long-context
+  rows apply to cached tokens too); **no separate cache-write fee is documented**.
+  The US endpoint 1.1× multiplier applies to cached input with the cache discount
+  applied first, and Priority Processing 2× applies after the discount.
+
+  Prefix contents: "The cacheable prefix includes all messages up to and
+  including tool call results." Reasoning models require preserving prior
+  **`reasoning_content`** or stateful Responses continuation via
+  **`previous_response_id`**; encrypted reasoning uses
+  `include: ["reasoning.encrypted_content"]` (always returned for `grok-4.7` on
+  Responses; Chat Completions has no ciphertext field). Responses are stored 30
+  days unless `store:false`.
+
+  Usage: Chat Completions `usage.prompt_tokens_details.cached_tokens`; Responses
+  `usage.input_tokens_details.cached_tokens`; gRPC
+  `response.usage.cached_prompt_text_tokens`. **There is no cache-write/creation
+  field** — xAI reports cached reads only; cost is exposed directly as
+  `usage.cost_in_usd_ticks` (1 USD = 1e10 ticks; post-cache-discount).
+
+  Auth: API key via `Authorization: Bearer $XAI_API_KEY`; the Grok consumer
+  account is shared with the API but billing is separate. **No first-party
+  statement that a SuperGrok / X Premium subscription changes API cache
+  semantics**, and the subscription OAuth endpoint is undocumented; the Grok
+  Build CLI OAuth flow's target endpoint is undocumented.
+
+  Model scope: language ids `grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`,
+  `grok-4.20-0309-reasoning`, `grok-4.20-0309-non-reasoning`,
+  `grok-4.20-multi-agent-0309`, `grok-build-0.1`; aliases `<model>`,
+  `<model>-latest` / `<model>-<date>` (`grok-latest` is *not* served on the US
+  endpoint). Non-language products (not cache-documented; excluded):
+  `grok-imagine-image`(-2.0/-quality), `grok-imagine-video`(-1.5/-1.5-lite),
+  `grok-voice-*`, transcribe/TTS; no standalone embedding model id is documented
+  (Collections embeddings are internal to RAG).
+
+  OpenRouter side: its Prompt Caching page documents a **Grok** section —
+  caching "automated and does not require any additional configuration", cache
+  **writes at no cost**, cache **reads at 0.25× input** (constant
+  `GROK_CACHE_READ_MULTIPLIER = '0.25'`) — but says **nothing Grok-specific**
+  about `x-grok-conv-id`, `prompt_cache_key`, TTL, or minimum. OpenRouter applies
+  its own generic provider sticky routing (`session_id` / `x-session-id`, 256
+  chars, 10-minute inactivity expiry).
+- Evidence: [D] (xAI first-party docs; OpenRouter first-party docs) / [U] (the
+  unknowns below)
+- Sources: xAI — https://docs.x.ai/developers/advanced-api-usage/prompt-caching ,
+  .../prompt-caching/how-it-works , .../prompt-caching/maximizing-cache-hits ,
+  .../prompt-caching/best-practices , .../prompt-caching/multi-turn ,
+  .../prompt-caching/usage-and-pricing ;
+  https://docs.x.ai/developers/rest-api-reference/inference/chat-completions ,
+  .../inference/responses ; https://docs.x.ai/developers/models ;
+  https://docs.x.ai/developers/pricing ; https://docs.x.ai/developers/cost-tracking ;
+  https://docs.x.ai/developers/model-capabilities/text/reasoning ,
+  .../text/generate-text ; https://docs.x.ai/developers/advanced-api-usage/context-compaction ,
+  .../advanced-api-usage/regions ; https://docs.x.ai/developers/quickstart ;
+  https://docs.x.ai/developers/faq/accounts . OpenRouter —
+  https://openrouter.ai/docs/features/prompt-caching . All accessed 2026-10-06.
+- Justifies: the `xai.grok-cache` baseline (`automatic:true`,
+  `defaultMode:"implicit"`, `supportsExplicitBreakpoints:false`,
+  `minCacheTokens:null`, `ttl:null`, `cacheWriteBilled:false`, usage fields) and
+  the passive `xai.grok` policy; **no TTL or minimum is invented** and **no write
+  token is fabricated**. OpenCode already supplies the Responses affinity key
+  (RF-OC-013).
+- Version context: xAI docs fetched 2026-10-06; OpenCode 1.18.34.
+- Unknowns: minimum cacheable prefix; numeric TTL; refresh-on-hit behavior;
+  per-account/per-model cache scoping and whether entries are shared across
+  users; maximum value length/format for `x-grok-conv-id`/`prompt_cache_key`;
+  whether the Responses endpoint honors a raw `x-grok-conv-id` header; whether
+  the separate `tools` schema array participates in the prefix (only tool
+  *messages* are documented); whether a SuperGrok/X Premium subscription changes
+  cache semantics or which endpoint its OAuth flow targets; how much of a
+  post-compaction prompt remains cache-eligible.
+- Re-verify when: xAI changes the prompt-caching mechanism, the affinity field
+  names or placement, the usage fields, or the documented model scope; or adds a
+  TTL, a minimum, or an explicit breakpoint.
+- Superseded by: null
+- Notes: xAI's `prompt_cache_key` is a **routing/affinity hint**, not OpenAI's
+  `prompt_cache_options` policy — do not reuse GPT cache semantics. xAI documents
+  the AI SDK option `providerOptions.xai.promptCacheKey` for `xai.responses(...)`,
+  which is the exact option the OpenCode runtime populates. In the installed
+  OpenCode 1.18.34 the direct-xAI route is Responses and the harness itself sets
+  `promptCacheKey` (RF-OC-013), so CacheEngine stays passive and only observes.
+  xAI notes the AI SDK auto-includes encrypted reasoning "as long as `store: false`
+  is not specified"; OpenCode sets `store: false` for xAI (RF-OC-013), so whether
+  reasoning-state continuation survives on that path is unverified ([U],
+  OpenCode-owned, outside CacheEngine's reach).
