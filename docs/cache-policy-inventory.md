@@ -503,6 +503,36 @@ the Anthropic-compatible API and Coding/Token Plan pages, consulted 2026-10-05
 
 ---
 
+## 8b. xAI Grok (Grok-4.x language models)
+
+Source: xAI *Prompt Caching* / *Maximizing Cache Hits* / *What Breaks Caching* /
+*Usage & Pricing* / model docs, consulted 2026-10-06 (see RF-PRV-007), plus the
+OpenCode 1.18.34 routing evidence (RF-OC-013). Tags per the legend.
+
+| # | Aspect | Documented | Tag |
+| --- | --- | --- | --- |
+| 1 | Model scope | "available on all `grok` language models": `grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-0309-{reasoning,non-reasoning}`, `grok-4.20-multi-agent-0309`, `grok-build-0.1`; aliases `<model>-latest` / `<model>-<date>`. Non-language products (`grok-imagine-*`, `grok-voice-*`) excluded. | [D] |
+| 2 | Mechanism | **Automatic**, provider-managed prefix caching from the start of the messages array; consecutive requests sharing the same starting messages reuse the prefix. Cache entries are **server-local** and best-effort (evictable under memory pressure / server load / restarts). | [D] |
+| 3 | Explicit breakpoints | None documented: no `cache_control`-style field, **no documented TTL**, **no documented minimum token threshold**. | [U] |
+| 4 | Affinity hint | Chat Completions header `x-grok-conv-id` ("we recommend setting…", optional/best-effort); Responses top-level body `prompt_cache_key`; Chat Completions also accepts body `prompt_cache_key` ("Plumbed to `x-grok-conv-id`"). Both are routing/stickiness only, not cache eligibility. AI SDK provider-option name `promptCacheKey` (xAI documents it for `xai.responses(...)`). No length/charset constraint documented. | [D] |
+| 5 | Prefix guidance | Never edit, remove, or reorder earlier messages; append only. Tool calls / tool results participate in the cacheable prefix ("all messages up to and including tool call results"). | [D] |
+| 6 | Reasoning | Preserve prior `reasoning_content`, or use stateful Responses continuation via `previous_response_id`; encrypted reasoning via `include:["reasoning.encrypted_content"]`. | [D] |
+| 7 | Usage fields | Chat `usage.prompt_tokens_details.cached_tokens`; Responses `usage.input_tokens_details.cached_tokens`. **No cache-write/creation field exists** — xAI reports reads only. | [D] |
+| 8 | Auth | API key vs SuperGrok / X Premium subscription is **not** a documented cache distinction; the subscription OAuth endpoint is undocumented. | [U] |
+
+### 8b-i. Route-specific Grok caching contracts
+
+| Route | Protocol / endpoint | Cache mode / affinity | CacheEngine behavior | Evidence |
+| --- | --- | --- | --- | --- |
+| Direct xAI (API key or SuperGrok/X Premium) | `https://api.x.ai/v1/responses` via `@ai-sdk/xai` (regional `https://us.api.x.ai/v1`) | automatic; affinity = Responses `prompt_cache_key`, supplied by OpenCode as `providerOptions.xai.promptCacheKey = sessionID` | passive: preserve the harness key; inject no key/header; observe reads | [D] RF-PRV-007, [O] RF-OC-013 |
+| Direct xAI Chat Completions | `https://api.x.ai/v1/chat/completions` (xAI labels this endpoint **legacy/deprecated**; new features land in Responses first) | automatic; affinity header `x-grok-conv-id` | not reachable in OpenCode 1.18.34 (xai always uses Responses) → not implemented | [D]/[O] RF-OC-013 |
+| OpenCode Go | `https://opencode.ai/zen/go/v1/responses` via `@ai-sdk/openai` | Go routing uses `x-opencode-session` | passive: no xAI header/key; do not duplicate the Go session header | [D] RF-OC-011 |
+| OpenCode Zen | `https://opencode.ai/zen/v1/responses` via `@ai-sdk/openai` | OpenCode-owned | passive: not direct xAI | [D] RF-OC-011 |
+| OpenRouter | `https://openrouter.ai/api/v1`; slugs `x-ai/grok-*` | automated caching (writes no-cost, reads 0.25× input); OpenRouter provider sticky routing; **no** Grok-specific `x-grok-conv-id` / `prompt_cache_key` guidance | passive: no xAI-specific field; no `x-session-id` (Grok carries no transport-affinity capability) | [D]/[U] RF-PRV-007, RF-OR-001 |
+| Generic OpenAI-compatible gateway | arbitrary | unknown | passive (fail closed): provider identity not verified as direct xAI | [U] RF-PRV-007 |
+
+---
+
 ## 9. OpenRouter transport facts (routing only, not model semantics)
 
 These are OpenRouter routing/transport facts. They are **not** evidence of any
@@ -598,6 +628,8 @@ made here); **hold** = do not inherit without first-party evidence.
 | Google | Gemma and non-2.5+ Gemini: `gemma-*`, `gemini-2.0-*`, `gemini-1.5-*`, `gemini-embedding-*` | Gemma is a separate family; implicit caching is 2.5+ | neutral | hold | n/a | High | Google *Models* | 2026-10-05 |
 | Alibaba | Qwen current chat ids: `qwen-max`, `qwen-plus`, `qwen-flash`, `qwen-turbo`, `qwen3-max`, `qwen3.8-max`/`flash`, `qwen3.7-*`, `qwen3.6-plus`/`flash`, `qwen3.5-plus`/`flash`, `qwen3-coder*`, `qwen3-vl-*`, `qwen3.8-omni-flash`, `qwen-plus-latest` (bare, `qwen/`-prefixed, or gateway) | Provider-managed **implicit** prefix caching (2.5+/3.x); explicit block-level `cache_control` also documented; ~1,024 min; usage `prompt_tokens_details.cached_tokens` (+ `cache_creation_input_tokens`) | Passive Qwen policy: no mutation; generic `read/(read+write)` accounting; no affinity | keep | none — passive only | High (docs + OpenCode source) | Alibaba *Context Cache*; QwenCloud; OpenCode `transform.ts` @ v1.18.34 | 2026-10-05 |
 | Alibaba | look-alikes/utilities: `qwen3-embedding-*`, `qwen3-reranker`, `myqwen-max`, `qwen3.5.1`, `qwen` (bare) | Not a Qwen chat family or malformed version | neutral | hold | n/a | High | Alibaba *Models*; local matcher tests | 2026-10-05 |
+| xAI | Grok current language ids: `grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-0309-reasoning`/`-non-reasoning`, `grok-4.20-multi-agent-0309`, `grok-build-0.1` (bare, `xai/`/`x-ai/`-prefixed, or gateway) | Provider-managed **automatic** prefix caching, server-local/best-effort; **no** explicit breakpoint, TTL, or minimum; affinity `x-grok-conv-id` (Chat) / `prompt_cache_key` (Responses); usage `input_tokens_details.cached_tokens` (read only, no write field) | Passive Grok policy: no mutation — OpenCode supplies `providerOptions.xai.promptCacheKey` on the direct Responses route; generic `read/(read+write)` accounting; no affinity header | keep | none — passive only (harness owns affinity) | High (docs + OpenCode runtime) | xAI *Prompt Caching*; OpenCode binary @ v1.18.34 | 2026-10-06 |
+| xAI | look-alikes/utilities: `grok-imagine-image`, `grok-imagine-video`, `grok-voice-*`, `grok-3-embedding`, `mygrok-4`, `grokster-4`, `grok-4..7`, `grok` (bare) | Not a Grok language model or malformed version | neutral | hold | n/a | High | xAI *Models*; local matcher tests | 2026-10-06 |
 
 ---
 
