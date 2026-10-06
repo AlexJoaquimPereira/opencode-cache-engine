@@ -120,6 +120,8 @@ type PolicyRuntime = {
   providerChange: "glm" | "mimo" | null
   prefixDiagnostics: boolean
   openRouterAffinity: boolean
+  grokCacheAffinity: boolean
+  grokRouteAware: boolean
 }
 
 type ModelInfo = { family: string; providerID: string; modelID: string; caps: PolicyRuntime }
@@ -688,6 +690,49 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
         const family = caps.policy
         const liveProviderID = String(liveModel?.providerID ?? info?.providerID ?? "")
         const liveModelID = String(liveModel?.api?.id ?? liveModel?.id ?? info?.modelID ?? "")
+
+        // ---- xAI / Grok: route-aware affinity observation (no mutation) ------
+        // xAI prompt caching is automatic. For direct xAI the stable conversation
+        // affinity is owned by the runtime: OpenCode sets
+        // providerOptions.xai.promptCacheKey = sessionID on the Responses API and
+        // @ai-sdk/xai serializes it to the wire `prompt_cache_key` (RF-PRV-007 /
+        // RF-OC-013). CacheEngine classifies the family and records the route
+        // disposition, but never injects a key nor the Chat Completions
+        // `x-grok-conv-id` header (that route is not reachable in this runtime,
+        // and overwriting the runtime key is forbidden).
+        if (caps?.grokCacheAffinity === true && caps?.grokRouteAware === true && policyEnabled(cfg, caps.policy) && info) {
+          const npm = String((input.model as unknown as ChatParamsModel)?.api?.npm ?? "")
+          const provider = liveProviderID
+          const lowerProvider = provider.toLowerCase()
+          let affinitySource
+          if (lowerProvider === "xai") {
+            if (npm === "@ai-sdk/xai") {
+              const existingKey = output.options?.promptCacheKey
+              // "preexisting" = a key is already present (runtime/user/plugin);
+              // CacheEngine never overwrites or claims provenance.
+              affinitySource = typeof existingKey === "string" && existingKey.length > 0 ? "preexisting" : "missing"
+            } else {
+              // xAI identity but an unverified transport: fail closed.
+              affinitySource = "unknown_provider"
+            }
+          } else if (!provider) {
+            affinitySource = "unknown_provider"
+          } else {
+            affinitySource = "not_direct_xai"
+          }
+          rec.record({
+            kind: "boundary",
+            sid: input.sessionID,
+            ts: Date.now(),
+            reason: "grok_affinity",
+            policy: "grok",
+            provider: provider || null,
+            model: liveModelID || null,
+            affinitySource,
+            note: "xAI affinity is provider/harness-managed; CacheEngine does not mutate",
+          })
+          return
+        }
 
         // ---- MiMo-V2.6: provider-switch diagnostics (telemetry only) ---------
         // MiMo cache lives at the provider side, so a provider change within one
