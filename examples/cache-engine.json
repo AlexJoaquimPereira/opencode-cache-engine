@@ -41,6 +41,9 @@
     },
     "grok": {
       "enabled": true
+    },
+    "muse": {
+      "enabled": true
     }
   }
 }
