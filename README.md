@@ -25,7 +25,7 @@ opencode plugin opencode-cache-engine
 
 `CacheEngine` is an OpenCode plugin designed for long-running agent sessions where prompt-cache efficiency affects both latency and cost. It keeps the harness conservative for providers whose cache behavior is already automatic, while applying provider-specific optimizations where the provider exposes useful cache controls or where prompt structure can be safely improved.
 
-The plugin currently has nine cache-policy families:
+The plugin currently has ten cache-policy families:
 
 * **DeepSeek** — passive cache observability; request structure is preserved.
 * **GPT-5.6 and later** — documented cache-key/options metadata, with prompt text
@@ -51,6 +51,10 @@ The plugin currently has nine cache-policy families:
   automatic on all Grok language models, and direct xAI already receives a stable
   conversation affinity key from OpenCode itself, so CacheEngine injects no
   header or key and rewrites nothing.
+* **Meta Muse** — passive classification and accounting. Muse caching is
+  automatic positional prefix caching; Meta's `prompt_cache_key` must be an
+  application-stable routing hint (never per-session) and `prompt_cache_retention`
+  is a request-level policy, so CacheEngine injects neither and rewrites nothing.
 
 Family classification is not hard-coded in the runtime. A pure policy registry
 and resolver in `src/cache-policy-core.mjs` returns a structured result
@@ -800,6 +804,70 @@ performed: the direct route is harness-managed and CacheEngine performs no
 mutation, so a live probe would not change the implementation.
 
 
+## Meta Muse (Muse Spark 1.3 / 1.2 / 1.1)
+
+### Policy: passive (provider-managed automatic positional prefix caching)
+
+Meta Model API caches the **stable prefix automatically** — no flag, key, or
+breakpoint. It is **positional prefix** matching from the start of the tokenized
+prompt: system/instructions, few-shot examples, conversation history, and tool
+definitions participate, and editing or reordering earlier content (for example
+the system prompt) breaks the prefix. Cache entries are backend-local and
+best-effort. CacheEngine leaves the Muse request **unchanged** on every route —
+no cache key, no retention value, no cache-control field, and no prompt rewriting.
+
+**Two optional request inputs exist, and both stay harness/user-owned:**
+
+- **`prompt_cache_key`** — a routing/affinity hint on **both Chat Completions and
+  Responses**. Meta requires it to be an **application-stable** value (for example
+  an application or use-case name) and explicitly **not** a per-user or
+  per-session value, because unique keys lower hit rates. CacheEngine therefore
+  never synthesizes one. On direct Meta (and Zen/Go) OpenCode already sets
+  `promptCacheKey` to the session id; CacheEngine preserves it rather than
+  overwriting.
+- **`prompt_cache_retention`** — Responses field with `"in_memory"` (default) and
+  `"24h"`. It is a **best-effort hint** with memory/privacy implications, so
+  CacheEngine does not set it (and OpenCode exposes no control for it).
+
+**Recognized ids** (bare, `meta/`-prefixed, or gateway): `muse-spark-<version>`
+with optional `-contributor` / `-free` suffixes — `muse-spark-1.3`,
+`muse-spark-1.3-contributor`, `muse-spark-1.2`, `muse-spark-1.1`, ….
+
+**Not recognized (neutral):** the open-weight `muse-glimmer-*` family (not served
+on the Meta Model API), image/video/voice products, lookalikes
+(`my-muse-spark-1.3`, `museum`), and malformed ids.
+
+### Routes
+
+All Muse routes are passive for CacheEngine:
+
+| Route | Cache mechanism | Notes |
+| ----- | --------------- | ----- |
+| Direct Meta Chat Completions / Responses | automatic; optional `prompt_cache_key` / `prompt_cache_retention` | OpenCode pre-sets `promptCacheKey = sessionID`; CacheEngine preserves it |
+| OpenCode Go (`/zen/go/v1/responses`, `@ai-sdk/openai`) | OpenCode-owned routing; `x-opencode-session` | not direct Meta; CacheEngine does not duplicate the Go session header |
+| OpenCode Zen (`/zen/v1/responses`, `@ai-sdk/openai`) | OpenCode-owned | not direct Meta |
+| OpenRouter (`meta/muse-spark-*`) | OpenRouter sticky routing; `supports_implicit_caching:false`; `prompt_cache_key` not in `supported_parameters` | passive; no `x-session-id` injection |
+| Generic OpenAI-compatible gateway | unknown | passive (fail closed) |
+
+### Usage accounting
+
+Meta reports cached reads only (`prompt_tokens_details.cached_tokens` on Chat
+Completions, `input_tokens_details.cached_tokens` on Responses,
+`cache_read_input_tokens` on Messages); OpenCode normalizes these into
+`tokens.cache.read`. There is no cache-write field, so the generic
+`read/(read+write)` ratio applies with `write = 0`, and CacheEngine never
+fabricates a write.
+
+### Evidence and status
+
+Verified against first-party Meta Model API documentation and the OpenCode 1.18.34
+runtime on 2026-10-06 (see
+[docs/cache-policy-inventory.md](docs/cache-policy-inventory.md) §8c and
+`docs/research-findings.md` RF-PRV-008, RF-OC-014). No live Meta probe was
+performed: the route is provider-managed and CacheEngine performs no mutation, so
+a live probe would not change the implementation.
+
+
 # Provider comparison
 
 | Policy family | Detection | Prompt text changed? | Cache metadata changed? | OpenRouter affinity header | Primary cache signal |
@@ -813,6 +881,7 @@ mutation, so a live probe would not change the implementation.
 | Google Gemini | `gemini-2.5-*`, `gemini-3.*`, `gemini-flash-latest`/`gemini-flash-lite-latest` (bare, `google/`-prefixed, or Vertex) | No | No: provider-managed implicit caching | None | provider `cache.read` (no write field) |
 | Alibaba Qwen | `qwen-<family>` aliases + version-typed ids (`qwen3.*`, `qwen-max`, `qwen3-coder*`, `qwen3-vl-*`, …; bare, `qwen/`-prefixed, or gateway) | No | No: provider-managed implicit caching; OpenCode applies breakpoints on Messages routes | None | provider `cache.read` / `cache.write` |
 | xAI Grok | `grok-<version>` + generative aliases (`grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-*`, `grok-build-0.1`, `grok-code`; bare, `xai/`/`x-ai/`-prefixed, or gateway) | No | No: automatic provider-managed caching; OpenCode supplies the Responses affinity key | None | provider `cache.read` (no write field) |
+| Meta Muse | `muse-spark-<version>[-contributor][-free]` (`muse-spark-1.3`, `muse-spark-1.2`, `muse-spark-1.1`, …; bare, `meta/`-prefixed, or gateway) | No | No: automatic positional prefix caching; OpenCode supplies `prompt_cache_key` on direct Meta/Zen/Go | None | provider `cache.read` (no write field) |
 
 `x-session-id` is an HTTP affinity header, not a provider cache key or
 cache-control field. Non-OpenRouter endpoints do not receive CacheEngine's
@@ -1499,6 +1568,26 @@ route OpenCode itself supplies the stable conversation affinity key, so
 CacheEngine never mutates the Grok request. There are no other Grok knobs, and
 cache keys, TTLs, affinity headers, and cache-control fields are neither exposed
 nor sent.
+
+
+# Muse configuration
+
+```json
+{
+  "muse": {
+    "enabled": true
+  }
+}
+```
+
+### `enabled`
+
+Enables the Meta/Muse policy classification. Muse is a **passive** family on every
+route: caching is automatic positional prefix caching, Meta requires
+`prompt_cache_key` to be application-stable (never per-session), and
+`prompt_cache_retention` is a request-level policy. CacheEngine never mutates the
+Muse request, and there are no other Muse knobs: cache keys, retention values,
+affinity headers, and cache-control fields are neither exposed nor sent.
 
 
 # Model detection
