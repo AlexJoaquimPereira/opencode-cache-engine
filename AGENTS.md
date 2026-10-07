@@ -98,6 +98,14 @@ npm pack --dry-run
   `x-grok-conv-id` header. Never fabricate a Grok TTL or write token. Gate on the
   verified identity; Go/Zen/OpenRouter/gateways stay passive. See RF-PRV-007 and
   RF-OC-013.
+- **Meta Muse:** passive only. Caching is automatic, provider-managed positional
+  prefix caching; Meta reports cached reads only. Meta requires
+  `prompt_cache_key` to be an application-stable routing hint and explicitly not
+  a per-user/per-session value, so CacheEngine never synthesizes one, and
+  `prompt_cache_retention` (`in_memory`/`24h`) is a request-level policy left
+  harness/user-owned. On direct Meta/Zen/Go the installed runtime pre-sets
+  `promptCacheKey = sessionID`; preserve it and never overwrite. Never fabricate a
+  Muse TTL, minimum, or write token. See RF-PRV-008 / RF-OC-014.
 - Fail closed on unknown provider identity. Model availability through
   OpenRouter does not authorize sending OpenRouter-specific fields to direct
   endpoints.
