@@ -20,6 +20,7 @@ import {
   POLICY_GLM53,
   POLICY_GPT56,
   POLICY_GROK,
+  POLICY_MUSE,
   POLICY_KIMI,
   POLICY_MIMO26,
   POLICY_NEUTRAL,
@@ -65,6 +66,7 @@ import {
   isMimoAfterV26,
   isQwenModel,
   isGrokModel,
+  isMuseModel,
   explainPolicyResolution,
   resolveLegacyFamily,
   resolvePolicy,
@@ -872,12 +874,13 @@ test("empty current sequence -> no anomalies", () => {
 // Config: provider policies
 // ===========================================================================
 
-test("config defaults enable all nine policies", () => {
+test("config defaults enable all ten policies", () => {
   const cfg = parseConfig({}, {})
   assert.deepEqual(cfg.policies.claude, { enabled: true })
   assert.deepEqual(cfg.policies.gemini, { enabled: true })
   assert.deepEqual(cfg.policies.qwen, { enabled: true })
   assert.deepEqual(cfg.policies.grok, { enabled: true })
+  assert.deepEqual(cfg.policies.muse, { enabled: true })
   assert.deepEqual(cfg.policies.deepseek, { enabled: true })
   assert.deepEqual(cfg.policies.glm53, { enabled: true, stabilizeSystem: true, preserveThinkingIntegrity: true })
   assert.deepEqual(cfg.policies.mimo26, {
@@ -1856,6 +1859,7 @@ test("detectPolicy remains compatible with the legacy family resolution", () => 
     gemini: POLICY_GEMINI,
     qwen: POLICY_QWEN,
     grok: POLICY_GROK,
+    muse: POLICY_MUSE,
   }
   const samples = [
     M("openrouter", "openai/gpt-5.6-luna"),
@@ -2923,6 +2927,13 @@ async function runUsageCollectionProbe() {
     await setModel(SID_GROK, "xai", "grok-4.7")
     await idle(SID_GROK)
 
+    // v0.5.x: Meta Muse reports cache reads only (Responses
+    // input_tokens_details.cached_tokens); generic read path, no write.
+    const SID_MUSE = "ses_usage_muse"
+    responses[SID_MUSE] = { data: [mkAst("mu1", 150, 0, 40)] }
+    await setModel(SID_MUSE, "meta", "muse-spark-1.3")
+    await idle(SID_MUSE)
+
     const lines = readFileSync(process.env.CACHE_ENGINE_METRICS_FILE, "utf8").trim().split("\\n")
     const records = lines.map((l) => JSON.parse(l))
     process.stdout.write(JSON.stringify({ calls, records }))
@@ -2941,7 +2952,7 @@ const usageResults = async () => (usageProbe ??= runUsageCollectionProbe())
 test("v0.4.6 K2: session.messages is called with the V1 SDK shape and a bound receiver", async () => {
   const { calls } = await usageResults()
   assert.ok(calls.length >= 5, "collector should call session.messages per idle")
-  const sids = ["ses_usage_basic", "ses_usage_multi", "ses_usage_empty", "ses_usage_undef", "ses_usage_throw", "ses_usage_kimi", "ses_usage_claude", "ses_usage_gemini", "ses_usage_qwen", "ses_usage_grok"]
+  const sids = ["ses_usage_basic", "ses_usage_multi", "ses_usage_empty", "ses_usage_undef", "ses_usage_throw", "ses_usage_kimi", "ses_usage_claude", "ses_usage_gemini", "ses_usage_qwen", "ses_usage_grok", "ses_usage_muse"]
   for (const c of calls) {
     // exactly { path: { id } }, nothing else
     assert.deepEqual(Object.keys(c.opts), ["path"])
@@ -3075,6 +3086,25 @@ test("v0.5.x: Grok uses the generic cache-read accounting path (no fabricated wr
   assert.equal(u.provider, "xai")
   assert.equal(u.model, "grok-4.7")
   assert.equal(u.policy, "grok")
+  assert.equal(u.promptTokens, undefined)
+  assert.equal(u.cacheHitRate, undefined)
+})
+
+test("v0.5.x: Meta Muse uses the generic cache-read accounting path (no fabricated write)", async () => {
+  // Meta reports cached tokens only as reads (Responses
+  // usage.input_tokens_details.cached_tokens). OpenCode normalizes that into
+  // tokens.cache.read; CacheEngine must not invent a write bucket.
+  const { records } = await usageResults()
+  const usage = records.filter((r) => r.kind === "usage" && r.sid === "ses_usage_muse")
+  assert.equal(usage.length, 1)
+  const u = usage[0]
+  assert.equal(u.read, 150)
+  assert.equal(u.write, 0)
+  assert.equal(u.input, 40)
+  assert.equal(u.messages, 1)
+  assert.equal(u.provider, "meta")
+  assert.equal(u.model, "muse-spark-1.3")
+  assert.equal(u.policy, "muse")
   assert.equal(u.promptTokens, undefined)
   assert.equal(u.cacheHitRate, undefined)
 })
@@ -4185,6 +4215,13 @@ async function runClaudeRouteProbe(configPolicies) {
       grokGateway: { providerID: "some-gateway", id: "grok-4.7", api: { id: "grok-4.7", npm: "@ai-sdk/openai-compatible" } },
       grokImage: { providerID: "xai", id: "grok-imagine-image", api: { id: "grok-imagine-image", npm: "@ai-sdk/xai" } },
       grokXaiUnknownTransport: { providerID: "xai", id: "grok-4.7", api: { id: "grok-4.7" } },
+      museDirect: { providerID: "meta", id: "muse-spark-1.3", api: { id: "muse-spark-1.3", npm: "@ai-sdk/openai" } },
+      museGo: { providerID: "opencode-go", id: "muse-spark-1.3-contributor", api: { id: "muse-spark-1.3-contributor", npm: "@ai-sdk/openai" } },
+      museZen: { providerID: "opencode", id: "muse-spark-1.3-contributor-free", api: { id: "muse-spark-1.3-contributor-free", npm: "@ai-sdk/openai" } },
+      museOpenrouter: { providerID: "openrouter", id: "meta/muse-spark-1.3", api: { id: "meta/muse-spark-1.3", npm: "@openrouter/ai-sdk-provider" } },
+      museGateway: { providerID: "some-gateway", id: "muse-spark-1.3", api: { id: "muse-spark-1.3", npm: "@ai-sdk/openai-compatible" } },
+      museGlimmer: { providerID: "deepinfra", id: "muse-glimmer-30b", api: { id: "muse-glimmer-30b", npm: "@ai-sdk/openai-compatible" } },
+      museMetaUnknownTransport: { providerID: "meta", id: "muse-spark-1.3", api: { id: "muse-spark-1.3", npm: "@ai-sdk/openai-compatible" } },
     };
     const preOpts = { promptCacheKey: "user-key", cache_control: { type: "ephemeral" }, temperature: 0.3 };
     const preHdrs = { "x-session-id": "user-sess", "x-custom": "keep" };
@@ -4453,4 +4490,106 @@ test("v0.5.x: disabling Grok leaves every route unchanged and emits no affinity 
     assert.deepEqual(out[name].headers, out.preHdrs, `${name}: headers preserved`)
   }
   assert.equal(out.metrics.filter((r) => r.reason === "grok_affinity").length, 0)
+})
+
+// ===========================================================================
+// v0.5.x Meta Muse audit: caching is automatic positional prefix caching and
+// Meta reports cache reads only. The optional `prompt_cache_key` is a
+// routing/affinity hint that Meta says must be application-stable and NOT
+// per-session, and `prompt_cache_retention` (in_memory/24h) is a request-level
+// hint with memory/privacy implications. CacheEngine therefore never mutates a
+// Muse request; it classifies, accounts, and observes the route. (RF-PRV-008 /
+// RF-OC-014)
+// ===========================================================================
+
+test("v0.5.x: isMuseModel matches Meta Muse Spark ids and rejects lookalikes/glimmer", () => {
+  const positives = [
+    "muse-spark-1.3", "muse-spark-1.3-contributor", "muse-spark-1.2",
+    "muse-spark-1.2-contributor", "muse-spark-1.1", "muse-spark-1.3-contributor-free",
+    "muse-spark-1-3", "muse-spark-1.3-20260902",
+    "meta/muse-spark-1.3", "meta/muse-spark-1.3-20260902",
+    "meta-contributor/muse-spark-1.2-contributor",
+    "opencode-go/muse-spark-1.3-contributor", "some-image-co/muse-spark-1.3",
+  ]
+  for (const id of positives) assert.equal(isMuseModel(id), true, `${id} should match`)
+  const negatives = [
+    "muse-glimmer-30b", "deepinfra/muse-glimmer-30b", "meta/muse-image-1.0",
+    "my-muse-spark-1.3", "museum", "muse-spark-", "muse-spark-1.3.", "muse",
+    "mistral-large-latest", "grok-4.7", "",
+  ]
+  for (const id of negatives) assert.equal(isMuseModel(id), false, `${id} must not match`)
+})
+
+test("v0.5.x: Muse resolves to the muse family with harness-owned affinity/retention", () => {
+  const cases = [
+    ["meta", "muse-spark-1.3", "@ai-sdk/openai"],
+    ["openrouter", "meta/muse-spark-1.3", "@openrouter/ai-sdk-provider"],
+    ["opencode-go", "muse-spark-1.3-contributor", "@ai-sdk/openai"],
+    ["opencode", "muse-spark-1.3-contributor-free", "@ai-sdk/openai"],
+    ["some-gateway", "muse-spark-1.3", "@ai-sdk/openai-compatible"],
+  ]
+  for (const [provider, id, npm] of cases) {
+    const model = { providerID: provider, id, api: { id, npm } }
+    const caps = resolveRuntimePolicy(model)
+    assert.equal(caps.policy, "muse", `${provider}/${id}: policy`)
+    assert.equal(caps.isNeutral, false)
+    assert.equal(caps.museCacheAffinity, true, `${provider}/${id}: museCacheAffinity`)
+    assert.equal(caps.museRouteAware, true, `${provider}/${id}: museRouteAware`)
+    assert.equal(caps.museCacheRetention, "harness-owned", `${provider}/${id}: museCacheRetention`)
+    // Muse must not overload the GPT / OpenRouter / env-relocation capabilities.
+    assert.equal(caps.gptCacheMetadata, false)
+    assert.equal(caps.openRouterAffinity, false)
+    assert.equal(caps.envRelocation, null)
+    assert.equal(caps.cacheRatio, null)
+    assert.equal(caps.providerChange, null)
+    assert.equal(caps.thinkingIntegrity, false)
+    assert.equal(detectPolicy(model), POLICY_MUSE, `${provider}/${id}: detectPolicy`)
+  }
+})
+
+test("v0.5.x: CacheEngine is passive for Muse on every access route (prefix preserved)", async () => {
+  const out = await claudeRouteResults()
+  for (const name of ["museDirect", "museGo", "museZen", "museOpenrouter", "museGateway", "museGlimmer", "museMetaUnknownTransport"]) {
+    assert.deepEqual(out[name].options, out.preOpts, `${name}: options must be preserved`)
+    assert.equal(out[name].systemChanged, false, `${name}: system must be unchanged`)
+    assert.deepEqual(out[name].headers, out.preHdrs, `${name}: headers must be preserved`)
+    assert.deepEqual(out[name].addedCacheKeys, [], `${name}: must add no cache field`)
+  }
+})
+
+test("v0.5.x: Muse affinity/retention observation is metadata-only and route-aware", async () => {
+  const out = await claudeRouteResults()
+  const bySid = new Map(out.metrics.filter((r) => r.reason === "muse_affinity").map((r) => [r.sid, r]))
+  const direct = bySid.get("ses_route_museDirect")
+  assert.ok(direct, "direct Meta muse_affinity record expected")
+  assert.equal(direct.policy, "muse")
+  assert.equal(direct.provider, "meta")
+  assert.equal(direct.model, "muse-spark-1.3")
+  assert.equal(direct.affinitySource, "preexisting") // the probe seeds promptCacheKey
+  assert.equal(direct.retentionSource, "none") // the probe seeds no promptCacheRetention
+  for (const sid of ["ses_route_museGo", "ses_route_museZen", "ses_route_museOpenrouter", "ses_route_museGateway"]) {
+    const r = bySid.get(sid)
+    assert.ok(r, `${sid}: muse_affinity record expected`)
+    assert.equal(r.affinitySource, "not_direct_meta", `${sid}: affinitySource`)
+    assert.equal(r.retentionSource, "n/a", `${sid}: retentionSource`)
+  }
+  // A `meta` provider on an unverified transport fails closed.
+  const unverified = bySid.get("ses_route_museMetaUnknownTransport")
+  assert.ok(unverified, "unverified meta transport record expected")
+  assert.equal(unverified.affinitySource, "unknown_provider")
+  assert.equal(unverified.retentionSource, "n/a")
+  // The open-weight glimmer family is neutral: no Muse affinity record.
+  assert.equal(bySid.has("ses_route_museGlimmer"), false)
+  // The raw key value must never be recorded.
+  assert.ok(!JSON.stringify(out.metrics).includes("user-key"), "the affinity value must not be recorded")
+})
+
+test("v0.5.x: disabling Muse leaves every route unchanged and emits no affinity telemetry", async () => {
+  const out = await runClaudeRouteProbe({ muse: { enabled: false } })
+  for (const name of ["museDirect", "museGo", "museZen", "museOpenrouter", "museGateway"]) {
+    assert.deepEqual(out[name].options, out.preOpts, `${name}: options preserved`)
+    assert.equal(out[name].systemChanged, false, `${name}: no relocation`)
+    assert.deepEqual(out[name].headers, out.preHdrs, `${name}: headers preserved`)
+  }
+  assert.equal(out.metrics.filter((r) => r.reason === "muse_affinity").length, 0)
 })
