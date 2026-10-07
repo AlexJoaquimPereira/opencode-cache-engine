@@ -478,6 +478,58 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   it is a routing/affinity hint supplied on the harness side, not an
   OpenAI-style `prompt_cache_options` policy (do not reuse GPT semantics).
 
+### RF-OC-014 — OpenCode 1.18.34 drives Muse via Chat Completions (direct Meta) / Responses (Zen, Go) and pre-sets `promptCacheKey = sessionID`
+
+- Status: current
+- Verified: 2026-10-06
+- Area: opencode-runtime
+- Fact: The bundled OpenCode 1.18.34 catalog defines direct Meta as
+  `meta: { id: "meta", env: ["META_MODEL_API_KEY"], npm: "@ai-sdk/openai",
+  api: "https://api.meta.ai/v1", name: "Meta" }` with models `muse-spark-1.3`,
+  `muse-spark-1.1`, `muse-spark-1.2`, `muse-spark-1.2-contributor`,
+  `muse-spark-1.3-contributor`. There is **no provider-specific `language`
+  effect for `meta`** (unlike `openai` → `sdk.responses(...)` and `xai` →
+  `sdk.responses(...)`); the AISDK language runner falls back to
+  `h.language ?? m.languageModel(d.api.id)`, so direct Meta is driven through the
+  **Chat Completions** model of `@ai-sdk/openai`. OpenCode's `options()` sets
+  `providerOptions.promptCacheKey = sessionID` for `@ai-sdk/openai` (the branch
+  covering `@ai-sdk/openai`/`@ai-sdk/azure`/`@ai-sdk/xai`/`@ai-sdk/mistral`/
+  venice when `setCacheKey !== false`), and also sets `reasoningSummary:"auto"`
+  plus `include` when `providerID === "meta"`. The OpenAI **Chat Completions**
+  serializer emits the wire field `prompt_cache_key` from `promptCacheKey` (and
+  also supports `prompt_cache_options` and `prompt_cache_retention`). For
+  `providerID` starting with `opencode` (Zen/Go) OpenCode sets
+  `promptCacheKey = sessionID`, `include`, and `reasoningSummary:"auto"`; per
+  RF-OC-011 Zen/Go serve Muse via `@ai-sdk/openai` on `/zen[/go]/v1/responses`,
+  and Go additionally asks clients to send a stable `x-opencode-session`.
+  OpenCode does **not** expose or set `prompt_cache_retention`. Consequence:
+  CacheEngine must preserve the harness `promptCacheKey` and must not inject a
+  key or retention value. Meta documents that `prompt_cache_key` should be an
+  application-stable value and **not** a per-session value (RF-PRV-008), so the
+  harness value on these routes is plausible-per-session and CacheEngine must
+  not "fix" it by overwriting.
+- Evidence: [O]
+- Sources: local `opencode@1.18.34` binary (`~/.opencode/bin/opencode`),
+  inspected 2026-10-06: the `meta` provider catalog entry; the
+  `AISDK.language` fallback `h.language??m.languageModel(d.api.id)`; the
+  `options()` `promptCacheKey=$.sessionID` branch and the providerID-startsWith
+  `opencode` branch; the OpenAI Chat serializer
+  `...prompt_cache_key:M.promptCacheKey,prompt_cache_options:...`; and the
+  `prompt_cache_retention` serializers. Complements RF-OC-011 (Go/Zen catalogs)
+  and RF-OC-013 (xAI).
+- Justifies: the passive `meta.muse` policy in `src/cache-policy-core.mjs`; the
+  `muse_affinity` telemetry `affinitySource`; the Muse route tests.
+- Version context: OpenCode 1.18.34 (bundled `@ai-sdk/openai`).
+- Re-verify when: OpenCode adds a `meta` provider language effect (chat vs
+  responses), changes the `options()` `promptCacheKey` branch, or the bundled
+  `@ai-sdk/openai` serializers change.
+- Superseded by: null
+- Notes: Direct Meta being Chat Completions is an inference from the absent
+  provider effect + the runner fallback ([O]/[I]); the wire behavior of
+  `promptCacheKey` on Chat Completions is [O] from the serializer. Do not treat
+  the OpenCode-supplied key as authoritative cache guidance for Meta — Meta's own
+  docs say a per-session key lowers hit rate.
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
@@ -1102,3 +1154,121 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   is not specified"; OpenCode sets `store: false` for xAI (RF-OC-013), so whether
   reasoning-state continuation survives on that path is unverified ([U],
   OpenCode-owned, outside CacheEngine's reach).
+
+### RF-PRV-008 — Meta Muse Spark caching is automatic positional prefix caching with an app-stable routing key
+
+- Status: current
+- Verified: 2026-10-06
+- Area: provider-mechanics
+- Fact: Meta's "Prompt Caching" for Muse is **automatic/implicit**: "Meta Model
+  API caches the stable prefix automatically — no flag or key to manage"; "It
+  runs on every request with no action from you. You do not pass a cache key, set
+  a flag, or mark breakpoints." There is **no explicit breakpoint / `cache_control`
+  mechanism**. The cache is **positional prefix** matching: "it compares the start
+  of your tokenized prompt to recently cached key-value (KV) state. Where the
+  leading tokens match, that prefix is served from cache and only the tokens after
+  the first difference are computed from scratch." Participating content: stable
+  **system prompt/instructions**, **few-shot examples**, **conversation history**,
+  and **tool definitions** ("tool definitions are computed once and reused across
+  turns"). Breaking content: any difference from the cached prefix, e.g. "an
+  edited system prompt" or volatile content early in the prompt; reordering/
+  removing earlier messages follows from the prefix rule. Whether
+  `temperature`/`top_p`/`max_tokens`/`response_format`/`safety_identifier`,
+  tool-schema edits, or multimodal image/file/video items break the prefix is
+  **not documented [U]** (params that are not tokenized prompt text should not
+  [I]; tool schemas should [I]). Caching is independent of the Responses `store`
+  parameter.
+
+  Request inputs (both **optional**):
+  - **`prompt_cache_key`** — top-level field, accepted on **both Responses and
+    Chat Completions**, replacing the deprecated `user` field. It is a
+    **routing/affinity** hint, **not** eligibility: "Requests that share a key
+    route together, so a request is more likely to land on a backend that already
+    holds its prefix." It **must be stable**: "Pick a stable string that
+    identifies the shared prefix, such as an application name or use case, **not
+    a per-user or per-request value**"; "Don't over-partition: unique keys per
+    user or per session lower hit rates." Examples: `"my-app-system-prompt"`,
+    `"customer-support-agent"`, `"code-review-v2"`. No length/charset cap is
+    documented **[U]**. The deprecated `user` field is superseded by
+    **`safety_identifier`** (abuse attribution) and `prompt_cache_key` (caching);
+    `safety_identifier` takes precedence when both are sent. Neither `user` nor
+    `safety_identifier` is a cache control.
+  - **`prompt_cache_retention`** — Responses-framed and listed in the Chat
+    Completions parameter table; values **`"in_memory"`** (default: "Keep the
+    cache in memory") and **`"24h"`** ("Request extended retention … up to 24
+    hours"). It is a **hint, not a guarantee**: "Actual retention is managed
+    server-side based on available resources, and the server may evict entries
+    early under load." No documented effect on pricing/eligibility/routing **[U]**.
+
+  Lifecycle: no minimum is documented **[U]**; `in_memory` has no numeric
+  lifetime and is "evicted under pressure or after inactivity"; `24h` requests up
+  to 24 hours but is best-effort; entries are **backend-local** (requests sharing
+  a key "route together … land on a backend that already holds its prefix").
+  Whether entries are shared across users, or scoped per account/model, is **[U]**;
+  partitioning by `prompt_cache_key` + backend locality is **[I]**.
+
+  Economics (Meta Model API, per 1M tokens): **standard** cached input **$0.15**
+  (input $1.25, output $4.25); **contributor** cached input **$0.002** (input
+  $0.10, output $0.20). **No cache-write price and no write-billing statement**;
+  no separate retention cost; "no long-context premium."
+
+  Usage: Chat Completions `usage.prompt_tokens_details.cached_tokens`; Responses
+  `usage.input_tokens_details.cached_tokens`; Messages (Anthropic-compatible)
+  `usage.cache_read_input_tokens`. **No cache-write/creation field exists** on any
+  Meta surface.
+
+  Endpoints: base `https://api.meta.ai/v1`; `POST /v1/chat/completions`,
+  `POST /v1/responses` (+ `/v1/responses/{id}`, `/cancel`, `/compact`), and the
+  Anthropic-compatible `POST /v1/messages` (+ `/count_tokens`). Auth is
+  `Authorization: Bearer $MODEL_API_KEY`. Muse Code offers a subscription via
+  Meta Account, but **no OAuth API route is documented**.
+
+  Reasoning/state: Chat Completions **cannot** carry reasoning across turns for
+  external keys (`reasoning_content` is redacted to empty); Responses carries it
+  via `previous_response_id` or stateless encrypted replay
+  (`include:["reasoning.encrypted_content"]`, `store:false`). Caching is
+  **independent of `store`**; with `previous_response_id` the server reconstructs
+  prior turns and a follow-up reports only the new turn's tokens.
+
+  Model scope: `muse-spark-1.3`, `muse-spark-1.3-contributor`, `muse-spark-1.2`,
+  `muse-spark-1.2-contributor`, `muse-spark-1.1`. `muse-glimmer-*` is
+  open-weight/self-hosted and "isn't served on any Meta Model API endpoint";
+  caching for it is not documented → excluded.
+
+  OpenRouter: models `meta/muse-spark-1.3` and `meta/muse-spark-1.2`, single
+  provider **Meta**; `input_cache_read` **$0.15**/M, **no cache-write price**;
+  **`supports_implicit_caching: false`**; `supported_parameters` does **not**
+  include `prompt_cache_key`; only Chat Completions is confirmed for Muse; no
+  Muse-specific section in OpenRouter's caching doc. OpenRouter's generic sticky
+  routing (`session_id`/`x-session-id`, ≤256 chars) applies but is not documented
+  as a Muse cache control.
+- Evidence: [D] (Meta first-party docs; OpenRouter docs/API) / [U] (the unknowns
+  above)
+- Sources: https://dev.meta.ai/docs , .../docs/prompt-caching , .../docs/models ,
+  .../docs/pricing-rate-limits , .../docs/protocols ,
+  .../docs/protocols/responses , .../docs/protocols/chat-completions ,
+  .../docs/protocols/messages , .../docs/reasoning ,
+  .../docs/muse-code/subscriptions ; https://openrouter.ai/api/v1/models/meta/muse-spark-1.3/endpoints ;
+  OpenRouter Prompt Caching. All accessed 2026-10-06.
+- Justifies: the `meta.muse-cache` baseline (`automatic:true`,
+  `defaultMode:"implicit"`, `supportsExplicitBreakpoints:false`,
+  `minCacheTokens:null`, `ttl:null`, `cacheWriteBilled:false`, usage fields) and
+  the passive `meta.muse` policy; **no TTL, minimum, or write token is invented**,
+  and `prompt_cache_retention` is represented as harness-owned metadata rather
+  than an active field. Meta's app-stable (non-per-session) key rule is why
+  CacheEngine never synthesizes a `prompt_cache_key`.
+- Version context: Meta docs fetched 2026-10-06; OpenCode 1.18.34.
+- Unknowns: minimum cacheable prefix; `in_memory` lifetime; whether `24h` is a
+  max request or a guarantee (docs say hint); eviction specifics; cross-user/
+  account/model cache scope; key value length/charset; whether non-text params/
+  modality break the prefix; whether `prompt_cache_retention` affects pricing;
+  the subscription OAuth endpoint.
+- Re-verify when: Meta changes the caching mechanism, the `prompt_cache_key` /
+  `prompt_cache_retention` semantics, the usage fields, or the model scope; or
+  adds an explicit breakpoint/TTL/minimum or a write-accounting field.
+- Superseded by: null
+- Notes: `prompt_cache_key` is a routing/affinity hint, not an OpenAI-style
+  `prompt_cache_options` policy — do not reuse GPT cache semantics, and never
+  generate a per-session key (Meta states it lowers hit rates). `24h` retention is
+  a request-level policy with memory/privacy implications and is left
+  harness/user-owned.
