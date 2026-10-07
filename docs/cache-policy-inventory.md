@@ -533,6 +533,38 @@ OpenCode 1.18.34 routing evidence (RF-OC-013). Tags per the legend.
 
 ---
 
+## 8c. Meta Muse (Muse Spark 1.3 / 1.2 / 1.1)
+
+Source: Meta Model API docs (`dev.meta.ai/docs`, *Prompt Caching*, *Models*,
+*Pricing*, *Protocols*, *Reasoning*), consulted 2026-10-06 (see RF-PRV-008), plus
+the OpenCode 1.18.34 runtime (RF-OC-014). Tags per the legend.
+
+| # | Aspect | Documented | Tag |
+| --- | --- | --- | --- |
+| 1 | Model scope | `muse-spark-1.3`, `muse-spark-1.3-contributor`, `muse-spark-1.2`, `muse-spark-1.2-contributor`, `muse-spark-1.1`. `muse-glimmer-*` is open-weight/self-hosted and not served on the Model API (excluded). | [D] |
+| 2 | Mechanism | **Automatic/implicit positional prefix** caching: "no flag or key to manage", no breakpoints; matches the start of the tokenized prompt against cached KV state. System/instructions, few-shot, conversation history, and **tool definitions** participate; editing/reordering earlier content (e.g. the system prompt) breaks the prefix. | [D] |
+| 3 | `prompt_cache_key` | Top-level field on **both Chat Completions and Responses**; replaces the deprecated `user` field. Optional **routing/affinity** hint, **not** eligibility. Must be **application-stable**, explicitly **not per-user/per-session** (unique keys lower hit rates). No length/charset cap documented. | [D]/[U] |
+| 4 | `prompt_cache_retention` | Responses-framed and listed for Chat Completions; values `"in_memory"` (default) / `"24h"`. A **hint, not a guarantee** (server-side eviction). No documented pricing/routing effect. | [D]/[U] |
+| 5 | Lifecycle | No minimum documented; `in_memory` has no numeric lifetime; `24h` requests up to 24h best-effort; entries are backend-local; partitioning by key + locality. Cross-user/account/model scope unknown. | [D]/[U] |
+| 6 | Economics | Standard cached input **$0.15**/M (input $1.25, output $4.25); contributor cached **$0.002**/M (input $0.10, output $0.20). **No cache-write price/billing**; no long-context premium. | [D] |
+| 7 | Usage fields | Chat `usage.prompt_tokens_details.cached_tokens`; Responses `usage.input_tokens_details.cached_tokens`; Messages `usage.cache_read_input_tokens`. **No write field.** | [D] |
+| 8 | Reasoning | Chat cannot carry reasoning for external keys; Responses via `previous_response_id` or encrypted replay. Caching is independent of `store`. | [D] |
+
+### 8c-i. Route-specific Muse caching contracts
+
+| Route | Endpoint / SDK | Cache mechanism | Affinity | Retention | CacheEngine action | Evidence |
+| --- | --- | --- | --- | --- | --- | --- |
+| Direct Meta Chat Completions | `https://api.meta.ai/v1/chat/completions`, `@ai-sdk/openai` | automatic positional prefix | `prompt_cache_key` (top-level); OpenCode pre-sets `promptCacheKey = sessionID` | `prompt_cache_retention` (`in_memory`/`24h`), SDK-serializable, not set by OpenCode | passive: preserve the harness key; inject no key/retention | [D] RF-PRV-008, [O] RF-OC-014 |
+| Direct Meta Responses | `https://api.meta.ai/v1/responses`, `@ai-sdk/openai` | automatic positional prefix | `prompt_cache_key` | `prompt_cache_retention` | passive | [D] RF-PRV-008 |
+| Direct Meta Messages | `https://api.meta.ai/v1/messages` | automatic | none documented | none documented | passive | [D] RF-PRV-008 |
+| OpenCode Go | `https://opencode.ai/zen/go/v1/responses`, `@ai-sdk/openai` | OpenCode-owned routing; `x-opencode-session` | OpenCode pre-sets `promptCacheKey = sessionID` | not exposed | passive: not direct Meta; do not duplicate the Go session header | [D]/[O] RF-OC-011, RF-OC-014 |
+| OpenCode Zen | `https://opencode.ai/zen/v1/responses`, `@ai-sdk/openai` | OpenCode-owned | OpenCode pre-sets `promptCacheKey = sessionID` | not exposed | passive: not direct Meta | [D]/[O] RF-OC-014 |
+| OpenRouter | `https://openrouter.ai/api/v1/chat/completions`; `meta/muse-spark-1.3` | OpenRouter sticky routing; `supports_implicit_caching:false`; `prompt_cache_key` not in `supported_parameters` | OpenRouter `session_id`/`x-session-id` (generic, not Muse-documented) | none documented | passive: no xAI-style `x-session-id` injection; no Meta field injection | [D] RF-PRV-008, RF-OR-001 |
+| Meta subscription (Muse Code) | Meta Account subscription; **no OAuth API route documented** | n/a | n/a | n/a | not implemented | [U] RF-PRV-008 |
+| Generic OpenAI-compatible gateway | arbitrary | unknown | unknown | unknown | passive (fail closed) | [U] RF-PRV-008 |
+
+---
+
 ## 9. OpenRouter transport facts (routing only, not model semantics)
 
 These are OpenRouter routing/transport facts. They are **not** evidence of any
@@ -630,6 +662,8 @@ made here); **hold** = do not inherit without first-party evidence.
 | Alibaba | look-alikes/utilities: `qwen3-embedding-*`, `qwen3-reranker`, `myqwen-max`, `qwen3.5.1`, `qwen` (bare) | Not a Qwen chat family or malformed version | neutral | hold | n/a | High | Alibaba *Models*; local matcher tests | 2026-10-05 |
 | xAI | Grok current language ids: `grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-0309-reasoning`/`-non-reasoning`, `grok-4.20-multi-agent-0309`, `grok-build-0.1` (bare, `xai/`/`x-ai/`-prefixed, or gateway) | Provider-managed **automatic** prefix caching, server-local/best-effort; **no** explicit breakpoint, TTL, or minimum; affinity `x-grok-conv-id` (Chat) / `prompt_cache_key` (Responses); usage `input_tokens_details.cached_tokens` (read only, no write field) | Passive Grok policy: no mutation — OpenCode supplies `providerOptions.xai.promptCacheKey` on the direct Responses route; generic `read/(read+write)` accounting; no affinity header | keep | none — passive only (harness owns affinity) | High (docs + OpenCode runtime) | xAI *Prompt Caching*; OpenCode binary @ v1.18.34 | 2026-10-06 |
 | xAI | look-alikes/utilities: `grok-imagine-image`, `grok-imagine-video`, `grok-voice-*`, `grok-3-embedding`, `mygrok-4`, `grokster-4`, `grok-4..7`, `grok` (bare) | Not a Grok language model or malformed version | neutral | hold | n/a | High | xAI *Models*; local matcher tests | 2026-10-06 |
+| Meta | Muse Spark current ids: `muse-spark-1.3`, `muse-spark-1.3-contributor`, `muse-spark-1.2`, `muse-spark-1.2-contributor`, `muse-spark-1.1` (bare, `meta/`/`meta-contributor/`-prefixed, or gateway) | Provider-managed **automatic positional prefix** caching; no explicit breakpoint/TTL/min; optional `prompt_cache_key` (Chat + Responses; app-stable, **not** per-session) and Responses `prompt_cache_retention` (`in_memory`/`24h`, a hint); usage `prompt_tokens_details.cached_tokens` / `input_tokens_details.cached_tokens` / `cache_read_input_tokens` (read only, no write field) | Passive Muse policy: no mutation — OpenCode pre-sets `promptCacheKey = sessionID` on direct Meta/Zen/Go and CacheEngine preserves it; generic `read/(read+write)` accounting; retention left harness/user-owned | keep | none — passive only (affinity/retention are harness/provider-owned) | High (docs + OpenCode runtime) | Meta *Prompt Caching*; OpenCode binary @ v1.18.34 | 2026-10-06 |
+| Meta | `muse-glimmer-30b` and look-alikes/utilities: `my-muse-spark-1.3`, `museum`, `muse-spark-`, malformed versions | Open-weight/self-hosted (not on the Meta Model API) or not a Muse Spark id | neutral | hold | n/a | High | Meta *Models*; local matcher tests | 2026-10-06 |
 
 ---
 
