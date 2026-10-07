@@ -223,6 +223,33 @@ export function isGrokModel(slug) {
   return false
 }
 
+// Meta "Muse Spark" text families (provider-managed automatic positional prefix
+// caching; the only request inputs are the optional routing hint
+// `prompt_cache_key` and the Responses retention hint `prompt_cache_retention`).
+// CacheEngine is PASSIVE: Meta's own guidance is that `prompt_cache_key` must be
+// an application/use-case-stable value and explicitly NOT a per-user/per-session
+// value, so CacheEngine must never synthesize one (RF-PRV-008/RF-OC-014).
+// Boundary-anchored: matches `muse-spark-<version>` with optional
+// `-contributor`/`-free` suffixes, bare or gateway-prefixed (`meta/...`,
+// `meta-contributor/...`). The open-weight `muse-glimmer-*` family is not served
+// on the Meta Model API and its cache semantics are undocumented, so it stays
+// neutral; image/video/voice products, lookalikes (`my-muse-spark-1.3`,
+// `museum`), and malformed ids are excluded.
+export function isMuseModel(slug) {
+  const text = String(slug ?? "").toLowerCase()
+  if (!text) return false
+  const re = /(?:^|[\/.])muse-spark-([a-z0-9][a-z0-9.-]*)/g
+  let m
+  while ((m = re.exec(text)) !== null) {
+    const tail = m[1]
+    // Version-typed ids: muse-spark-1, muse-spark-1.3, muse-spark-1-3,
+    // muse-spark-1.3-20260902, muse-spark-1.3-contributor,
+    // muse-spark-1.3-contributor-free. Digit-led, no empty/duplicate separators.
+    if (/^\d+(?:[.-]\d+)*(?:-(?:contributor|free))*$/.test(tail)) return true
+  }
+  return false
+}
+
 // Candidate ids for exact/alias lookup. Includes the raw apiID/modelID, the
 // lower-cased forms, and a single stripped transport/vendor prefix
 // (e.g. "openai/gpt-5.6-luna" -> "gpt-5.6-luna", "xiaomi/mimo-v2.6-flash" ->
@@ -403,6 +430,29 @@ export const BASELINES = {
     ],
     inventoryRef: "§8b xAI Grok",
   },
+  "meta.muse-cache": {
+    id: "meta.muse-cache",
+    creator: "meta",
+    appliesTo:
+      "Meta Muse Spark text models (provider-managed automatic positional prefix caching; routing/retention hints)",
+    automatic: true,
+    defaultMode: "implicit",
+    // Meta documents no explicit breakpoint mechanism, only the optional
+    // `prompt_cache_key` routing hint and the `prompt_cache_retention` hint.
+    supportsExplicitBreakpoints: false,
+    minCacheTokens: null,
+    // Retention ("in_memory" default / "24h") is a best-effort hint, not a TTL.
+    ttl: null,
+    cacheKeyOptional: true,
+    // Meta reports only cached reads on every surface; there is no write field.
+    cacheWriteBilled: false,
+    usageFields: [
+      "input_tokens_details.cached_tokens", // Responses
+      "prompt_tokens_details.cached_tokens", // Chat Completions
+      "cache_read_input_tokens", // Messages (Anthropic-compatible)
+    ],
+    inventoryRef: "§8c Meta Muse",
+  },
   "neutral.none": {
     id: "neutral.none",
     creator: "unknown",
@@ -501,6 +551,12 @@ const NEUTRAL_RUNTIME = Object.freeze({
   // route-aware, and CacheEngine never injects a key or header for it.
   grokCacheAffinity: false,
   grokRouteAware: false,
+  // Muse capability flags mirror Grok's separation: affinity/retention are
+  // provider/harness-owned and route-aware, and CacheEngine mutates nothing.
+  // `museCacheRetention` is descriptive ("harness-owned"), not an active field.
+  museCacheAffinity: false,
+  museRouteAware: false,
+  museCacheRetention: null,
 })
 
 const rt = (policy, overrides = {}) => ({
@@ -798,6 +854,29 @@ export const POLICY_REGISTRY = [
     boundary: "xAI / Grok language models (all transports)",
     note: "Grok prompt caching is automatic/provider-managed on all grok language models and xAI reports only cached reads (no write/creation field, so no write token is ever fabricated). CacheEngine never mutates the request. OpenCode 1.18.34 routes direct xAI (providerID xai, npm @ai-sdk/xai) through the Responses API and pre-sets providerOptions.xai.promptCacheKey = sessionID, serialized to wire prompt_cache_key by @ai-sdk/xai — so the harness already provides the stable conversation affinity and CacheEngine must not overwrite it. The Chat Completions header x-grok-conv-id is not reachable in this runtime. OpenCode Go/Zen/OpenRouter and generic gateways are not direct xAI and stay passive. Auth method (API key vs SuperGrok/X Premium) is not a policy distinction. No TTL or minimum is documented, so none is invented. Verified 2026-10-06 (RF-PRV-007 / RF-OC-013).",
     inventoryRef: "§8b xAI Grok",
+  },
+  {
+    // v0.5.x: Meta / Muse Spark. Caching is automatic positional prefix caching
+    // with no explicit breakpoints. The only request inputs are the optional
+    // `prompt_cache_key` routing hint and the `prompt_cache_retention` hint, both
+    // provider/harness-owned: Meta documents that the key must be an
+    // application-stable value and NOT a per-user/per-session value, so
+    // CacheEngine must never synthesize one, and retention is a request-level
+    // policy with memory/privacy implications, not a CacheEngine optimization.
+    // CacheEngine is PASSIVE (classification + accounting + route observation).
+    // See inventory §8c and RF-PRV-008 / RF-OC-014.
+    id: "meta.muse",
+    creator: "meta",
+    family: "muse",
+    kind: "family",
+    predicate: isMuseModel,
+    baseline: "meta.muse-cache",
+    overlays: [],
+    legacy: true,
+    runtime: rt("muse", { museCacheAffinity: true, museRouteAware: true, museCacheRetention: "harness-owned" }),
+    boundary: "Meta Muse Spark (all transports)",
+    note: "Meta prompt caching is automatic/provider-managed positional prefix caching on all Muse Spark text models; Meta reports only cached reads (no write/creation field, so no write token is fabricated). CacheEngine never mutates the request. Meta documents `prompt_cache_key` (Chat + Responses) as a routing/affinity hint that MUST be stable per application/use-case and explicitly NOT per-user/per-session (unique keys lower hit rates), so CacheEngine never injects or derives one. `prompt_cache_retention` (`in_memory` default / `24h`) is a best-effort request-level hint with memory/privacy implications and is left harness/user-owned. On direct Meta (providerID meta, npm @ai-sdk/openai) OpenCode already sets promptCacheKey = sessionID (per-session), which CacheEngine preserves rather than overwriting; Go/Zen/OpenRouter/gateways stay passive. Verified 2026-10-06 (RF-PRV-008 / RF-OC-014).",
+    inventoryRef: "§8c Meta Muse",
   },
 ]
 
