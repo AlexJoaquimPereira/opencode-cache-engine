@@ -122,6 +122,9 @@ type PolicyRuntime = {
   openRouterAffinity: boolean
   grokCacheAffinity: boolean
   grokRouteAware: boolean
+  museCacheAffinity: boolean
+  museRouteAware: boolean
+  museCacheRetention: string | null
 }
 
 type ModelInfo = { family: string; providerID: string; modelID: string; caps: PolicyRuntime }
@@ -730,6 +733,48 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
             model: liveModelID || null,
             affinitySource,
             note: "xAI affinity is provider/harness-managed; CacheEngine does not mutate",
+          })
+          return
+        }
+
+        // ---- Meta / Muse: route observation (no mutation) --------------------
+        // Meta caching is automatic positional prefix caching. Meta documents
+        // that `prompt_cache_key` must be an application-stable value and NOT a
+        // per-user/per-session value, so CacheEngine never injects or derives
+        // one, and `prompt_cache_retention` is a request-level policy with
+        // memory/privacy implications that stays harness/user-owned. We only
+        // record which of those the exact route already carries.
+        if (caps?.museCacheAffinity === true && caps?.museRouteAware === true && policyEnabled(cfg, caps.policy) && info) {
+          const npm = String((input.model as unknown as ChatParamsModel)?.api?.npm ?? "")
+          const provider = liveProviderID
+          const lowerProvider = provider.toLowerCase()
+          const isMetaProvider = lowerProvider === "meta"
+          // Fail closed: an unverified `meta` transport (e.g. a user-defined
+          // provider with npm @ai-sdk/openai-compatible) is treated as unknown
+          // rather than as verified direct Meta, matching the Grok branch.
+          const isDirectMeta = isMetaProvider && npm === "@ai-sdk/openai"
+          const existingKey = output.options?.promptCacheKey
+          const existingRetention = output.options?.promptCacheRetention
+          let affinitySource
+          if (isDirectMeta) {
+            affinitySource = typeof existingKey === "string" && existingKey.length > 0 ? "preexisting" : "missing"
+          } else if (isMetaProvider || !provider) {
+            affinitySource = "unknown_provider"
+          } else {
+            affinitySource = "not_direct_meta"
+          }
+          const hasRetention = typeof existingRetention === "string" && existingRetention.length > 0
+          rec.record({
+            kind: "boundary",
+            sid: input.sessionID,
+            ts: Date.now(),
+            reason: "muse_affinity",
+            policy: "muse",
+            provider: provider || null,
+            model: liveModelID || null,
+            affinitySource,
+            retentionSource: isDirectMeta ? (hasRetention ? "preexisting" : "none") : "n/a",
+            note: "Meta caching is automatic; prompt_cache_key must be app-stable, never per-session, so CacheEngine injects nothing",
           })
           return
         }
