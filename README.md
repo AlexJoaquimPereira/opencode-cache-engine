@@ -1991,7 +1991,7 @@ release, use:
 ```json
 {
   "plugin": [
-    "opencode-cache-engine@0.5.6"
+    "opencode-cache-engine@0.5.7"
   ]
 }
 ```
