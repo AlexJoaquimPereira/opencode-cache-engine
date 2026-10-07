@@ -6,8 +6,8 @@
 //
 // This module is PROVIDER-AWARE: it classifies a model into a cache-policy
 // family (deepseek | gpt56 | glm53 | mimo26 | kimi | claude | gemini | qwen |
-// grok | neutral) and exposes small pure helpers for each family's strategy. The
-// plugin entry (cache-engine.ts) remains
+// grok | muse | neutral) and exposes small pure helpers for each family's
+// strategy. The plugin entry (cache-engine.ts) remains
 // the only place that touches OpenCode hooks; every decision here is testable in
 // Node.
 //
@@ -44,6 +44,7 @@ export const POLICY_CLAUDE = "claude"
 export const POLICY_GEMINI = "gemini"
 export const POLICY_QWEN = "qwen"
 export const POLICY_GROK = "grok"
+export const POLICY_MUSE = "muse"
 export const POLICY_NEUTRAL = "neutral"
 
 export const GPT56_DEFAULT_TTL = "30m"
@@ -103,6 +104,11 @@ function defaultPolicies() {
     // and the harness (OpenCode) already supplies the Responses affinity key for
     // direct xAI, so CacheEngine only classifies and observes.
     grok: { enabled: true },
+    // Muse is passive on every route: Meta caching is automatic, the
+    // prompt_cache_key routing hint must be application-stable (never
+    // per-session), and retention is harness/user-owned. Classification and
+    // observability only.
+    muse: { enabled: true },
   }
 }
 
@@ -153,7 +159,7 @@ export function parseConfig(raw, env) {
     if (typeof raw.logPrefixChanges === "boolean") cfg.logPrefixChanges = raw.logPrefixChanges
     if (raw.policies && typeof raw.policies === "object") {
       const d = defaultPolicies()
-      for (const fam of ["deepseek", "gpt56", "glm53", "mimo26", "kimi", "claude", "gemini", "qwen", "grok"]) {
+      for (const fam of ["deepseek", "gpt56", "glm53", "mimo26", "kimi", "claude", "gemini", "qwen", "grok", "muse"]) {
         if (raw.policies[fam]) cfg.policies[fam] = parsePolicy(raw.policies[fam], d[fam])
       }
     }
@@ -251,6 +257,7 @@ const LEGACY_FAMILY_TO_POLICY = {
   gemini: POLICY_GEMINI,
   qwen: POLICY_QWEN,
   grok: POLICY_GROK,
+  muse: POLICY_MUSE,
 }
 
 // Pure classifier. Returns one of the POLICY_* keys. `model` may be a full
