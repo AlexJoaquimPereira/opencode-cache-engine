@@ -565,6 +565,36 @@ the OpenCode 1.18.34 runtime (RF-OC-014). Tags per the legend.
 
 ---
 
+## 8d. MiniMax (M3 / M2.7 / M2.5 / M2.1 / M2)
+
+Source: MiniMax platform docs (Prompt Caching, Anthropic-compatible cache,
+Chat/Responses/Anthropic API refs, pricing, Token Plan), and the OpenCode 1.18.34
+runtime (RF-OC-015), consulted 2026-10-07 (see RF-PRV-009). Tags per the legend.
+
+| # | Aspect | Documented | Tag |
+| --- | --- | --- | --- |
+| 1 | Model scope | `MiniMax-M3.1-Flash-Preview`, `MiniMax-M3`, `MiniMax-M2.7`, `MiniMax-M2.7-highspeed`, `MiniMax-M2.5`, `MiniMax-M2.5-highspeed`, `MiniMax-M2.1`, `MiniMax-M2.1-highspeed`, `MiniMax-M2`. | [D] |
+| 2 | Passive (automatic) caching | Automatic prefix caching, no configuration; prefix order "tool list → system prompts → user messages"; ≥512 input tokens; TTL auto-adjusted; **all M-series**. | [D] |
+| 3 | Explicit caching | Anthropic-compatible `cache_control:{"type":"ephemeral"}` on `system[]`/`messages[].content[]`/`tools[]`; cumulative order `tools → system → messages`; ≤4 breakpoints; 20-block lookback; 5-minute TTL refreshed on hit. **M2.7/M2.5/M2.1/M2 only — M3 is not listed.** | [D] |
+| 4 | Routing field | `prompt_cache_key` (string) on the Responses API only, described as a "prompt cache routing identifier"; no documented eligibility/pricing effect. No `cache_ttl`/`prompt_cache_retention`/`cache_key` anywhere. | [D]/[U] |
+| 5 | Usage fields | Chat `usage.prompt_tokens_details.cached_tokens` (read only); Responses `usage.input_tokens_details.cached_tokens` (read only); Anthropic `cache_read_input_tokens` (read) + `cache_creation_input_tokens` (**write**). Write field exists only on the Anthropic path. | [D] |
+| 6 | Economics | M3 $0.30 in / $0.06 cached read / **no write**; M2.7 $0.30 / $0.06 / **$0.375 write**; M2.7-highspeed $0.60 / $0.06 / $0.375; M2.5 $0.30 / $0.03 / $0.375; M2.5-highspeed $0.60 / $0.03 / $0.375. "No additional charge for cache writes" (passive) vs billed first writes (explicit). | [D] |
+| 7 | Reasoning | Preserve the full assistant message and `thinking` blocks (with `signature`) in multi-turn tool use; not stated as a cache requirement. | [D]/[U] |
+
+### 8d-i. Route-specific MiniMax caching contracts
+
+| Route | Endpoint / SDK | Cache mechanism | Affinity | Write usage | CacheEngine action | Evidence |
+| --- | --- | --- | --- | --- | --- | --- |
+| Direct MiniMax (`minimax`, `minimax-cn`) | `https://api.minimax.io/anthropic/v1/messages`, `@ai-sdk/anthropic` | passive automatic + explicit `cache_control` (M2.x); OpenCode `applyCaching` inserts breakpoints | none documented | `cache_creation_input_tokens` (Anthropic path) | passive: do not duplicate OpenCode's breakpoints | [D] RF-PRV-009, [O] RF-OC-015 |
+| MiniMax Token Plan (`minimax-coding-plan`, `minimax-cn-coding-plan`) | same direct `/anthropic/v1` with an `sk-cp-…` subscription key | same as direct MiniMax | none | same | passive (same policy as direct) | [D] RF-PRV-009, [O] RF-OC-015 |
+| OpenCode Go | `https://opencode.ai/zen/go/v1/messages`, `@ai-sdk/anthropic` | passive + OpenCode `applyCaching` breakpoints; subscription | `x-opencode-session` (Go-owned) | `cache_creation_input_tokens` | passive: preserve Go's session header; do not duplicate breakpoints | [D]/[O] RF-OC-011, RF-OC-015 |
+| OpenCode Zen | `https://opencode.ai/zen/v1/chat/completions`, `@ai-sdk/openai-compatible` | passive automatic only (no `cache_control` on the OpenAI path) | none | none (reads only) | passive | [D]/[O] RF-OC-015 |
+| OpenRouter | `https://openrouter.ai/api/v1/chat/completions`; `minimax/minimax-*` | OpenRouter sticky routing; `supports_implicit_caching:false`; no cache field in `supported_parameters`; no `input_cache_write` | generic `session_id`/`x-session-id` (not MiniMax-documented) | none | passive: no `x-session-id`, no MiniMax field injection | [D]/[U] RF-PRV-009, RF-OR-001 |
+| Meta/native v2 endpoint | `https://api.minimax.io/v1/text/chatcompletion_v2` | passive automatic | none | not shown | passive (not used by OpenCode) | [D] RF-PRV-009 |
+| Generic OpenAI-compatible gateway | arbitrary | unknown | unknown | unknown | passive (fail closed) | [U] RF-PRV-009 |
+
+---
+
 ## 9. OpenRouter transport facts (routing only, not model semantics)
 
 These are OpenRouter routing/transport facts. They are **not** evidence of any
@@ -664,6 +694,9 @@ made here); **hold** = do not inherit without first-party evidence.
 | xAI | look-alikes/utilities: `grok-imagine-image`, `grok-imagine-video`, `grok-voice-*`, `grok-3-embedding`, `mygrok-4`, `grokster-4`, `grok-4..7`, `grok` (bare) | Not a Grok language model or malformed version | neutral | hold | n/a | High | xAI *Models*; local matcher tests | 2026-10-06 |
 | Meta | Muse Spark current ids: `muse-spark-1.3`, `muse-spark-1.3-contributor`, `muse-spark-1.2`, `muse-spark-1.2-contributor`, `muse-spark-1.1` (bare, `meta/`/`meta-contributor/`-prefixed, or gateway) | Provider-managed **automatic positional prefix** caching; no explicit breakpoint/TTL/min; optional `prompt_cache_key` (Chat + Responses; app-stable, **not** per-session) and Responses `prompt_cache_retention` (`in_memory`/`24h`, a hint); usage `prompt_tokens_details.cached_tokens` / `input_tokens_details.cached_tokens` / `cache_read_input_tokens` (read only, no write field) | Passive Muse policy: no mutation — OpenCode pre-sets `promptCacheKey = sessionID` on direct Meta/Zen/Go and CacheEngine preserves it; generic `read/(read+write)` accounting; retention left harness/user-owned | keep | none — passive only (affinity/retention are harness/provider-owned) | High (docs + OpenCode runtime) | Meta *Prompt Caching*; OpenCode binary @ v1.18.34 | 2026-10-06 |
 | Meta | `muse-glimmer-30b` and look-alikes/utilities: `my-muse-spark-1.3`, `museum`, `muse-spark-`, malformed versions | Open-weight/self-hosted (not on the Meta Model API) or not a Muse Spark id | neutral | hold | n/a | High | Meta *Models*; local matcher tests | 2026-10-06 |
+| MiniMax | M3 family: `MiniMax-M3`, `MiniMax-M3.1-Flash-Preview` (bare, `MiniMaxAI/`, `minimax/`, `minimax-m3` gateway forms) | Passive automatic prefix caching only; **not** in MiniMax's explicit `cache_control` list; ≥512 tokens; no documented write charge; usage `prompt_tokens_details.cached_tokens` (read only) | Passive MiniMax policy (M3 baseline: `supportsExplicitBreakpoints:false`, `cacheWriteBilled:false`); generic `read/(read+write)` accounting | keep | none — passive only | High (docs + OpenCode runtime) | MiniMax *Prompt Caching*; *Pricing*; OpenCode binary @ v1.18.34 | 2026-10-07 |
+| MiniMax | M2.x family: `MiniMax-M2.7`, `MiniMax-M2.7-highspeed`, `MiniMax-M2.5`, `MiniMax-M2.5-highspeed`, `MiniMax-M2.1`, `MiniMax-M2`, `MiniMax-M2.1-highspeed` | Passive automatic caching **plus** explicit Anthropic `cache_control` (≤4, 5m TTL); **explicit writes billed** ($0.375/M); usage `cache_read_input_tokens`/`cache_creation_input_tokens` (Anthropic path) | Passive MiniMax policy (M2 baseline: `supportsExplicitBreakpoints:true`, `cacheWriteBilled:true`); generic `read/(read+write)` accounting; OpenCode owns breakpoints on the `@ai-sdk/anthropic` routes | keep | none — passive only | High (docs + OpenCode runtime) | MiniMax *Anthropic cache*; *Pricing*; OpenCode binary @ v1.18.34 | 2026-10-07 |
+| MiniMax | look-alikes/utilities: `minimax-text-01`, `minimax-m1`, `minimax-01`, `minimax-h3`, `minimax-latest`, `my-minimax-m3`, malformed versions | Other/older MiniMax families (or video/utility) not in the passive or explicit cache model lists | neutral | hold | n/a | High | MiniMax *Models*; local matcher tests | 2026-10-07 |
 
 ---
 
