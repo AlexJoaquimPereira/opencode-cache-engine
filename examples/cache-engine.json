@@ -44,6 +44,9 @@
     },
     "muse": {
       "enabled": true
+    },
+    "minimax": {
+      "enabled": true
     }
   }
 }
