@@ -6,8 +6,8 @@
 //
 // This module is PROVIDER-AWARE: it classifies a model into a cache-policy
 // family (deepseek | gpt56 | glm53 | mimo26 | kimi | claude | gemini | qwen |
-// grok | muse | neutral) and exposes small pure helpers for each family's
-// strategy. The plugin entry (cache-engine.ts) remains
+// grok | muse | minimax | neutral) and exposes small pure helpers for each
+// family's strategy. The plugin entry (cache-engine.ts) remains
 // the only place that touches OpenCode hooks; every decision here is testable in
 // Node.
 //
@@ -45,6 +45,7 @@ export const POLICY_GEMINI = "gemini"
 export const POLICY_QWEN = "qwen"
 export const POLICY_GROK = "grok"
 export const POLICY_MUSE = "muse"
+export const POLICY_MINIMAX = "minimax"
 export const POLICY_NEUTRAL = "neutral"
 
 export const GPT56_DEFAULT_TTL = "30m"
@@ -109,6 +110,10 @@ function defaultPolicies() {
     // per-session), and retention is harness/user-owned. Classification and
     // observability only.
     muse: { enabled: true },
+    // MiniMax is passive on every route: caching is automatic, OpenCode already
+    // owns the Anthropic cache_control breakpoints on the @ai-sdk/anthropic
+    // routes, and M2.x write billing is represented in the baseline only.
+    minimax: { enabled: true },
   }
 }
 
@@ -159,7 +164,7 @@ export function parseConfig(raw, env) {
     if (typeof raw.logPrefixChanges === "boolean") cfg.logPrefixChanges = raw.logPrefixChanges
     if (raw.policies && typeof raw.policies === "object") {
       const d = defaultPolicies()
-      for (const fam of ["deepseek", "gpt56", "glm53", "mimo26", "kimi", "claude", "gemini", "qwen", "grok", "muse"]) {
+      for (const fam of ["deepseek", "gpt56", "glm53", "mimo26", "kimi", "claude", "gemini", "qwen", "grok", "muse", "minimax"]) {
         if (raw.policies[fam]) cfg.policies[fam] = parsePolicy(raw.policies[fam], d[fam])
       }
     }
@@ -258,6 +263,7 @@ const LEGACY_FAMILY_TO_POLICY = {
   qwen: POLICY_QWEN,
   grok: POLICY_GROK,
   muse: POLICY_MUSE,
+  minimax: POLICY_MINIMAX,
 }
 
 // Pure classifier. Returns one of the POLICY_* keys. `model` may be a full
