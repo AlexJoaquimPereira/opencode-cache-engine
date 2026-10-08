@@ -21,6 +21,7 @@ import {
   POLICY_GPT56,
   POLICY_GROK,
   POLICY_MUSE,
+  POLICY_MINIMAX,
   POLICY_KIMI,
   POLICY_MIMO26,
   POLICY_NEUTRAL,
@@ -67,6 +68,7 @@ import {
   isQwenModel,
   isGrokModel,
   isMuseModel,
+  isMiniMaxModel,
   explainPolicyResolution,
   resolveLegacyFamily,
   resolvePolicy,
@@ -874,13 +876,14 @@ test("empty current sequence -> no anomalies", () => {
 // Config: provider policies
 // ===========================================================================
 
-test("config defaults enable all ten policies", () => {
+test("config defaults enable all eleven policies", () => {
   const cfg = parseConfig({}, {})
   assert.deepEqual(cfg.policies.claude, { enabled: true })
   assert.deepEqual(cfg.policies.gemini, { enabled: true })
   assert.deepEqual(cfg.policies.qwen, { enabled: true })
   assert.deepEqual(cfg.policies.grok, { enabled: true })
   assert.deepEqual(cfg.policies.muse, { enabled: true })
+  assert.deepEqual(cfg.policies.minimax, { enabled: true })
   assert.deepEqual(cfg.policies.deepseek, { enabled: true })
   assert.deepEqual(cfg.policies.glm53, { enabled: true, stabilizeSystem: true, preserveThinkingIntegrity: true })
   assert.deepEqual(cfg.policies.mimo26, {
@@ -1860,6 +1863,7 @@ test("detectPolicy remains compatible with the legacy family resolution", () => 
     qwen: POLICY_QWEN,
     grok: POLICY_GROK,
     muse: POLICY_MUSE,
+    minimax: POLICY_MINIMAX,
   }
   const samples = [
     M("openrouter", "openai/gpt-5.6-luna"),
@@ -2934,6 +2938,12 @@ async function runUsageCollectionProbe() {
     await setModel(SID_MUSE, "meta", "muse-spark-1.3")
     await idle(SID_MUSE)
 
+    // v0.5.x: MiniMax M3 (passive) reports cache reads only; generic path.
+    const SID_MINIMAX = "ses_usage_minimax"
+    responses[SID_MINIMAX] = { data: [mkAst("mm1", 512, 0, 88)] }
+    await setModel(SID_MINIMAX, "minimax", "MiniMax-M3")
+    await idle(SID_MINIMAX)
+
     const lines = readFileSync(process.env.CACHE_ENGINE_METRICS_FILE, "utf8").trim().split("\\n")
     const records = lines.map((l) => JSON.parse(l))
     process.stdout.write(JSON.stringify({ calls, records }))
@@ -2952,7 +2962,7 @@ const usageResults = async () => (usageProbe ??= runUsageCollectionProbe())
 test("v0.4.6 K2: session.messages is called with the V1 SDK shape and a bound receiver", async () => {
   const { calls } = await usageResults()
   assert.ok(calls.length >= 5, "collector should call session.messages per idle")
-  const sids = ["ses_usage_basic", "ses_usage_multi", "ses_usage_empty", "ses_usage_undef", "ses_usage_throw", "ses_usage_kimi", "ses_usage_claude", "ses_usage_gemini", "ses_usage_qwen", "ses_usage_grok", "ses_usage_muse"]
+  const sids = ["ses_usage_basic", "ses_usage_multi", "ses_usage_empty", "ses_usage_undef", "ses_usage_throw", "ses_usage_kimi", "ses_usage_claude", "ses_usage_gemini", "ses_usage_qwen", "ses_usage_grok", "ses_usage_muse", "ses_usage_minimax"]
   for (const c of calls) {
     // exactly { path: { id } }, nothing else
     assert.deepEqual(Object.keys(c.opts), ["path"])
@@ -3105,6 +3115,25 @@ test("v0.5.x: Meta Muse uses the generic cache-read accounting path (no fabricat
   assert.equal(u.provider, "meta")
   assert.equal(u.model, "muse-spark-1.3")
   assert.equal(u.policy, "muse")
+  assert.equal(u.promptTokens, undefined)
+  assert.equal(u.cacheHitRate, undefined)
+})
+
+test("v0.5.x: MiniMax uses the generic cache-read accounting path (no fabricated write)", async () => {
+  // MiniMax reports cached reads only on the OpenAI-compatible path
+  // (usage.prompt_tokens_details.cached_tokens); OpenCode normalizes that into
+  // tokens.cache.read. CacheEngine must not invent a write bucket.
+  const { records } = await usageResults()
+  const usage = records.filter((r) => r.kind === "usage" && r.sid === "ses_usage_minimax")
+  assert.equal(usage.length, 1)
+  const u = usage[0]
+  assert.equal(u.read, 512)
+  assert.equal(u.write, 0)
+  assert.equal(u.input, 88)
+  assert.equal(u.messages, 1)
+  assert.equal(u.provider, "minimax")
+  assert.equal(u.model, "MiniMax-M3")
+  assert.equal(u.policy, "minimax")
   assert.equal(u.promptTokens, undefined)
   assert.equal(u.cacheHitRate, undefined)
 })
@@ -4222,6 +4251,14 @@ async function runClaudeRouteProbe(configPolicies) {
       museGateway: { providerID: "some-gateway", id: "muse-spark-1.3", api: { id: "muse-spark-1.3", npm: "@ai-sdk/openai-compatible" } },
       museGlimmer: { providerID: "deepinfra", id: "muse-glimmer-30b", api: { id: "muse-glimmer-30b", npm: "@ai-sdk/openai-compatible" } },
       museMetaUnknownTransport: { providerID: "meta", id: "muse-spark-1.3", api: { id: "muse-spark-1.3", npm: "@ai-sdk/openai-compatible" } },
+      minimaxDirect: { providerID: "minimax", id: "MiniMax-M3", api: { id: "MiniMax-M3", npm: "@ai-sdk/anthropic" } },
+      minimaxCn: { providerID: "minimax-cn", id: "MiniMax-M2.7", api: { id: "MiniMax-M2.7", npm: "@ai-sdk/anthropic" } },
+      minimaxCodingPlan: { providerID: "minimax-coding-plan", id: "MiniMax-M2.7", api: { id: "MiniMax-M2.7", npm: "@ai-sdk/anthropic" } },
+      minimaxCnCodingPlan: { providerID: "minimax-cn-coding-plan", id: "MiniMax-M3", api: { id: "MiniMax-M3", npm: "@ai-sdk/anthropic" } },
+      minimaxGo: { providerID: "opencode-go", id: "minimax-m3", api: { id: "minimax-m3", npm: "@ai-sdk/anthropic" } },
+      minimaxZen: { providerID: "opencode", id: "minimax-m2.5", api: { id: "minimax-m2.5", npm: "@ai-sdk/openai-compatible" } },
+      minimaxOpenrouter: { providerID: "openrouter", id: "minimax/minimax-m3", api: { id: "minimax/minimax-m3", npm: "@openrouter/ai-sdk-provider" } },
+      minimaxGateway: { providerID: "some-gateway", id: "minimax-m3", api: { id: "minimax-m3", npm: "@ai-sdk/openai-compatible" } },
     };
     const preOpts = { promptCacheKey: "user-key", cache_control: { type: "ephemeral" }, temperature: 0.3 };
     const preHdrs = { "x-session-id": "user-sess", "x-custom": "keep" };
@@ -4592,4 +4629,100 @@ test("v0.5.x: disabling Muse leaves every route unchanged and emits no affinity 
     assert.deepEqual(out[name].headers, out.preHdrs, `${name}: headers preserved`)
   }
   assert.equal(out.metrics.filter((r) => r.reason === "muse_affinity").length, 0)
+})
+
+// ===========================================================================
+// v0.5.x MiniMax audit: caching is automatic prefix caching; M2.x additionally
+// supports explicit Anthropic cache_control with billed writes while M3 does
+// not. Direct MiniMax and Go use the Anthropic Messages SDK (so OpenCode owns
+// the breakpoints); Zen uses @ai-sdk/openai-compatible. CacheEngine is passive
+// on every route. (RF-PRV-009 / RF-OC-015)
+// ===========================================================================
+
+test("v0.5.x: isMiniMaxModel matches M2.x/M3.x ids and rejects other families/lookalikes", () => {
+  const positives = [
+    "MiniMax-M3", "minimax-m3", "MiniMaxAI/MiniMax-M3", "minimax/minimax-m3",
+    "minimax-M2.7", "MiniMax-M2.7-highspeed", "minimax-m2-7", "minimax-m2.5",
+    "minimax-m3.1-flash-preview", "MiniMax/MiniMax-M2.7", "minimax-m3:thinking",
+    "minimax-m3-free", "minimax-m2.1-lightning",
+  ]
+  for (const id of positives) assert.equal(isMiniMaxModel(id), true, `${id} should match`)
+  const negatives = [
+    "minimax-text-01", "minimax-m1", "minimax-01", "minimax-h3", "minimax-latest",
+    "my-minimax-m3", "xminimax-m3", "minimax-m3foo", "minimax",
+    "mistral-large-latest", "grok-4.7", "",
+  ]
+  for (const id of negatives) assert.equal(isMiniMaxModel(id), false, `${id} must not match`)
+})
+
+test("v0.5.x: MiniMax resolves to the minimax family with a model-split write baseline", () => {
+  const cases = [
+    ["minimax", "MiniMax-M3", "@ai-sdk/anthropic", false],
+    ["opencode-go", "minimax-m3", "@ai-sdk/anthropic", false],
+    ["openrouter", "minimax/minimax-m3", "@openrouter/ai-sdk-provider", false],
+    ["some-gateway", "minimax-m3", "@ai-sdk/openai-compatible", false],
+    ["minimax-coding-plan", "MiniMax-M2.7", "@ai-sdk/anthropic", true],
+    ["opencode", "minimax-m2.5", "@ai-sdk/openai-compatible", true],
+  ]
+  for (const [provider, id, npm, writeBilled] of cases) {
+    const model = { providerID: provider, id, api: { id, npm } }
+    const caps = resolveRuntimePolicy(model)
+    assert.equal(caps.policy, "minimax", `${provider}/${id}: policy`)
+    assert.equal(caps.isNeutral, false)
+    assert.equal(caps.minimaxRouteAware, true, `${provider}/${id}: minimaxRouteAware`)
+    assert.equal(caps.minimaxCacheWriteBilled, writeBilled, `${provider}/${id}: minimaxCacheWriteBilled`)
+    // MiniMax must not overload the GPT / OpenRouter / env-relocation capabilities.
+    assert.equal(caps.gptCacheMetadata, false)
+    assert.equal(caps.openRouterAffinity, false)
+    assert.equal(caps.envRelocation, null)
+    assert.equal(caps.cacheRatio, null)
+    assert.equal(caps.providerChange, null)
+    assert.equal(detectPolicy(model), POLICY_MINIMAX, `${provider}/${id}: detectPolicy`)
+  }
+})
+
+test("v0.5.x: CacheEngine is passive for MiniMax on every access route (prefix preserved)", async () => {
+  const out = await claudeRouteResults()
+  for (const name of ["minimaxDirect", "minimaxCn", "minimaxCodingPlan", "minimaxCnCodingPlan", "minimaxGo", "minimaxZen", "minimaxOpenrouter", "minimaxGateway"]) {
+    assert.deepEqual(out[name].options, out.preOpts, `${name}: options must be preserved`)
+    assert.equal(out[name].systemChanged, false, `${name}: system must be unchanged`)
+    assert.deepEqual(out[name].headers, out.preHdrs, `${name}: headers must be preserved`)
+    assert.deepEqual(out[name].addedCacheKeys, [], `${name}: must add no cache field`)
+  }
+})
+
+test("v0.5.x: MiniMax route observation is metadata-only and model/route aware", async () => {
+  const out = await claudeRouteResults()
+  const bySid = new Map(out.metrics.filter((r) => r.reason === "minimax_route").map((r) => [r.sid, r]))
+  const expected = {
+    ses_route_minimaxDirect: ["direct_minimax", true, false, false], // M3
+    ses_route_minimaxCn: ["direct_minimax", true, true, true], // M2.7
+    ses_route_minimaxCodingPlan: ["direct_minimax", true, true, true], // M2.7
+    ses_route_minimaxCnCodingPlan: ["direct_minimax", true, false, false], // M3
+    ses_route_minimaxGo: ["opencode", true, false, false], // M3
+    ses_route_minimaxZen: ["opencode", false, false, true], // M2.5: capable but not billed on this route
+    ses_route_minimaxOpenrouter: ["openrouter", false, false, false], // M3
+    ses_route_minimaxGateway: ["gateway", false, false, false], // M3
+  }
+  for (const [sid, [route, harness, writeBilled, capable]] of Object.entries(expected)) {
+    const r = bySid.get(sid)
+    assert.ok(r, `${sid}: minimax_route record expected`)
+    assert.equal(r.policy, "minimax", `${sid}: policy`)
+    assert.equal(r.route, route, `${sid}: route`)
+    assert.equal(r.harnessAnthropicCaching, harness, `${sid}: harnessAnthropicCaching`)
+    assert.equal(r.cacheWriteBilled, writeBilled, `${sid}: cacheWriteBilled`)
+    assert.equal(r.modelWriteBilledCapable, capable, `${sid}: modelWriteBilledCapable`)
+  }
+  // Never record a key/session value.
+  assert.ok(!JSON.stringify(out.metrics).includes("user-key"), "no key value may be recorded")
+})
+
+test("v0.5.x: disabling MiniMax leaves every route unchanged and emits no route telemetry", async () => {
+  const out = await runClaudeRouteProbe({ minimax: { enabled: false } })
+  for (const name of ["minimaxDirect", "minimaxCn", "minimaxCodingPlan", "minimaxCnCodingPlan", "minimaxGo", "minimaxZen", "minimaxOpenrouter", "minimaxGateway"]) {
+    assert.deepEqual(out[name].options, out.preOpts, `${name}: options preserved`)
+    assert.equal(out[name].systemChanged, false, `${name}: no relocation`)
+    assert.deepEqual(out[name].headers, out.preHdrs, `${name}: headers preserved`)
+  }
+  assert.equal(out.metrics.filter((r) => r.reason === "minimax_route").length, 0)
 })
