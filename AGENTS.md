@@ -106,6 +106,15 @@ npm pack --dry-run
   harness/user-owned. On direct Meta/Zen/Go the installed runtime pre-sets
   `promptCacheKey = sessionID`; preserve it and never overwrite. Never fabricate a
   Muse TTL, minimum, or write token. See RF-PRV-008 / RF-OC-014.
+- **MiniMax:** passive and route-aware. Caching is automatic prefix caching on all
+  M-series; M2.x additionally support explicit Anthropic `cache_control` with a
+  billed write while **M3 does not** — keep the two model-split baselines
+  (`minimax.m3-cache` / `minimax.m2-cache`) separate and never flatten the
+  write-billing difference. Direct MiniMax and OpenCode Go use `@ai-sdk/anthropic`,
+  so OpenCode's `applyCaching` owns the breakpoints; CacheEngine must not
+  duplicate or compete with them, must not inject `cache_control`/`prompt_cache_key`,
+  and must preserve Go's `x-opencode-session`. Never fabricate a MiniMax cache
+  write on the OpenAI-compatible/Responses paths. See RF-PRV-009 / RF-OC-015.
 - Fail closed on unknown provider identity. Model availability through
   OpenRouter does not authorize sending OpenRouter-specific fields to direct
   endpoints.
