@@ -25,7 +25,7 @@ opencode plugin opencode-cache-engine
 
 `CacheEngine` is an OpenCode plugin designed for long-running agent sessions where prompt-cache efficiency affects both latency and cost. It keeps the harness conservative for providers whose cache behavior is already automatic, while applying provider-specific optimizations where the provider exposes useful cache controls or where prompt structure can be safely improved.
 
-The plugin currently has ten cache-policy families:
+The plugin currently has eleven cache-policy families:
 
 * **DeepSeek** — passive cache observability; request structure is preserved.
 * **GPT-5.6 and later** — documented cache-key/options metadata, with prompt text
@@ -55,6 +55,10 @@ The plugin currently has ten cache-policy families:
   automatic positional prefix caching; Meta's `prompt_cache_key` must be an
   application-stable routing hint (never per-session) and `prompt_cache_retention`
   is a request-level policy, so CacheEngine injects neither and rewrites nothing.
+* **MiniMax** — passive classification and accounting, route-aware. MiniMax
+  caching is automatic; M2.x additionally supports explicit Anthropic
+  `cache_control` (M3 does not), but OpenCode already owns those breakpoints on
+  the Anthropic-compatible routes, so CacheEngine injects nothing.
 
 Family classification is not hard-coded in the runtime. A pure policy registry
 and resolver in `src/cache-policy-core.mjs` returns a structured result
@@ -81,17 +85,24 @@ The plugin operates at the OpenCode harness level rather than implementing a pro
 
 It:
 
-1. Resolves the model/provider policy through the registry resolver.
-2. Applies only the mutations registered for that policy.
-3. Observes system-prompt and tool-definition stability.
-4. Records provider-reported cache token usage.
-5. Adds a deterministic compaction continuation block.
-6. Applies GPT-5.6-and-later cache-control metadata.
-7. Applies the GLM-5.3 and MiMo-V2.6 volatile-environment relocation.
-8. Records diagnostics that help determine whether prompt-shape changes correlate with cache behavior.
-9. Records MiMo/GLM affinity outcomes and provider-identity changes.
-10. Classifies Kimi and Claude but leaves their requests unchanged (both are passive:
-    Moonshot caching is automatic, and OpenCode applies Anthropic `cache_control`).
+1. Resolves the model/provider policy through the registry resolver (creator,
+   family, baseline, overlays, transport, match reason).
+2. Applies only the mutations registered for that policy — currently GPT-5.6+
+   cache-key/options metadata, the GLM-5.3 and MiMo-V2.6 volatile-`<env>`
+   relocation, the OpenRouter `x-session-id` affinity for those two families, and
+   the deterministic compaction continuation block.
+3. Leaves every other family's request structure unchanged. DeepSeek, Kimi,
+   Claude, Gemini, Qwen, Grok/xAI, Meta Muse, and MiniMax are classified and
+   accounted for but never mutated, because the provider or OpenCode already owns
+   the relevant cache behavior or no safe mutation is justified. **Passive does
+   not mean "no cache support"** — it means CacheEngine does not change the request.
+4. Observes system-prompt and tool-definition stability.
+5. Records provider-reported cache token usage (reads always; writes only when the
+   provider reports them — never fabricated).
+6. Emits diagnostics and route/affinity telemetry that correlate prompt-shape
+   changes with cache behavior.
+7. Never enforces pricing boundaries or context/output limits, and never records
+   prompts, reasoning, credentials, or full request bodies.
 
 The plugin deliberately avoids pretending that a local hash is proof of a provider cache hit. Provider-reported token usage remains the authoritative signal.
 
@@ -868,6 +879,73 @@ performed: the route is provider-managed and CacheEngine performs no mutation, s
 a live probe would not change the implementation.
 
 
+## MiniMax (M3 / M2.7 / M2.5 / M2.1 / M2)
+
+### Policy: passive (provider-managed caching), route-aware
+
+MiniMax caches the **stable prefix automatically** on all M-series models, with
+no configuration; matching is positional in the order "tool list → system prompts
+→ user messages" and applies to requests with ≥512 input tokens (a **cacheability
+threshold**, distinct from the models' own context/pricing tiers, such as M3's
+1M-token context). M2.x additionally supports **explicit** Anthropic-style
+`cache_control:{type:"ephemeral"}` breakpoints (≤4, 5-minute TTL refreshed on hit)
+on the Anthropic-compatible endpoint — **M3 does not**, and M3 has no documented
+cache-write charge while M2.x explicit writes are billed. CacheEngine leaves the
+request **unchanged** on every route; it injects no `cache_control`, no
+`prompt_cache_key`, and no cache field, and rewrites nothing.
+
+**Route and subscription spread matter.** Direct MiniMax (`minimax`, `minimax-cn`)
+and the **MiniMax Token Plan** providers (`minimax-coding-plan`,
+`minimax-cn-coding-plan`; an `sk-cp-…` subscription key on the same direct
+`/anthropic/v1` endpoints) use the Anthropic-compatible Messages API via
+`@ai-sdk/anthropic`, so **OpenCode itself inserts the `cache_control` breakpoints**
+— CacheEngine must not duplicate them, and Token Plan is **not** a separate cache
+provider. OpenCode **Go** serves MiniMax M3 and M2.7 over `/zen/go/v1/messages`
+(`@ai-sdk/anthropic`) and adds its own `x-opencode-session`; OpenCode **Zen**
+serves MiniMax M3, M2.7, and M2.5 over `/zen/v1/chat/completions`
+(`@ai-sdk/openai-compatible`), which gets passive-only caching. OpenRouter exposes
+MiniMax over Chat Completions with no documented cache control.
+
+**Recognized ids** (bare, `MiniMaxAI/`- / `minimax/`-prefixed, or gateway):
+`minimax-m<2|3>` with optional version/`-highspeed`/`-lightning`/`-turbo`/
+`-flash-preview`/`-her` suffixes — `MiniMax-M3`, `MiniMax-M3.1-Flash-Preview`,
+`MiniMax-M2.7`, `MiniMax-M2.7-highspeed`, `MiniMax-M2.5`, `MiniMax-M2.1`, ….
+
+**Not recognized (neutral):** other/older MiniMax families (`minimax-text-01`,
+`minimax-m1`, `minimax-01`), video/utility products (`minimax-h3`), lookalikes
+(`my-minimax-m3`), and malformed ids.
+
+### Routes
+
+All MiniMax routes are passive for CacheEngine:
+
+| Route | SDK | Cache mechanism | Notes |
+| ----- | --- | --------------- | ----- |
+| Direct MiniMax + MiniMax Token Plan (`minimax*`, `/anthropic/v1/messages`) | `@ai-sdk/anthropic` | automatic + explicit `cache_control` (M2.x) | OpenCode owns the breakpoints; CacheEngine preserves |
+| OpenCode Go (`/zen/go/v1/messages`; M3, M2.7) | `@ai-sdk/anthropic` | automatic + OpenCode breakpoints; subscription | Go owns `x-opencode-session`; CacheEngine does not duplicate it |
+| OpenCode Zen (`/zen/v1/chat/completions`; M3, M2.7, M2.5) | `@ai-sdk/openai-compatible` | automatic only | passive |
+| OpenRouter (`minimax/minimax-*`) | `@openrouter/ai-sdk-provider` | sticky routing; `supports_implicit_caching:false`; no cache param | no `x-session-id`, no MiniMax field |
+| Generic OpenAI-compatible gateway | unknown | unknown | passive (fail closed) |
+
+### Usage accounting
+
+MiniMax reports cached reads via `usage.prompt_tokens_details.cached_tokens`
+(Chat Completions) or `usage.input_tokens_details.cached_tokens` (Responses), and
+on the Anthropic-compatible endpoint `usage.cache_read_input_tokens` plus
+`usage.cache_creation_input_tokens` (write). OpenCode normalizes these into
+`tokens.cache.read` / `tokens.cache.write`; CacheEngine uses the generic
+`read/(read+write)` accounting and never fabricates a write.
+
+### Evidence and status
+
+Verified against first-party MiniMax documentation and the OpenCode 1.18.34
+runtime on 2026-10-07 (see
+[docs/cache-policy-inventory.md](docs/cache-policy-inventory.md) §8d and
+`docs/research-findings.md` RF-PRV-009, RF-OC-015). No live MiniMax probe was
+performed: the route is provider-managed and CacheEngine performs no mutation, so
+a live probe would not change the implementation.
+
+
 # Provider comparison
 
 | Policy family | Detection | Prompt text changed? | Cache metadata changed? | OpenRouter affinity header | Primary cache signal |
@@ -882,6 +960,7 @@ a live probe would not change the implementation.
 | Alibaba Qwen | `qwen-<family>` aliases + version-typed ids (`qwen3.*`, `qwen-max`, `qwen3-coder*`, `qwen3-vl-*`, …; bare, `qwen/`-prefixed, or gateway) | No | No: provider-managed implicit caching; OpenCode applies breakpoints on Messages routes | None | provider `cache.read` / `cache.write` |
 | xAI Grok | `grok-<version>` + generative aliases (`grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-*`, `grok-build-0.1`, `grok-code`; bare, `xai/`/`x-ai/`-prefixed, or gateway) | No | No: automatic provider-managed caching; OpenCode supplies the Responses affinity key | None | provider `cache.read` (no write field) |
 | Meta Muse | `muse-spark-<version>[-contributor][-free]` (`muse-spark-1.3`, `muse-spark-1.2`, `muse-spark-1.1`, …; bare, `meta/`-prefixed, or gateway) | No | No: automatic positional prefix caching; OpenCode supplies `prompt_cache_key` on direct Meta/Zen/Go | None | provider `cache.read` (no write field) |
+| MiniMax | `minimax-m<2\|3>...` (`MiniMax-M3`, `MiniMax-M2.7`, `MiniMax-M2.5`, `-highspeed`; bare, `MiniMaxAI/`/`minimax/`-prefixed, or gateway) | No | No: automatic prefix caching; M2.x also explicit `cache_control`, applied by OpenCode on Anthropic-SDK routes | None | provider `cache.read` (no write on Zen/OpenRouter; `cache.write` only on the Anthropic path) |
 
 `x-session-id` is an HTTP affinity header, not a provider cache key or
 cache-control field. Non-OpenRouter endpoints do not receive CacheEngine's
@@ -1279,6 +1358,18 @@ The default configuration is:
     },
     "gemini": {
       "enabled": true
+    },
+    "qwen": {
+      "enabled": true
+    },
+    "grok": {
+      "enabled": true
+    },
+    "muse": {
+      "enabled": true
+    },
+    "minimax": {
+      "enabled": true
     }
   }
 }
@@ -1588,6 +1679,26 @@ route: caching is automatic positional prefix caching, Meta requires
 `prompt_cache_retention` is a request-level policy. CacheEngine never mutates the
 Muse request, and there are no other Muse knobs: cache keys, retention values,
 affinity headers, and cache-control fields are neither exposed nor sent.
+
+
+# MiniMax configuration
+
+```json
+{
+  "minimax": {
+    "enabled": true
+  }
+}
+```
+
+### `enabled`
+
+Enables the MiniMax policy classification. MiniMax is a **passive** family on
+every route: caching is automatic, and on the Anthropic-compatible routes OpenCode
+already inserts the `cache_control` breakpoints (M2.x; M3 does not support them),
+so CacheEngine never mutates the MiniMax request. There are no other MiniMax
+knobs: cache keys, cache-control fields, and affinity headers are neither exposed
+nor sent.
 
 
 # Model detection
@@ -2032,6 +2143,12 @@ MiMo-V2.6:
     no GPT/GLM-only cache fields present
     x-session-id added only for actual OpenRouter provider identity
     telemetry carries provider/model/promptTokens/cachedTokens/cacheHitRate
+
+Kimi / Claude / Gemini / Qwen / Grok / Meta Muse / MiniMax (passive families):
+    no request mutation of any kind
+    no cache-control field, cache key, or affinity header injected
+    classification and cache-read usage recorded when the provider reports them
+    no fabricated cache-write tokens
 ```
 
 ---
