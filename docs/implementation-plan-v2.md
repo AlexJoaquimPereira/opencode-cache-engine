@@ -10,13 +10,13 @@ The **opencode-cache-engine** has completed its v0.4.x maintenance (fixing K1/K2
 - **Testing Matrix:** Unit, integration, and live-model tests (with cost limits), test data and mocks.
 - **CI & Packaging Checklist:** Steps for continuous integration and final packaging.
 - **V2 Migration Checklist:** Mapping V1 hooks to V2 (`ctx.session.hook("context")`, `model.request`, compaction hooks, header handling).
-- **Provider Recipes:** Superseded by §2, which defines the v0.5.x provider-coverage phase (Kimi, Claude, Gemini, Qwen) with per-provider tasks, tests, and acceptance criteria. Mistral and xAI/Grok are deferred candidates, not v0.5.x prerequisites.
+- **Provider Recipes:** Superseded by §2, which defines the v0.5.x provider-coverage phase (Kimi, Claude, Gemini, Qwen, xAI/Grok, Meta Muse, MiniMax) with per-provider tasks, tests, and acceptance criteria. Mistral remains the only deferred candidate.
 - **Observability/Telemetry:** New telemetry fields to add (e.g. cache strategy, identity).
 - **Risk Register & Rollback Plan:** Key risks and mitigation strategies.
 - **Timeline & Milestones:** Gantt chart (mermaid) and acceptance criteria for 0.5.x–1.0.0 milestones.
 - **Harness Commands:** Exact commands (Git, npm, OpenCode) to validate each milestone.
 
-The plan assumes the `v0.4.13` baseline on `master` (v0.4.x maintenance complete; all known bugs fixed) and a repository at `https://github.com/AlexJoaquimPereira/opencode-cache-engine`.
+The plan started from the `v0.4.13` baseline on `master` (v0.4.x maintenance complete; all known bugs fixed) and a repository at `https://github.com/AlexJoaquimPereira/opencode-cache-engine`; the v0.5.x provider coverage has since shipped (see §2.0).
 
 ```mermaid
 gantt
@@ -51,24 +51,40 @@ gantt
     v1.0.0 Release              :release, 2027-09-01, 1d
 ```
 
-**Acceptance Criteria (Milestones):** Each milestone (0.5.x–1.0.0) has specific done conditions. **0.5.x** is a provider-coverage phase: Kimi, Claude, Gemini, and Qwen each land as a separate validated release (see §2 for per-milestone exit conditions and the definition of done). **0.6.x** consolidates the shared core (usage/accounting extraction) and conformance tests with no provider prerequisites. **0.7.x** completes core/interface refactor (V2-stubs built, shared core usable by both). **0.8.x** sees a functioning V2 adapter (loading and mapping hooks, passing tests). **0.9.x** is a final stable dual-runtime beta. **1.0.0** is release-ready with complete documentation.
+**Acceptance Criteria (Milestones):** Each milestone (0.5.x–1.0.0) has specific done conditions. **0.5.x** is a provider-coverage phase: Kimi, Claude, Gemini, Qwen, xAI/Grok, Meta Muse, and MiniMax each land as a separate validated release (see §2 and §2.0 for per-milestone exit conditions and the definition of done). **0.6.x** consolidates the shared core (usage/accounting extraction) and conformance tests with no provider prerequisites. **0.7.x** completes core/interface refactor (V2-stubs built, shared core usable by both). **0.8.x** sees a functioning V2 adapter (loading and mapping hooks, passing tests). **0.9.x** is a final stable dual-runtime beta. **1.0.0** is release-ready with complete documentation.
 
 ## 1. Goals and Scope
 
 - **V1 Maintenance:** Keep `v0.4.x` stable. All v0.4 bug fixes (K1/K2) are done; no regressions allowed. (Existing metrics, accounting, and policy behavior remain unchanged unless explicitly enhanced.)
-- **New Provider Strategies:** v0.5.x adds and validates cache strategies for four model families — **Kimi, Anthropic/Claude, Google Gemini, Qwen** — as independent, separately released increments (see §2). Mistral and xAI/Grok are deferred candidates, not prerequisites for this release line. Each provider strategy is independently researched and tested; provider additions are never bundled with a large architecture refactor.
+- **New Provider Strategies:** v0.5.x has added and validated cache strategies for **Kimi, Anthropic/Claude, Google Gemini, Qwen, xAI/Grok, Meta Muse, and MiniMax** as independent, separately released increments (see §2 and §2.0). Mistral remains the only deferred candidate. Each provider strategy is independently researched and tested; provider additions are never bundled with a large architecture refactor.
 - **V2 Adapter Development:** Build a parallel OpenCode V2 plugin adapter in its own branch, reusing the shared policy/core logic. This allows supporting both V1 and V2 concurrently by v1.0.
 - **Dual-Runtime 1.0 Target:** Release 1.0.0 when the plugin works correctly under both OpenCode V1 and V2. The codebase should have a single shared core + two runtime adapters (V1 and V2 entry points) by then.
 
 _Per Scope Constraints:_ Do **not** attempt to rebuild the plugin as a V2-only project or drop V1 support. Focus on cache logic; **pricing/cost thresholds are out of scope** (as per policy). All changes should preserve existing behavior unless refactoring for architecture.
 
-## 2. v0.5.x — Provider coverage phase (Kimi, Claude, Gemini, Qwen)
+## 2. v0.5.x — Provider coverage phase (Kimi, Claude, Gemini, Qwen, Grok, Muse, MiniMax)
 
-`master` is on the v0.4.13 baseline and `feature/v2-adapter` is branched off that
-tag. **v0.5.x is a provider-coverage phase, not an architecture phase.** The V2
-adapter continues independently on its own branch. Prioritize the four families
-below; Mistral and xAI/Grok are **not** prerequisites for this release line, and
+`master` started from the v0.4.13 baseline and `feature/v2-adapter` is branched off
+that tag; the v0.5.x provider coverage has since shipped on `master`. **v0.5.x is a
+provider-coverage phase, not an architecture phase.** The V2 adapter continues
+independently on its own branch. Mistral remains the only deferred candidate, and
 provider additions are not combined with a large architecture refactor.
+
+### 2.0 Current status (reconciled 2026-10-07)
+
+| Provider | Status | Release |
+| --- | --- | --- |
+| Kimi | released — passive, route-scoped | 0.5.x |
+| Anthropic / Claude | released — passive | 0.5.x |
+| Google Gemini | released — passive | 0.5.x |
+| Alibaba Qwen | released — passive | 0.5.x |
+| xAI Grok | released — passive | 0.5.6 |
+| Meta Muse | released — passive | 0.5.7 |
+| MiniMax | implemented in working tree — passive, route-aware (model-split M3 vs M2.x write baselines) | release/version assignment pending explicit authorization |
+
+Remaining deferred candidate: **Mistral** (it still requires its own audit-first
+evidence note; do not implement from plan text). No provider work has touched
+`feature/v2-adapter`, and provider work stays independent of the V2 adapter.
 
 Every provider below still goes through the **audit-first** procedure in
 `AGENTS.md`. The official links in this section are *starting references to
@@ -375,8 +391,8 @@ test standard.
 
 ### 2.12 Definition of done for v0.5.x
 
-- Kimi, Claude, Gemini, and Qwen each have separate evidence notes and scoped
-  policies.
+- Kimi, Claude, Gemini, Qwen, xAI/Grok, Meta Muse, and MiniMax each have separate
+  evidence notes and scoped policies.
 - Each policy matches only the intended provider, model family, and API route.
 - Every request mutation is supported by first-party documentation and tested.
 - Cache read/write usage uses OpenCode's normalized data wherever available.
@@ -414,7 +430,7 @@ Each task below includes priority, assigned role(s), effort, and dependencies.  
 | - Integrate **Anthropic (Claude)** (top-level `cache_control` / explicit breakpoints) | High | policy-dev | 3–5d | none | Policy uses a verified Claude request path and a documented cache-control mechanism; non-Anthropic requests untouched; read/write usage not double-counted. |
 | - Integrate **Google Gemini** (passive/implicit) | Medium | policy-dev | 2–4d | none | Gemini models recognized; no request mutation; cache-hit usage accounted through existing normalization. Tests pass. |
 | - Integrate **Qwen** (passive first; markers only if justified) | Medium | policy-dev | 2–4d | none | Qwen behavior scoped to verified models/endpoints; no speculative cache-control mutations. Tests pass. |
-| - **Deferred candidates** (not v0.5.x prerequisites): Mistral, xAI/Grok | Low | policy-dev | 2–3d each | optional | Tracked for a later phase; each still requires its own audit-first evidence note. |
+| - **Deferred candidate**: Mistral | Low | policy-dev | 2–3d | optional | Tracked for a later phase; requires its own audit-first evidence note. xAI/Grok, Meta Muse, and MiniMax are implemented (§2.0). |
 | - **Policy Registry Update:** encode new families, strategies | High    | maintainer/policy-dev | 2d    | above provider tasks complete         | Shared `cache-policy-core` updated with new entries. No compile/test failures. |
 | - **Policy Conformance Tests:** Add generic tests (unknown models, no double-count, etc.) | High    | QA                 | 2d    | above policies                        | All provider strategies pass new and existing tests. |
 | **Core Refactoring (0.6.x, not 0.5.x)**              |         |                    |        |                                       |                                             |
@@ -654,16 +670,16 @@ Before each release:
 ## 10. Provider Integration Recipes
 
 Superseded by §2. The v0.5.x provider-coverage phase (Kimi, Anthropic/Claude,
-Gemini, Qwen) carries the per-provider recipes, official references to verify,
-implementation tasks, required tests, and acceptance criteria. Read §2 before
-starting any provider work.
+Gemini, Qwen, xAI/Grok, Meta Muse, MiniMax) carries the per-provider recipes,
+official references to verify, implementation tasks, required tests, and
+acceptance criteria. Read §2 and §2.0 before starting any provider work.
 
 The earlier illustrative Mistral and xAI/Grok recipes were removed on purpose:
 their field names and headers were placeholders, not verified evidence, and
-AGENTS.md forbids implementing provider behavior from plan text. Those two
-families are deferred candidates — if they are picked up later, research them
-from first-party documentation and record the evidence before writing policy
-code.
+AGENTS.md forbids implementing provider behavior from plan text. xAI/Grok is now
+implemented from first-party evidence (§2.0); Mistral remains the only deferred
+candidate — if it is picked up, research it from first-party documentation and
+record the evidence before writing policy code.
 
 ## 11. Observability & Telemetry
 
