@@ -250,6 +250,42 @@ export function isMuseModel(slug) {
   return false
 }
 
+// MiniMax text models (M2.x / M3.x). MiniMax documents TWO cache modes:
+// passive/automatic prefix caching for all M-series (>=512 input tokens;
+// prefix order tools -> system -> messages), and — on the Anthropic-compatible
+// endpoint only — explicit `cache_control:{type:"ephemeral"}` breakpoints for
+// M2.7/M2.5/M2.1/M2 but NOT M3. Explicit M2.x cache writes are billed
+// ($0.375/M); M3 has no documented cache-write charge. CacheEngine is PASSIVE:
+// OpenCode 1.18.34 drives direct MiniMax (providerID minimax*, npm
+// @ai-sdk/anthropic) and OpenCode Go through the Anthropic Messages API, where
+// OpenCode's own applyCaching already inserts the breakpoints; Zen uses
+// @ai-sdk/openai-compatible (passive only). See RF-PRV-009 / RF-OC-015.
+// Boundary-anchored: matches `minimax[-.]?m<2|3>` bare or gateway-prefixed;
+// rejects other families (minimax-text-01, minimax-m1, minimax-h3 video),
+// lookalikes (`my-minimax-m3`), and malformed ids.
+function minimaxMatch(slug) {
+  const text = String(slug ?? "").toLowerCase()
+  if (!text) return null
+  const re = /(?:^|[\/.])minimax[-.]?m([23])(?:[.-]\d+)*(?:[.-](?:highspeed|lightning|turbo|flash|preview|her))*(?![a-z0-9])/g
+  let m
+  while ((m = re.exec(text)) !== null) return { major: Number(m[1]) }
+  return null
+}
+export function isMiniMaxModel(slug) {
+  return minimaxMatch(slug) !== null
+}
+// Model-split predicates: M3 (passive only, no write billing) vs M2.x
+// (passive + explicit cache_control, writes billed). Kept separate so the
+// baselines never flatten a real billing difference.
+function isMiniMaxM3(slug) {
+  const r = minimaxMatch(slug)
+  return r !== null && r.major === 3
+}
+function isMiniMaxM2(slug) {
+  const r = minimaxMatch(slug)
+  return r !== null && r.major === 2
+}
+
 // Candidate ids for exact/alias lookup. Includes the raw apiID/modelID, the
 // lower-cased forms, and a single stripped transport/vendor prefix
 // (e.g. "openai/gpt-5.6-luna" -> "gpt-5.6-luna", "xiaomi/mimo-v2.6-flash" ->
@@ -453,6 +489,49 @@ export const BASELINES = {
     ],
     inventoryRef: "§8c Meta Muse",
   },
+  "minimax.m3-cache": {
+    id: "minimax.m3-cache",
+    creator: "minimax",
+    appliesTo:
+      "MiniMax M3 / M3.1 (passive automatic prefix caching; no explicit cache_control, no billed write)",
+    automatic: true,
+    defaultMode: "implicit",
+    // M3 is not in MiniMax's explicit cache_control model list.
+    supportsExplicitBreakpoints: false,
+    minCacheTokens: 512,
+    // Passive TTL is auto-adjusted; no numeric TTL documented.
+    ttl: null,
+    cacheKeyOptional: true,
+    // M3 has no documented cache-write charge (passive only).
+    cacheWriteBilled: false,
+    usageFields: [
+      "prompt_tokens_details.cached_tokens", // OpenAI Chat Completions
+      "input_tokens_details.cached_tokens", // Responses
+    ],
+    inventoryRef: "§8d MiniMax",
+  },
+  "minimax.m2-cache": {
+    id: "minimax.m2-cache",
+    creator: "minimax",
+    appliesTo:
+      "MiniMax M2.7 / M2.5 / M2.1 / M2 (passive automatic caching + Anthropic cache_control; explicit writes billed)",
+    automatic: true,
+    defaultMode: "implicit",
+    supportsExplicitBreakpoints: true,
+    minCacheTokens: 512,
+    // Explicit cached content TTL is 5 minutes, refreshed on hit; passive TTL is
+    // auto-adjusted. No single fixed family TTL.
+    ttl: null,
+    cacheKeyOptional: true,
+    cacheWriteBilled: true,
+    usageFields: [
+      "prompt_tokens_details.cached_tokens", // OpenAI Chat Completions
+      "input_tokens_details.cached_tokens", // Responses
+      "cache_read_input_tokens", // Anthropic Messages
+      "cache_creation_input_tokens", // Anthropic Messages (write)
+    ],
+    inventoryRef: "§8d MiniMax",
+  },
   "neutral.none": {
     id: "neutral.none",
     creator: "unknown",
@@ -557,6 +636,11 @@ const NEUTRAL_RUNTIME = Object.freeze({
   museCacheAffinity: false,
   museRouteAware: false,
   museCacheRetention: null,
+  // MiniMax capability flags: route-aware observation only; `cacheWriteBilled`
+  // is model-split (false for M3, true for M2.x) and descriptive, never a
+  // request mutation.
+  minimaxRouteAware: false,
+  minimaxCacheWriteBilled: false,
 })
 
 const rt = (policy, overrides = {}) => ({
@@ -877,6 +961,41 @@ export const POLICY_REGISTRY = [
     boundary: "Meta Muse Spark (all transports)",
     note: "Meta prompt caching is automatic/provider-managed positional prefix caching on all Muse Spark text models; Meta reports only cached reads (no write/creation field, so no write token is fabricated). CacheEngine never mutates the request. Meta documents `prompt_cache_key` (Chat + Responses) as a routing/affinity hint that MUST be stable per application/use-case and explicitly NOT per-user/per-session (unique keys lower hit rates), so CacheEngine never injects or derives one. `prompt_cache_retention` (`in_memory` default / `24h`) is a best-effort request-level hint with memory/privacy implications and is left harness/user-owned. On direct Meta (providerID meta, npm @ai-sdk/openai) OpenCode already sets promptCacheKey = sessionID (per-session), which CacheEngine preserves rather than overwriting; Go/Zen/OpenRouter/gateways stay passive. Verified 2026-10-06 (RF-PRV-008 / RF-OC-014).",
     inventoryRef: "§8c Meta Muse",
+  },
+  {
+    // v0.5.x: MiniMax M3.x. Passive automatic prefix caching only; not in
+    // MiniMax's explicit cache_control list, and no documented cache-write
+    // charge. OpenCode already inserts Anthropic cache_control on the
+    // @ai-sdk/anthropic MiniMax routes, so CacheEngine stays PASSIVE.
+    id: "minimax.m3",
+    creator: "minimax",
+    family: "minimax",
+    kind: "family",
+    predicate: isMiniMaxM3,
+    baseline: "minimax.m3-cache",
+    overlays: [],
+    legacy: true,
+    runtime: rt("minimax", { minimaxRouteAware: true, minimaxCacheWriteBilled: false }),
+    boundary: "MiniMax M3 / M3.1 (all transports)",
+    note: "MiniMax M3 uses passive automatic prefix caching (prefix order tools -> system -> messages, >=512 input tokens, auto-adjusted TTL) and is NOT in MiniMax's explicit cache_control model list, so there is no billed cache write. CacheEngine never mutates the request. Direct MiniMax (providerID minimax*, npm @ai-sdk/anthropic) and OpenCode Go use the Anthropic-compatible Messages API where OpenCode's own applyCaching inserts cache_control breakpoints; Zen uses @ai-sdk/openai-compatible. OpenRouter/gateways stay passive. Verified 2026-10-07 (RF-PRV-009 / RF-OC-015).",
+    inventoryRef: "§8d MiniMax",
+  },
+  {
+    // v0.5.x: MiniMax M2.x. Passive automatic caching plus explicit Anthropic
+    // cache_control with a billed write; M3 has neither, so the two are split
+    // into separate baselines rather than one flattened family value.
+    id: "minimax.m2",
+    creator: "minimax",
+    family: "minimax",
+    kind: "family",
+    predicate: isMiniMaxM2,
+    baseline: "minimax.m2-cache",
+    overlays: [],
+    legacy: true,
+    runtime: rt("minimax", { minimaxRouteAware: true, minimaxCacheWriteBilled: true }),
+    boundary: "MiniMax M2.7 / M2.5 / M2.1 / M2 (all transports)",
+    note: "MiniMax M2.7/M2.5/M2.1/M2 support passive automatic prefix caching AND, on the Anthropic-compatible endpoint, explicit cache_control:{type:ephemeral} breakpoints (<=4, 5-minute TTL refreshed on hit, 20-block lookback), with explicit cache writes billed ($0.375/M). CacheEngine never mutates the request: OpenCode's applyCaching owns the breakpoints on the @ai-sdk/anthropic routes (direct MiniMax, Go). Verified 2026-10-07 (RF-PRV-009 / RF-OC-015).",
+    inventoryRef: "§8d MiniMax",
   },
 ]
 
