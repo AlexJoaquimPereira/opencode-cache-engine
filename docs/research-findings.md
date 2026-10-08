@@ -530,6 +530,52 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   the OpenCode-supplied key as authoritative cache guidance for Meta — Meta's own
   docs say a per-session key lowers hit rate.
 
+### RF-OC-015 — OpenCode 1.18.34 routes direct MiniMax and OpenCode Go through the Anthropic SDK, and Zen through the OpenAI-compatible SDK
+
+- Status: current
+- Verified: 2026-10-07
+- Area: opencode-runtime
+- Fact: The bundled OpenCode 1.18.34 catalog defines direct MiniMax as
+  `minimax: { id: "minimax", env: ["MINIMAX_API_KEY"], npm: "@ai-sdk/anthropic",
+  api: "https://api.minimax.io/anthropic/v1", name: "MiniMax (minimax.io)" }`, and
+  the MiniMax Token Plan providers `minimax-coding-plan` / `minimax-cn-coding-plan` with the
+  same `@ai-sdk/anthropic` npm and `/anthropic/v1` base URL. So direct MiniMax is
+  driven through the **Anthropic-compatible Messages API**. Because OpenCode's
+  `ProviderTransform.applyCaching` gate matches `api.npm === "@ai-sdk/anthropic"`,
+  **OpenCode itself inserts Anthropic `cache_control` breakpoints on the direct
+  MiniMax routes** (first two system messages, last two non-system messages,
+  `{type:"ephemeral"}`, ≤4) — unless a top-level `options.cacheControl` is
+  supplied, which flips to automatic (RF-OC-008). OpenCode **Go**
+  (`opencode-go`) serves `minimax-m3` and `minimax-m2.7` via `@ai-sdk/anthropic`
+  on `/zen/go/v1/messages` (per RF-OC-011), so the same `applyCaching` fires there
+  too, and Go asks clients to send a stable `x-opencode-session`. OpenCode **Zen**
+  (`opencode`) serves `minimax-m3`/`-m2.7`/`-m2.5` via
+  `@ai-sdk/openai-compatible` on `/zen/v1/chat/completions`, which the
+  `applyCaching` gate does **not** match, so Zen MiniMax is passive-only.
+  Consequences: CacheEngine must not duplicate or compete with the harness
+  breakpoints on the `@ai-sdk/anthropic` routes, and must not inject any MiniMax
+  cache field on Zen/OpenRouter/gateways. This route asymmetry (same model,
+  different SDK/cache contract) is why MiniMax is route-aware but passive.
+- Evidence: [O]
+- Sources: local `opencode@1.18.34` binary (`~/.opencode/bin/opencode`),
+  inspected 2026-10-07: the `minimax` / `minimax-coding-plan` catalog entries;
+  the `applyCaching` gate
+  `(... || api.npm === "@ai-sdk/anthropic" || api.npm === "@ai-sdk/alibaba") && api.npm !== "@ai-sdk/gateway" && !usesAnthropicAutomaticCaching`;
+  the per-model `@ai-sdk/anthropic` overrides on `opencode-go`. Complements
+  RF-OC-008 (Anthropic gate) and RF-OC-011 (Go/Zen catalogs).
+- Justifies: the passive `minimax.m3` / `minimax.m2` policies; the
+  `minimax_route` telemetry `route` / `harnessAnthropicCaching` fields; the
+  MiniMax route tests.
+- Version context: OpenCode 1.18.34 (bundled `@ai-sdk/anthropic` and
+  `@ai-sdk/openai-compatible`).
+- Re-verify when: OpenCode changes the MiniMax provider npm/base URL, the
+  `applyCaching` gate, or the Go/Zen MiniMax transport.
+- Superseded by: null
+- Notes: `applyCaching` fires for direct MiniMax including **M3**, which is not in
+  MiniMax's explicit `cache_control` model list; whether MiniMax ignores or
+  rejects those breakpoints on M3 is unverified ([U]). CacheEngine does not
+  intervene in OpenCode's transform.
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
@@ -1272,3 +1318,112 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   generate a per-session key (Meta states it lowers hit rates). `24h` retention is
   a request-level policy with memory/privacy implications and is left
   harness/user-owned.
+
+### RF-PRV-009 — MiniMax caching: passive automatic prefix caching for all M-series, explicit Anthropic cache_control only for M2.x
+
+- Status: current
+- Verified: 2026-10-07
+- Area: provider-mechanics
+- Fact: MiniMax documents **two** cache modes, split by model. **Passive
+  (automatic)**: "Automatic Caching: Passive caching that automatically
+  identifies repeated context content without changing API call methods";
+  marketing pages say "Full automatic Cache support, no configuration needed."
+  Supported: **M3 / M2.7 series / M2.5 series / M2.1 series**. Prefix matching is
+  positional in the order **"tool list → system prompts → user messages"**;
+  "Caching applies to API calls with 512 or more input tokens" (the 512-token
+  **cacheability threshold** is distinct from the models' own context/pricing
+  tiers — e.g. M3's 1M-token context — which are not cache thresholds); passive
+  TTL is
+  **"automatically adjusted based on system load"** (no numeric value). **Explicit
+  (Anthropic-compatible endpoint only)**: `cache_control:{"type":"ephemeral"}` on
+  `system[]`, `messages[].content[]`, and `tools[]`; cumulative prefix order
+  "`tools` → `system` → `messages`"; ≤4 breakpoints ("only the most recent 4");
+  20-block lookback; **5-minute TTL refreshed on each hit**. Explicitly supported:
+  **M2.7 / M2.5 / M2.1 / M2 series — M3 is NOT listed**, so M3 has no explicit
+  breakpoint and no billed write. Request/response cache inputs:
+  - `prompt_cache_key` (string) is a **routing identifier** on the **Responses**
+    API (`/v1/responses`) only; no documented pricing/eligibility effect. **No**
+    `cache_ttl`, `prompt_cache_retention`, `cache_breakpoint`, or `cache_key`
+    exists anywhere searched.
+
+  Endpoints: native `POST https://api.minimax.io/v1/text/chatcompletion_v2`;
+  OpenAI-compatible `POST https://api.minimax.io/v1/chat/completions` (base
+  `https://api.minimax.io/v1`); Anthropic-compatible
+  `POST https://api.minimax.io/anthropic/v1/messages` (base
+  `https://api.minimax.io/anthropic`); OpenAI Responses-compatible
+  `POST https://api.minimax.io/v1/responses`.
+
+  Model IDs: `MiniMax-M3.1-Flash-Preview` (M Plan/Code only), `MiniMax-M3`,
+  `MiniMax-M2.7`, `MiniMax-M2.7-highspeed`, `MiniMax-M2.5`,
+  `MiniMax-M2.5-highspeed`, `MiniMax-M2.1`, `MiniMax-M2.1-highspeed`,
+  `MiniMax-M2`. (Also noted, not cache-related: `max_tokens` is deprecated in
+  favour of `max_completion_tokens` on the OpenAI-compatible schema.)
+
+  Usage fields: OpenAI Chat `usage.prompt_tokens_details.cached_tokens` (read
+  only); Responses `usage.input_tokens_details.cached_tokens` (read only);
+  Anthropic Messages `usage.cache_read_input_tokens` (read) and
+  `usage.cache_creation_input_tokens` (**write**). **A cache-write/creation field
+  exists only on the Anthropic-compatible endpoint**; Chat Completions and
+  Responses expose reads only. Native v2 `usage` documents only `total_tokens`.
+
+  Economics (USD per 1M tokens): **M3** $0.30 input / $0.06 cached read / **no
+  write column**; **M2.7** $0.30 / $0.06 / **$0.375 write**; **M2.7-highspeed**
+  $0.60 / $0.06 / $0.375; **M2.5** $0.30 / $0.03 / $0.375; **M2.5-highspeed**
+  $0.60 / $0.03 / $0.375. The Cache Comparison table states "No additional charge
+  for cache writes" (Passive) vs "First-time cache writes incur additional
+  charges" (Explicit). So **M3 and M2.x differ materially on cache-write
+  billing.**
+
+  Reasoning: multi-turn function-call conversations must append the complete
+  assistant message, and `thinking` blocks must be preserved unchanged (they
+  carry a `signature`); this is required for reasoning continuity and preserved
+  thinking is part of the prefix. Whether reasoning preservation is specifically
+  required for cache hits is not stated **[U]**.
+
+  Subscription: the current product is the **MiniMax Token Plan** (the official
+  page titles it "Token Plan" and says it "extends upon our former Coding Plan";
+  older documentation also referred to an "M Plan"). External tools use a
+  **Subscription Key (`sk-cp-…`), a plain Bearer key on the same direct
+  `api.minimax.io/v1` or `/anthropic` endpoints (no OAuth)**; OpenCode provider key
+  `minimax-coding-plan` (`MiniMax Token Plan (minimax.io)`). Token Plan is **not** a
+  separate cache provider, and cache semantics are not documented as different
+  under it.
+
+  OpenRouter: MiniMax is **absent** from OpenRouter's caching doc; every listed
+  MiniMax endpoint reports `supports_implicit_caching: false` (contradicting the
+  populated `input_cache_read` pricing), **no `input_cache_write`**, and **no
+  cache field in `supported_parameters`**; only Chat Completions endpoints are
+  listed.
+- Evidence: [D] (MiniMax first-party docs; OpenRouter docs/API) / [U] (the
+  unknowns below)
+- Sources: https://platform.minimax.io/docs/api-reference/text-prompt-caching ,
+  https://platform.minimax.io/docs/api-reference/anthropic-api-compatible-cache ,
+  https://platform.minimax.io/docs/api-reference/text-chat-openai ,
+  https://platform.minimax.io/docs/api-reference/text-chat-anthropic ,
+  https://platform.minimax.io/docs/api-reference/text-post ,
+  https://platform.minimax.io/docs/api-reference/responses-create ,
+  https://platform.minimax.io/docs/guides/pricing-paygo ,
+  https://platform.minimax.io/docs/m-plan/intro ,
+  https://platform.minimax.io/docs/m-plan/opencode ;
+  https://www.minimax.io/models/text/m3 , .../m27 ;
+  https://openrouter.ai/api/v1/models/minimax/minimax-m3/endpoints (and m2.7,
+  m2.5); OpenRouter Prompt Caching. All accessed 2026-10-07.
+- Justifies: the `minimax.m3-cache` baseline (`supportsExplicitBreakpoints:false`,
+  `cacheWriteBilled:false`, read-only usage) and the `minimax.m2-cache` baseline
+  (`supportsExplicitBreakpoints:true`, `cacheWriteBilled:true`, write usage field)
+  — the two are kept separate rather than flattened. The passive `minimax.m3` /
+  `minimax.m2` policies and the `minimax_route` telemetry `cacheWriteBilled` flag.
+- Version context: MiniMax docs fetched 2026-10-07; OpenCode 1.18.34.
+- Unknowns: passive TTL number; eviction/scope/cross-user sharing; whether
+  sampling params (`temperature`/`top_p`), `response_format`, or multimodal
+  image/video blocks affect eligibility; the actual effect of `prompt_cache_key`
+  on the Responses path; whether direct MiniMax ignores or rejects `cache_control`
+  sent to **M3** (which is not in the explicit list); whether OpenRouter sticky
+  routing helps MiniMax.
+- Re-verify when: MiniMax changes the cache modes, model list, write pricing, or
+  usage fields; or adds a TTL/retention/affinity control.
+- Superseded by: null
+- Notes: `cache_control` is a **cache-eligibility/breakpoint** control, while
+  `prompt_cache_key` is routing-only — do not treat them as equivalent. M3 and
+  M2.x must not share one `cacheWriteBilled` value. Do not store prompts,
+  credentials, bodies, or cache-key values.
