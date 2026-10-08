@@ -125,6 +125,8 @@ type PolicyRuntime = {
   museCacheAffinity: boolean
   museRouteAware: boolean
   museCacheRetention: string | null
+  minimaxRouteAware: boolean
+  minimaxCacheWriteBilled: boolean
 }
 
 type ModelInfo = { family: string; providerID: string; modelID: string; caps: PolicyRuntime }
@@ -775,6 +777,43 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
             affinitySource,
             retentionSource: isDirectMeta ? (hasRetention ? "preexisting" : "none") : "n/a",
             note: "Meta caching is automatic; prompt_cache_key must be app-stable, never per-session, so CacheEngine injects nothing",
+          })
+          return
+        }
+
+        // ---- MiniMax: route observation (no mutation) ------------------------
+        // MiniMax caching is automatic prefix caching. M2.x additionally supports
+        // explicit Anthropic cache_control (billed writes), but OpenCode owns
+        // those breakpoints on the @ai-sdk/anthropic routes; M3 has no write
+        // charge. CacheEngine records the route disposition and mutates nothing.
+        if (caps?.minimaxRouteAware === true && policyEnabled(cfg, caps.policy) && info) {
+          const npm = String((input.model as unknown as ChatParamsModel)?.api?.npm ?? "")
+          const provider = liveProviderID
+          const lowerProvider = provider.toLowerCase()
+          let route
+          if (!provider) route = "unknown_provider"
+          else if (lowerProvider.startsWith("minimax")) route = "direct_minimax"
+          else if (lowerProvider.startsWith("opencode")) route = "opencode"
+          else if (lowerProvider === "openrouter") route = "openrouter"
+          else route = "gateway"
+          // A MiniMax cache write can only be billed where a breakpoint is actually
+          // sent: the Anthropic-compatible routes, for the M2.x baseline. Report
+          // that per-request potential, not the bare model capability, so an
+          // OpenAI-compatible/OpenRouter M2.x request is not mislabeled as billed.
+          const harnessAnthropicCaching = npm === "@ai-sdk/anthropic" && lowerProvider !== "openrouter"
+          rec.record({
+            kind: "boundary",
+            sid: input.sessionID,
+            ts: Date.now(),
+            reason: "minimax_route",
+            policy: "minimax",
+            provider: provider || null,
+            model: liveModelID || null,
+            route,
+            harnessAnthropicCaching,
+            modelWriteBilledCapable: caps.minimaxCacheWriteBilled === true,
+            cacheWriteBilled: harnessAnthropicCaching && caps.minimaxCacheWriteBilled === true,
+            note: "MiniMax caching is automatic; the harness owns any Anthropic cache_control breakpoints; CacheEngine mutates nothing",
           })
           return
         }
