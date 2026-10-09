@@ -37,7 +37,7 @@ Milestone status (reconciled 2026-10-09; no fixed calendar dates are promised):
 | v0.4.x | Maintenance; K1/K2 fixes | done |
 | v0.5.x | Provider coverage (Kimi, Claude, Gemini, Qwen, xAI/Grok, Meta Muse, MiniMax) | shipped (last family MiniMax = 0.5.8) |
 | v0.6.x | Shared usage/accounting extraction + provider conformance tests | shipped as **v0.6.0** (tag `v0.6.0` = `c1f3420`; 277-test suite green) |
-| v0.7.x | Runtime-independent core contract, session-state model, V2 readiness | **in progress** — v0.7.0 core/adapter contract implemented (docs + tests; see §2B.8); session-state (v0.7.1) and V2 readiness (v0.7.2+) pending |
+| v0.7.x | Runtime-independent core contract, session-state model, V2 readiness | **in progress** — v0.7.0 core/adapter contract (§2B.8) and v0.7.1 session-state lifecycle (§2B.9) implemented (docs + tests); V2 readiness (v0.7.2+) pending |
 | v0.8.x | Functioning V2 adapter (runtime-specific integration) | future work — gated on a verified V2 API contract |
 | v0.9.x | Dual-runtime stabilization and documentation | future work |
 | v1.0.0 | Dual-runtime release | only when V1 and V2 are independently validated |
@@ -477,6 +477,7 @@ dependencies.
   conformance tests.
 - **v0.7.1 — Session-state model and lifecycle** (WP2): specify cursor/watermark
   semantics, compaction/pruning, duplicate prevention, session isolation, cleanup.
+  **(implemented — see §2B.9)**
 - **v0.7.2 or later — V2 readiness and compatibility verification** (WP4):
   validate the shared contract against verified V2 API behavior using isolated
   tests/fixtures. Do not label a skeleton as functional V2 support.
@@ -865,6 +866,93 @@ core runtime-independent (test); V1 owns hooks/client/state (test); provider
 behavior unchanged (existing suite); new tests pass; `npm pack --dry-run` and
 `git diff --check` clean.
 
+### 2B.9 v0.7.1 — session-state lifecycle contract (implemented, 2026-10-09)
+
+**Scope:** the usage-accounting cursor/watermark lifecycle only. One narrow
+shared-core correction; no provider behavior, telemetry schema, or public API
+change.
+
+**Audit (evidence):**
+
+- **[O] State ownership/lifetime:** the cursor (`lastProcessedMessageID`) and
+  watermark (`lastProcessedAt`) live in an **in-memory, per-session
+  `SessionState`** in the V1 adapter (`src/cache-engine.ts`). They initialize to
+  `null` on first `get(sid)`, advance during `collectUsageOnce`, and are removed
+  on `session.deleted` (with a bounded tombstone) and by bounded-map eviction.
+  There is **no persistence across process restarts**. The shared
+  `scanPage`/`nextProcessedCursor` are **pure** functions over a supplied page —
+  they hold no state.
+- **[D] Ordering:** `client.session.messages` is treated as **oldest-first**
+  (chronological, `time.created` non-decreasing), verified against v1.18.34.
+- **[O] Selection:** unprocessed = assistant messages **after the located cursor
+  id**; if the cursor id is absent, only messages with a **finite
+  `time.created` strictly greater than the watermark** are eligible.
+- **[O] Advancement:** the boundary is computed by `nextProcessedCursor` (the
+  newest page element) and applied **before** aggregation/telemetry. Accounting
+  is therefore **not transactional** — a failure after the boundary advances can
+  lose that batch's usage (undercount) but can never double-count.
+
+**Contract:**
+
+- **Initialization:** first scan has `startCursor=null` → every assistant
+  message with tokens is counted; the watermark becomes the newest
+  `time.created`.
+- **Continuation:** with a located cursor, only messages after it are counted,
+  subject to the watermark floor below.
+- **Watermark floor (the v0.7.1 correction):** a message whose finite
+  `time.created <= lastProcessedAt` is **never counted, on any path**. The
+  watermark is the newest `time.created` *observed* in a prior scan (it may come
+  from a trailing user or token-less message, so it is a conservative upper
+  bound, not literally the newest *counted* assistant time) and is monotonic
+  (max only).
+- **Pruned/reverted history:** if the cursor id is gone, the watermark bounds the
+  scan (strictly-greater). If a revert resets the id cursor to an older present
+  message, the watermark floor still prevents re-counting the reverted tail.
+- **No safe boundary:** missing cursor with no watermark → **count nothing**
+  (conservative undercount). Ties at the watermark undercount, never recount.
+- **Missing/incomplete data:** empty page leaves cursor/watermark unchanged; a
+  message without usage does not fabricate read/write; absent cache fields are
+  `0`, not invented; missing/empty ids are skipped and never advance the cursor;
+  a non-finite `time.created` cannot be bounded and is skipped on the
+  missing-cursor path.
+- **Idempotency/concurrency:** overlapping `session.idle` calls for one session
+  are serialized by a per-session `collectChain`, so the cursor is re-read only
+  after the previous scan advanced it; repeated scans of unchanged history count
+  `0`; distinct sessions are independent. **Normal-scan duplicate prevention is
+  guaranteed; durable exactly-once accounting across restarts is not** (state is
+  in-memory and advancement is pre-aggregation).
+
+**Narrow correction (justified by a reproduced defect):** the watermark was
+applied only when the cursor id was missing. A prune/revert that reset the id
+cursor behind an already-counted message therefore re-counted that history
+(reproduced: a reverted-then-restored message was counted twice). The fix makes
+the watermark floor apply on the located-cursor path too
+(`src/cache-usage-core.mjs`, one condition), so historical messages are never
+recounted. Timestamp ties now undercount rather than double-count (consistent
+with the existing strictly-greater watermark rule). No signature, export, or
+provider behavior changed.
+
+**Verified vs unknown:**
+
+- *Verified by tests:* initialization; continuation; repeated-scan idempotency;
+  pruning fallback; revert-then-restore no-recount; unsafe-boundary
+  undercount; empty history; missing usage; partial usage; timestamp edges; the
+  adapter-level revert/restore path; watermark monotonicity.
+- *Unknown / not established (documented, not assumed):* whether the V1 runtime
+  can rewind-then-restore message history at all; persistence across restarts;
+  message-id uniqueness/immutability guarantees; any concurrency semantics
+  beyond the tested serialized `session.idle` path; and whether the watermark
+  should advance only from counted assistant timestamps (would reduce
+  same-millisecond tie undercounts — needs evidence on OpenCode `time.created`
+  collisions before changing it).
+
+**Tests added:** three in `test/cache-engine.test.mjs` (table-driven watermark
+floor; composed revert/restore lifecycle; adapter-level revert/restore probe).
+Suite: **281 → 284**.
+
+**Milestone status:** **v0.7.1 complete** (documentation + one narrow correction +
+tests). Session-state redesign remains out of scope; V2 readiness is v0.7.2+.
+
 ## 3. Branch Strategy
 
 Use Git branches for parallel development:
@@ -1190,7 +1278,7 @@ fixed calendar dates are promised). Milestone-specific acceptance criteria:
 
 - **0.5.x:** Provider-coverage phase complete — Kimi, Claude, Gemini, Qwen, xAI/Grok, Meta Muse, and MiniMax each landed as a separate validated release (§2, §2.0). `npm test` passes at every increment.
 - **0.6.0 (DONE):** usage/accounting extracted to `cache-usage-core.mjs`; identity audited (no new abstraction); table-driven provider conformance/regression tests added; no provider behavior changed; shipped with a green 277-test suite. See §2.0b.
-- **0.7.x (IN PROGRESS — see §2B and §2B.8):** the v0.7.0 core/adapter contract is implemented (boundary audited; documentation + 4 contract tests; no source change was required). The session-state model/lifecycle (v0.7.1) and V2 readiness/verification (v0.7.2+) remain; V2 readiness must be verified-mapped or explicitly deferred. V1 behavior is unchanged. This milestone does **not** build a functioning V2 adapter and makes no dual-runtime claim.
+- **0.7.x (IN PROGRESS — see §2B, §2B.8, §2B.9):** the v0.7.0 core/adapter contract (§2B.8) and the v0.7.1 session-state lifecycle (§2B.9) are implemented (documentation + tests; v0.7.1 includes one narrow watermark-floor correction). V2 readiness/verification (v0.7.2+) remains and must be verified-mapped or explicitly deferred. V1 behavior is unchanged. This milestone does **not** build a functioning V2 adapter and makes no dual-runtime claim.
 - **0.8.x (future, gated on a verified V2 API contract):** a functioning V2 adapter is implemented and its hook mapping tested.
 - **0.9.x (future):** dual-runtime stabilization and documentation.
 - **1.0.0 (future):** released only when V1 and V2 support are independently validated, all tests are green, and packaging is finalized.
