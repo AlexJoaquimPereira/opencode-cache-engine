@@ -76,6 +76,7 @@ import {
   resolveRuntimePolicy,
 } from "../src/cache-policy-core.mjs"
 import * as usageCore from "../src/cache-usage-core.mjs"
+import * as engineCore from "../src/cache-engine-core.mjs"
 
 const asst = (id, read, write) => ({
   info: { id, role: "assistant", tokens: { cache: { read, write } } },
@@ -4844,4 +4845,93 @@ test("v0.6.x conformance: session identity is deterministic, distinct, and non-s
   assert.notEqual(ma, mimoSessionIdFor("ses_beta"))
   assert.match(ma, /^mimo-ses-[0-9a-f]{16}$/)
   assert.equal(mimoSessionIdFor(""), null)
+})
+
+// ---------------------------------------------------------------------------
+// v0.7.0 — shared-core / runtime-adapter contract
+//
+// These tests pin the observable boundary between the runtime-independent
+// shared core (the three .mjs modules) and the OpenCode V1 adapter
+// (cache-engine.ts). They assert import-graph isolation, adapter ownership of
+// hook registration, the single-definition re-export contract, and the
+// plain-data capability shape exchanged from the shared resolver to the
+// adapter. They complement (do not duplicate) the behavioural policy /
+// transformation / usage tests above.
+// ---------------------------------------------------------------------------
+
+const SHARED_MODULES = ["cache-policy-core.mjs", "cache-engine-core.mjs", "cache-usage-core.mjs"]
+const SRC_DIR = join(import.meta.dirname, "..", "src")
+const importSpecifiers = (src) => [
+  ...[...src.matchAll(/\bfrom\s+["']([^"']+)["']/g)].map((m) => m[1]),
+  ...[...src.matchAll(/\bimport\s*\(\s*["']([^"']+)["']\s*\)/g)].map((m) => m[1]),
+]
+
+test("v0.7.0 contract: shared core imports only node: builtins and sibling shared modules", () => {
+  const sibling = /^\.\/(cache-policy-core|cache-engine-core|cache-usage-core)\.mjs$/
+  for (const file of SHARED_MODULES) {
+    const src = readFileSync(join(SRC_DIR, file), "utf8")
+    for (const spec of importSpecifiers(src)) {
+      assert.ok(
+        spec.startsWith("node:") || sibling.test(spec),
+        `${file}: forbidden import "${spec}" — the shared core must stay runtime-independent of OpenCode and V2`,
+      )
+    }
+    assert.ok(!/@opencode-ai\//.test(src), `${file} must not reference the OpenCode SDK`)
+  }
+})
+
+test("v0.7.0 contract: the V1 adapter owns hook registration and consumes the shared resolver", () => {
+  const src = readFileSync(join(SRC_DIR, "cache-engine.ts"), "utf8")
+  assert.ok(/from\s+["']\.\/cache-engine-core\.mjs["']/.test(src), "adapter must import the shared core")
+  assert.ok(/from\s+["']\.\/cache-policy-core\.mjs["']/.test(src), "adapter must import the shared policy resolver")
+  assert.ok(src.includes("resolveRuntimePolicy"), "adapter must consume resolveRuntimePolicy")
+  for (const hook of ["chat.headers", "chat.params", "experimental.chat.system.transform", "experimental.session.compacting"]) {
+    assert.ok(src.includes(`"${hook}":`), `adapter must register the ${hook} hook`)
+  }
+  assert.ok(src.includes('event.type === "session.idle"'), "adapter must handle the session.idle event")
+})
+
+test("v0.7.0 contract: cache-engine-core re-exports every cache-usage-core function identically", () => {
+  const exported = Object.entries(usageCore).filter(([, value]) => typeof value === "function")
+  assert.ok(exported.length >= 7, "cache-usage-core must export its accounting functions")
+  for (const [name, fn] of exported) {
+    assert.equal(typeof engineCore[name], "function", `cache-engine-core must re-export ${name}`)
+    assert.equal(engineCore[name], fn, `${name} must be the same binding (single definition), not a duplicate`)
+  }
+})
+
+const RUNTIME_CAP_KEYS = [
+  "policy",
+  "isNeutral",
+  "gptCacheMetadata",
+  "envRelocation",
+  "thinkingIntegrity",
+  "cacheRatio",
+  "providerChange",
+  "prefixDiagnostics",
+  "openRouterAffinity",
+  "grokCacheAffinity",
+  "grokRouteAware",
+  "museCacheAffinity",
+  "museRouteAware",
+  "museCacheRetention",
+  "minimaxRouteAware",
+  "minimaxCacheWriteBilled",
+]
+
+test("v0.7.0 contract: resolveRuntimePolicy returns the documented plain-data capability set", () => {
+  const caps = resolveRuntimePolicy({
+    providerID: "opencode-go",
+    id: "mimo-v2.6-flash",
+    api: { id: "mimo-v2.6-flash", npm: "@ai-sdk/openai-compatible" },
+  })
+  assert.ok(caps && typeof caps === "object")
+  for (const key of RUNTIME_CAP_KEYS) {
+    assert.ok(Object.prototype.hasOwnProperty.call(caps, key), `resolved policy is missing capability "${key}"`)
+  }
+  assert.equal(typeof caps.policy, "string")
+  assert.equal(typeof caps.isNeutral, "boolean")
+  for (const [key, value] of Object.entries(caps)) {
+    assert.notEqual(typeof value, "function", `capability "${key}" must be plain data, never a runtime function`)
+  }
 })
