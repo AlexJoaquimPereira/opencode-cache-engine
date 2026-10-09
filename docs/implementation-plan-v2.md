@@ -19,45 +19,36 @@ The **opencode-cache-engine** has completed its v0.4.x maintenance (fixing K1/K2
 The plan started from the `v0.4.13` baseline on `master` (v0.4.x maintenance complete; all known bugs fixed) and a repository at `https://github.com/AlexJoaquimPereira/opencode-cache-engine`; the v0.5.x provider coverage has since shipped (see §2.0).
 
 ```mermaid
-gantt
-    title opencode-cache-engine v1.0 Roadmap
-    dateFormat  YYYY-MM-DD
-    section v0.5.x (2026 Q4 - 2027 Q1) - provider coverage
-    Add Kimi support (route-scoped) :kimi,   2026-10-10, 10d
-    Add Claude support            :claude,  after kimi,   14d
-    Add Gemini support (passive)   :gemini,  after claude, 10d
-    Add Qwen support (passive)     :qwen,    after gemini, 10d
-    Release 0.5.x/QA              :qa0.5,   after qwen,    7d
-    section v0.6.x (2027 Q1) - core consolidation (no provider prereqs)
-    Extract usage/accounting core :acct-core, 2027-01-10, 21d
-    Policy conformance tests      :conf,      after acct-core, 14d
-    Release 0.6.x/QA             :qa0.6,     after conf,     7d
-    section v0.7.x (2027 Q1)
-    Define adapter interface    :adapter-if, 2027-01-10, 7d
-    Port accounting to shared core :acct-port, after adapter-if, 10d
-    Design session-state model   :session, 2027-01-10, 14d
-    initial V2 plugin skeleton   :v2-skel, after adapter-if, 10d
-    Release 0.7.x/QA             :qa0.7,    after acct-core, 5d
-    section v0.8.x (2027 Q2)
-    Implement V2 adapter (context & hooks) :v2-adapt, 2027-04-01, 21d
-    Migrate TUI/CLI integration             :tui, after v2-adapt, 7d
-    Dual-runtime integration testing        :dual-test, after tui, 14d
-    Release 0.8.x/QA             :qa0.8,    after dual-test, 5d
-    section v0.9.x (2027 Q3)
-    Final V2 polish (performance, logging) :v2-final, 2027-07-01, 14d
-    Compliance and final docs review       :docs, after v2-final, 7d
-    Release 0.9.x/QA             :qa0.9,    after docs, 7d
-    section v1.0.0 (2027 H2)
-    v1.0.0 Release              :release, 2027-09-01, 1d
+flowchart LR
+    v04["v0.4.x maintenance<br/>(done)"] --> v05["v0.5.x provider coverage<br/>(shipped)"]
+    v05 --> v06["v0.6.0 shared usage/accounting core<br/>(shipped — tag v0.6.0)"]
+    v06 --> v07["v0.7.x core contract + session-state spec<br/>+ V2 readiness (PLANNED NEXT)"]
+    v07 --> v08["v0.8.x functioning V2 adapter<br/>(future — needs verified V2 API)"]
+    v08 --> v09["v0.9.x dual-runtime stabilization<br/>(future)"]
+    v09 --> v10["v1.0.0 dual-runtime release<br/>(only when both runtimes validated)"]
+    v2b["feature/v2-adapter branch<br/>(protected)"] -.-> v07
+    v2b -.-> v08
 ```
 
-**Acceptance Criteria (Milestones):** Each milestone (0.5.x–1.0.0) has specific done conditions. **0.5.x** is a provider-coverage phase: Kimi, Claude, Gemini, Qwen, xAI/Grok, Meta Muse, and MiniMax each land as a separate validated release (see §2 and §2.0 for per-milestone exit conditions and the definition of done). **0.6.x** consolidates the shared core (usage/accounting extraction) and conformance tests with no provider prerequisites. **0.7.x** completes core/interface refactor (V2-stubs built, shared core usable by both). **0.8.x** sees a functioning V2 adapter (loading and mapping hooks, passing tests). **0.9.x** is a final stable dual-runtime beta. **1.0.0** is release-ready with complete documentation.
+Milestone status (reconciled 2026-10-09; no fixed calendar dates are promised):
+
+| Milestone | Objective | Status |
+| --- | --- | --- |
+| v0.4.x | Maintenance; K1/K2 fixes | done |
+| v0.5.x | Provider coverage (Kimi, Claude, Gemini, Qwen, xAI/Grok, Meta Muse, MiniMax) | shipped (last family MiniMax = 0.5.8) |
+| v0.6.x | Shared usage/accounting extraction + provider conformance tests | shipped as **v0.6.0** (tag `v0.6.0` = `c1f3420`; 277-test suite green) |
+| v0.7.x | Runtime-independent core contract, session-state model, V2 readiness | **planned** — specified in **§2B**; nothing implemented |
+| v0.8.x | Functioning V2 adapter (runtime-specific integration) | future work — gated on a verified V2 API contract |
+| v0.9.x | Dual-runtime stabilization and documentation | future work |
+| v1.0.0 | Dual-runtime release | only when V1 and V2 are independently validated |
+
+**Acceptance Criteria (Milestones):** Each milestone has explicit done conditions. **v0.5.x** is a provider-coverage phase: Kimi, Claude, Gemini, Qwen, xAI/Grok, Meta Muse, and MiniMax each land as a separate validated release (see §2 and §2.0). **v0.6.0** consolidates the shared usage/accounting core and conformance tests with no provider prerequisites (see §2.0b). **v0.7.x** establishes and documents a runtime-independent shared-core contract, specifies session-state ownership and lifecycle, and prepares for V2 integration **without changing V1 behavior or claiming dual-runtime support** — it does not build a functioning V2 adapter (see §2B). **v0.8.x** sees a functioning V2 adapter only after the V2 API contract is verified. **v0.9.x** stabilizes the dual-runtime beta. **1.0.0** is release-ready with complete documentation.
 
 ## 1. Goals and Scope
 
 - **V1 Maintenance:** Keep `v0.4.x` stable. All v0.4 bug fixes (K1/K2) are done; no regressions allowed. (Existing metrics, accounting, and policy behavior remain unchanged unless explicitly enhanced.)
 - **New Provider Strategies:** v0.5.x has added and validated cache strategies for **Kimi, Anthropic/Claude, Google Gemini, Qwen, xAI/Grok, Meta Muse, and MiniMax** as independent, separately released increments (see §2 and §2.0). Mistral remains the only deferred candidate. Each provider strategy is independently researched and tested; provider additions are never bundled with a large architecture refactor.
-- **V2 Adapter Development:** Build a parallel OpenCode V2 plugin adapter in its own branch, reusing the shared policy/core logic. This allows supporting both V1 and V2 concurrently by v1.0.
+- **V2 Adapter Development:** Build a parallel OpenCode V2 plugin adapter in its own branch, reusing the shared policy/core logic. This allows supporting both V1 and V2 concurrently by v1.0. (v0.7.x specifies and validates the shared-core contract and V2 readiness only — see §2B; the functioning adapter is v0.8.x.)
 - **Dual-Runtime 1.0 Target:** Release 1.0.0 when the plugin works correctly under both OpenCode V1 and V2. The codebase should have a single shared core + two runtime adapters (V1 and V2 entry points) by then.
 
 _Per Scope Constraints:_ Do **not** attempt to rebuild the plugin as a V2-only project or drop V1 support. Focus on cache logic; **pricing/cost thresholds are out of scope** (as per policy). All changes should preserve existing behavior unless refactoring for architecture.
@@ -80,13 +71,13 @@ provider additions are not combined with a large architecture refactor.
 | Alibaba Qwen | released — passive | 0.5.x |
 | xAI Grok | released — passive | 0.5.6 |
 | Meta Muse | released — passive | 0.5.7 |
-| MiniMax | implemented in working tree — passive, route-aware (model-split M3 vs M2.x write baselines) | release/version assignment pending explicit authorization |
+| MiniMax | released — passive, route-aware (model-split M3 vs M2.x cache-write baselines) | 0.5.8 |
 
 Remaining deferred candidate: **Mistral** (it still requires its own audit-first
 evidence note; do not implement from plan text). No provider work has touched
 `feature/v2-adapter`, and provider work stays independent of the V2 adapter.
 
-### 2.0b v0.6.x — shared-core consolidation (completed)
+### 2.0b v0.6.x — shared-core consolidation (completed; released as v0.6.0)
 
 - **Usage-accounting extraction (done):** the runtime-independent usage/accounting
   primitives were moved into `src/cache-usage-core.mjs` (`shorthash`, `hitRatePct`,
@@ -106,8 +97,13 @@ evidence note; do not implement from plan text). No provider work has touched
 - **Provider work:** already completed in the v0.5.x line; no provider behavior
   changed in this milestone.
 - **Provider expansion:** not performed; Mistral remains deferred (audit-first).
-- **Out of scope (untouched):** the adapter interface / V2 skeleton (v0.7.x) and
-  the functioning V2 adapter (v0.8.x).
+- **Release (done):** shipped as **v0.6.0** (commit `c1f3420`, tag `v0.6.0`).
+  `npm test` is green (277 tests at the time of writing; the count may grow as
+  tests are added); `npm pack --dry-run` lists 8 files at version 0.6.0; no
+  provider behavior changed.
+- **Out of scope (untouched):** the adapter interface / runtime-adapter contract
+  and the functioning V2 adapter. The contract and session-state **specification**
+  work is now scoped in **§2B** (v0.7.x); the functioning adapter remains v0.8.x.
 
 Every provider below still goes through the **audit-first** procedure in
 `AGENTS.md`. The official links in this section are *starting references to
@@ -427,9 +423,352 @@ test standard.
 - `npm test`, `npm pack --dry-run`, and `git diff --check` pass.
 - Each release contains only validated changes.
 
+> **Historical note:** §2.2–§2.12 reflect the v0.5.x provider-coverage phase, which
+> has **shipped** (see §2.0/§2.0b). The "recommended immediate task" below is
+> retained as historical context only; the current next milestone is **§2B
+> (v0.7.x)**.
+
 Recommended immediate task: start with Kimi route research, then implement the
 smallest verified Kimi policy on `master`. Keep Claude, Gemini, and Qwen as
 separate follow-on tasks, not a single multi-provider patch.
+
+## 2B. v0.7.x — Core contract, session-state model, and V2 readiness (planned)
+
+> **Status: planned, not implemented.** This section specifies the next milestone
+> so it can be executed as a sequence of small, independently verifiable tasks.
+> Everything is a **proposal** unless labeled *verified*. Reading this section
+> changes no code, version, tag, or release state.
+
+### 2B.1 Objective
+
+Establish and validate a **runtime-independent shared-core contract**, document
+**session-state ownership and lifecycle**, and prepare for V2 integration
+**without changing existing V1 behavior or prematurely claiming dual-runtime
+support**.
+
+Guiding rules (from `AGENTS.md`): audit before implementing; a validated
+passive/spec outcome beats an unverified abstraction; fail closed on unknown
+identity or behavior; keep each change narrow, deterministic, and tested; keep V1
+stable on `master`; do not take V2 runtime dependencies on the V1 path; do not
+build a generic plugin framework — define only interfaces justified by real
+shared behavior.
+
+### 2B.2 Verified starting point (v0.6.0)
+
+Confirm this inventory in WP0 before doing anything else. *Verified* from the
+v0.6.0 module exports; the full export lists are the audit subject of WP1.
+
+| Module | Responsibility (verified) | Notable exports |
+| --- | --- | --- |
+| `src/cache-policy-core.mjs` | Pure policy classification + resolution | matchers `isGpt56OrLater`, `isDeepseekV4OrLater`, `isGlm53OrLater`, `isMimoAfterV26`, `isGemini25OrLater`, `isQwenModel`, `isGrokModel`, `isMuseModel`, `isMiniMaxModel`, `isOpenAIish`, `modelSignals`; `BASELINES`, `OVERLAYS`, `TRANSPORTS`, `POLICY_REGISTRY`, `MODEL_ALIASES`; `resolvePolicy`, `resolveRuntimePolicy`, `overlaysRegisteredForFamily`, `policyMatchCategory`, `explainPolicyResolution`, `resolveLegacyFamily` |
+| `src/cache-engine-core.mjs` | Runtime-independent policy helpers, transforms, identity, diagnostics; re-exports the usage core | config (`CONFIG_FILENAME`, `DEFAULT_CONFIG_PATH`, `DEFAULT_METRICS_FILE`, `defaultConfig`, `expandHome`, `parseConfig`, `loadConfig`, `ensureMetricsDir`, `createRecorder`); `POLICY_*`, `GPT56_DEFAULT_TTL/MODE`, `GPT_KEY_MAX_LENGTH`; `canonicalStringify`, `detectPolicy`, `policyEnabled`; GPT helpers (`gptCacheOptionFieldNames`, `gptCacheOptionsDelta`, `resolveCacheRootSync`, `gptCacheKeyFor`); `relocateVolatileEnvBlock`; diagnostics (`commonPrefixLength`, `systemShapeHashes`, `normalizeTool`, `toolFingerprint`, `toolWireFingerprint`, `shapeDiff`, `shapeFieldDiffs`, `prefixChangeReasons`, `digestDecision`); identity/telemetry (`stableSessionIdFor`, `mimoSessionIdFor`, `isOpenRouterAffinityEligible`, `affinityTelemetryFields`, `providerChangeEvent`); reasoning (`detectReasoningIssues`, `reasoningEffortFromOptions`, `observeReasoningEffort`, `reasoningIssueReasons`) |
+| `src/cache-usage-core.mjs` | Runtime-independent usage scanning/cursor/aggregation/ratios (`node:crypto` only) | `shorthash`, `hitRatePct`, `glmHitRatio`, `mimoHitRate`, `shouldAggregate`, `scanPage`, `nextProcessedCursor` |
+| `src/cache-engine.ts` | **V1 adapter**: OpenCode `Plugin` (`CacheEngine`), client/session state, request mutation, event handling | Hooks: `chat.headers`, `chat.params`, `experimental.chat.system.transform`, `experimental.session.compacting`, `event` (`session.idle`) |
+| `src/tui.mjs` | TUI entry (`./tui`); registers the plugin | default plugin object (no CacheEngine-specific UI/server behavior) |
+
+Packaging (verified): `package.json` `files` = `["src/","README.md","LICENSE"]`;
+exports = `./server` → `src/cache-engine.ts`, `./tui` → `src/tui.mjs`; no runtime
+dependencies.
+
+### 2B.3 Proposed increments
+
+- **v0.7.0 — Core and adapter contract** (WP0 + WP1): inventory exports, define
+  runtime boundaries, document inputs/outputs/side-effects, add only justified
+  conformance tests.
+- **v0.7.1 — Session-state model and lifecycle** (WP2): specify cursor/watermark
+  semantics, compaction/pruning, duplicate prevention, session isolation, cleanup.
+- **v0.7.2 or later — V2 readiness and compatibility verification** (WP4):
+  validate the shared contract against verified V2 API behavior using isolated
+  tests/fixtures. Do not label a skeleton as functional V2 support.
+- **WP3 (conformance tests)** and **WP5 (docs/packaging)** thread through the
+  increments rather than being separate releases.
+
+These patch assignments are **proposals** and may change based on audit findings.
+Do not create artificial work to fill release slots.
+
+### 2B.4 Work packages
+
+Each work package below lists: objective/rationale; current-state evidence; ordered
+steps; files expected to change (**provisional**); dependencies; required tests;
+acceptance criteria; stop conditions/rollback; an effort **estimate** (not a
+commitment); and explicit exclusions.
+
+#### WP0 — Baseline and scope lock
+
+- **Objective / rationale:** Fix the starting revision, tests, packaging, and
+  compatibility baseline so v0.6.0 work is not repeated and drift is caught early.
+- **Current-state evidence / inspect:** `git rev-parse HEAD`, `git describe --tags
+  --exact-match`, `git log -5 --oneline --decorate`, `git status --short --branch`,
+  `npm test`, `npm pack --dry-run`, `git diff --check`. Expected: tag `v0.6.0` =
+  `c1f3420`; `package.json` version `0.6.0`; tree clean except the untracked,
+  pre-existing `package-lock.json`.
+- **Ordered steps:** run the commands; record the results; confirm no unexplained
+  working-tree changes; confirm the §2B.2 module inventory; confirm
+  `feature/v2-adapter` is untouched (`git log` it read-only).
+- **Files expected to change (provisional):** none — this is a verification gate.
+- **Dependencies / sequencing:** first; everything else depends on it.
+- **Required tests:** full `npm test`; `npm pack --dry-run`; `git diff --check`.
+- **Acceptance criteria:** the commands succeed and the observed commit/tag/tree
+  match expectations, or any discrepancy is documented and resolved before
+  proceeding (e.g. an authorized post-tag docs commit on `master`).
+- **Stop conditions / rollback:** if the baseline is inconsistent or there are
+  unexplained changes, stop and report. Do **not** repair unrelated pre-existing
+  problems here.
+- **Effort estimate:** 0.5–1 day *(estimate)*.
+- **Exclusions:** no code changes; no provider work; no release operations.
+
+#### WP1 — Shared-core and runtime-adapter contract
+
+- **Objective / rationale:** Document module responsibilities and boundaries, plus
+  the future V2 adapter's translation role, so shared logic has a stable, tested
+  contract — without building a framework.
+- **Current-state evidence / inspect:** the §2B.2 modules; every `import`/`export`/
+  re-export site; the hooks in `src/cache-engine.ts`; the imports in
+  `test/cache-engine.test.mjs`.
+- **Ordered steps:**
+  1. Enumerate every export of the three `.mjs` modules and every caller (search
+     `src/` and `test/`).
+  2. Classify each export: pure function; stateful helper; constant/registry;
+     config/IO helper.
+  3. Define, per module, inputs, outputs, side effects, error handling, and
+     mutation boundaries.
+  4. Define the V1-adapter responsibilities: which OpenCode hooks it registers,
+     what runtime state it owns, which requests it may mutate, and which it must
+     never mutate.
+  5. Define the **future V2 adapter** responsibilities as a translation layer:
+     verified V2 events → shared-core inputs; shared-core outputs → V2 request
+     mutations. Mark every V2 API name *unverified* until WP4.
+  6. Add conformance tests for observable contracts (WP3); where a contract is
+     currently implicit, prefer documenting it over adding code.
+- **Files expected to change (provisional):** `docs/implementation-plan-v2.md`
+  and/or a new `docs/architecture-core-contract.md`; `test/cache-engine.test.mjs`.
+  **No source change is expected**; a source change is justified only if the audit
+  finds a real shared behavior the current exports cannot express.
+- **Dependencies / sequencing:** after WP0; independent of WP2; feeds WP4.
+- **Required tests:** the WP3 contract tests; full `npm test`.
+- **Acceptance criteria:** the contract is documented with observable, testable
+  statements; every shared export is classified; the V1-adapter boundary is
+  stated; no unverified V2 API is presented as fact; tests pass.
+- **Stop conditions / rollback:** if the audit shows a genuine abstraction is
+  required, stop and propose it as its own scoped task rather than implementing it
+  mid-milestone; revert to documentation-only if a code change would alter V1
+  behavior.
+- **Effort estimate:** 2–4 days *(estimate)*.
+- **Exclusions:** no generic plugin framework; no file moves/renames; no new
+  runtime dependency; no provider behavior change.
+
+#### WP2 — Session-state model and lifecycle
+
+- **Objective / rationale:** Make the stable-identity vs transient-progress
+  distinction explicit, preserve verified V1 invariants, and specify cleanup —
+  without a new state abstraction unless the audit proves one is needed.
+- **Current-state evidence / inspect:** per-session state in `src/cache-engine.ts`
+  (cursor/watermark, serialized collection); `src/cache-usage-core.mjs`
+  (`scanPage`, `nextProcessedCursor`); identity helpers (`stableSessionIdFor`,
+  `mimoSessionIdFor`, `gptCacheKeyFor`); the `session.idle` aggregation path.
+- **Verified V1 invariants to preserve (from `AGENTS.md` / observed runtime):**
+  - `client.session.messages` returns messages **oldest-first** (chronological;
+    `time.created` non-decreasing) — **not** newest-first.
+  - Accounting keeps the newest processed message ID (`lastProcessedMessageID`)
+    plus a `lastProcessedAt` watermark; it counts assistant messages after the
+    cursor and **falls back to the watermark** when the cursor id is
+    pruned/reverted.
+  - Cursor-based processing avoids double-counting; with no safe boundary it
+    undercounts (counts nothing) rather than fabricating a boundary.
+  - Compaction must never cause usage to be counted twice.
+  - Cache identity and compaction namespaces retain existing semantics
+    (`<root>:compact`).
+  - Do not reintroduce a newest-first or "stop at the cursor scanning from the
+    top" assumption.
+- **Ordered steps:**
+  1. Document stable session identity vs transient collection progress (two
+     concepts, different lifetimes).
+  2. Document the cursor/watermark algorithm exactly as implemented, including the
+     fallback rule and the undercount-not-fabricate rule.
+  3. Document session isolation (per-session state; concurrent `session.idle`
+     serialization) and duplicate-prevention guarantees.
+  4. Investigate the cleanup lifecycle **separately for V1 and V2**; do not assume
+     an event exists because §9 mentions it.
+  5. Specify edge cases: empty sessions, repeated scans, missing timestamps,
+     pruned/reverted cursors, compacted histories, session isolation.
+  6. Only if the audit proves the existing helpers cannot express a required
+     contract, specify (do not implement) a minimal new abstraction and its tests.
+- **Files expected to change (provisional):** `docs/implementation-plan-v2.md`
+  and/or a session-state spec doc; `test/cache-engine.test.mjs`. Source changes
+  only if the audit proves necessity.
+- **Dependencies / sequencing:** after WP0; may proceed in parallel with WP1; feeds
+  WP4.
+- **Required tests:** the edge-case set above asserting no double count, safe
+  undercount, correct cursor advance, and session isolation.
+- **Acceptance criteria:** the model is documented; every listed invariant has a
+  test or is marked *unverified*; no new abstraction without an audit
+  justification; tests pass.
+- **Stop conditions / rollback:** if a proposed abstraction would change accounting
+  semantics, stop; do not add it. Rollback = documentation-only.
+- **Effort estimate:** 2–4 days *(estimate)*.
+- **Exclusions:** no changes to thresholds, context limits, or token budgets; no
+  compaction continuation behavior change; no V2 runtime code.
+
+#### WP3 — Shared-core conformance tests
+
+- **Objective / rationale:** Lock observable contracts with tests that would fail
+  if behavior drifts.
+- **Current-state evidence / inspect:** the existing suite
+  (`test/cache-engine.test.mjs`, 277 tests at v0.6.0) and the v0.6.0 conformance
+  matrix.
+- **Ordered steps:** enumerate contracts; for each, add a test asserting observable
+  behavior (not internal structure); keep the existing test-file layout.
+- **Required test areas:**
+  - Policy resolution and preservation of current policy behavior.
+  - Passive/neutral policies leaving requests unchanged.
+  - Existing-value preservation and deterministic identity.
+  - Missing usage fields remaining missing (never fabricated, never converted to
+    zero).
+  - Cursor progression and duplicate prevention.
+  - Runtime-independent shared-core imports (the usage/policy modules import no
+    OpenCode client, hook, routing, or V2 module).
+  - Errors failing safely without retries or unintended request mutations.
+- **Files expected to change (provisional):** `test/cache-engine.test.mjs`.
+- **Dependencies / sequencing:** alongside WP1/WP2.
+- **Required tests:** the tests themselves; full `npm test`.
+- **Acceptance criteria:** new tests pass and assert observable contracts, not
+  implementation internals; `npm test` green.
+- **Stop conditions / rollback:** if a test can only pass by changing runtime
+  behavior, stop — the test is wrong, not the code (do not fix code to satisfy a
+  test in this milestone).
+- **Effort estimate:** 2–3 days *(estimate)*.
+- **Exclusions:** no new test framework or dependency; no suite reorganization.
+
+#### WP4 — V2 readiness and API verification
+
+- **Objective / rationale:** Verify the V2 contract from authoritative API docs or
+  installed-runtime evidence before any V2 code, and map verified events to
+  shared-core inputs/outputs.
+- **Current-state evidence / inspect:** the protected `feature/v2-adapter` branch
+  (read-only; **do not modify, merge, cherry-pick, or rebase**); the historical
+  hook references in §6 and §9 (`context`, `model.request`, `compaction`,
+  `Plugin.define`, `ctx.location.*`) are **hypotheses** until verified.
+- **Ordered steps:**
+  1. Identify the authoritative V2 API source (official docs and/or the installed
+     runtime's plugin type definitions).
+  2. For each candidate event, verify existence, payload shape, and mutation
+     semantics.
+  3. Document the mapping: verified event → shared-core input; shared-core output
+     → V2 request mutation.
+  4. Document missing information required for V1/V2 parity and any lifecycle
+     limitations.
+  5. Build isolated fixtures/mocks and write tests exercising the mapping without
+     a live runtime.
+  6. If the runtime contract cannot be verified, document the blocker and defer
+     the affected implementation.
+- **Files expected to change (provisional):** `docs/implementation-plan-v2.md`
+  and/or a V2 contract doc; test fixtures/mocks.
+- **Dependencies / sequencing:** needs WP1/WP2 outputs; must not touch
+  `feature/v2-adapter`.
+- **Required tests:** fixture/mock-based mapping tests; an explicit blocker test
+  or documented deferral when unverified.
+- **Acceptance criteria:** every claimed V2 event is backed by a cited
+  authoritative source or installed-runtime evidence, or is explicitly marked
+  *unverified/deferred*; the mapping is documented; no "functional V2 adapter"
+  claim is made.
+- **Stop conditions / rollback:** if the contract cannot be verified, stop and
+  defer; never guess field names; never modify the protected branch.
+- **Effort estimate:** 3–6 days *(estimate; depends entirely on accessible
+  evidence)*.
+- **Exclusions:** no V2 adapter implementation; no branch operations; no
+  dual-runtime claim.
+
+#### WP5 — Documentation, packaging, and release readiness
+
+- **Objective / rationale:** Keep docs and packaging consistent, and make release a
+  separate, authorized step.
+- **Current-state evidence / inspect:** `docs/implementation-plan-v2.md`,
+  `AGENTS.md`, `README.md`, `package.json` (`files` = `src/`, README, LICENSE;
+  exports `./server`, `./tui`).
+- **Ordered steps:** update this plan and any contract/session docs; confirm
+  `npm pack --dry-run` contents (8 files, `src/` only) are unchanged unless an
+  authorized source move occurs; run final validation.
+- **Files expected to change (provisional):** documentation only. Any runtime-file
+  move/rename must also update `AGENTS.md` "Ownership and runtime" and the
+  `package.json` `exports` + `files` in the same change, validated with
+  `npm pack --dry-run` (per `AGENTS.md`).
+- **Dependencies / sequencing:** last.
+- **Required tests:** `npm test`; `npm pack --dry-run`; `git diff --check`;
+  working-tree review.
+- **Acceptance criteria:** docs consistent with the shipped state; packaging
+  validated; **no** version change, commit, tag, push, or publish without separate
+  explicit authorization.
+- **Stop conditions / rollback:** not applicable — release actions are simply not
+  taken in this milestone.
+- **Effort estimate:** 1–2 days *(estimate)*.
+- **Exclusions:** version bump, tags, publishing, CI systems.
+
+### 2B.5 Scope and non-goals
+
+v0.7.x does **not** include:
+
+- New provider support or speculative provider-policy changes.
+- Mistral implementation without a completed audit-first evidence note.
+- Pricing or context-limit enforcement.
+- Prompt, reasoning, credential, authentication-header, or full request-body
+  telemetry.
+- A V2-only rewrite or the removal of V1 support.
+- A claim of complete dual-runtime support.
+- A large generic abstraction/refactor without demonstrated need.
+- Any change to the protected `feature/v2-adapter` branch.
+- Package-version changes, commits, tags, pushes, or publication without
+  authorization.
+
+The **provider invariants** in `AGENTS.md` remain binding: DeepSeek, GPT-5.6,
+GLM-5.3, MiMo-V2.6, OpenRouter affinity, Grok, Meta Muse, and MiniMax behavior
+must not change.
+
+### 2B.6 Testing and acceptance matrix
+
+| # | Stage | Approach | Exit criterion |
+| --- | --- | --- | --- |
+| 1 | Baseline test run | `npm test` | All pass; no regression vs v0.6.0 |
+| 2 | Focused core-contract tests | Targeted contract tests | Pass |
+| 3 | Session-state / cursor / compaction tests | Edge-case tests (WP2) | Pass; invariants hold |
+| 4 | Provider regression tests | Existing provider conformance matrix | Pass |
+| 5 | Runtime-isolation tests | Assert the usage/policy modules import nothing from OpenCode/V2 | Pass |
+| 6 | V2 contract verification | Fixtures + cited evidence, or a documented blocker | Verified-mapped **or** explicitly deferred |
+| 7 | `npm pack --dry-run` | Inspect tarball contents | 8 files, `src/` only (unchanged) |
+| 8 | `git diff --check` | Whitespace/conflict check | Clean |
+| 9 | Final review | Working-tree + diff review | Only intended files changed |
+
+The repository uses Node's built-in test runner and has **no** configured build,
+lint, or typecheck scripts. Do **not** introduce a bundler, TypeScript compiler,
+dependency, or CI system merely to satisfy a generic checklist.
+
+**Live-model probes are optional and are not a release blocker for this
+architecture milestone.** Any live probe must have a verified plugin version, a
+clear cost/budget understanding, minimal synthetic inputs, and explicit
+authorization where required. Never use long prefixes or repeated requests to
+chase cache hits, and never treat a cache-write count as proof of a cache hit.
+
+**Exit criteria:** each increment's acceptance criteria are met. The milestone as
+a whole exits when the core contract and session-state model are documented and
+tested, V2 readiness is either verified-mapped or explicitly deferred, V1 behavior
+is unchanged, and stages 1–9 above are green.
+
+### 2B.7 Dependencies and open questions
+
+Dependency order: WP0 → {WP1, WP2} → WP4 → WP5, with WP3 alongside WP1/WP2. The
+milestone precedes the functioning V2 adapter (v0.8.x).
+
+**Unverified / unresolved (do not present as fact):**
+
+- The V2 plugin API surface (`context`, `model.request`, `compaction`,
+  `Plugin.define`, `ctx.location.*`) is historical plan text — **unverified**
+  against the actual target API. WP4 must confirm it.
+- Whether a V2 session-messages equivalent returns messages oldest-first, and
+  whether a V2-side cursor/watermark source exists.
+- Whether V2 exposes a `session.idle`-equivalent or other lifecycle/cleanup event.
+- Whether the installed V1 runtime supplies the exact `promptCacheKey` /
+  `promptCacheOptions` shape assumed here (see the `RF-OC-*` findings in
+  `docs/research-findings.md`).
+- All effort figures are **ranges/estimates**, not commitments.
 
 ## 3. Branch Strategy
 
@@ -443,6 +782,10 @@ Use Git branches for parallel development:
 No V2-related code goes into `main` until the integration phase. V1 maintenance and new provider work proceed on `main`; V2 adapter evolves on its own branch.
 
 ## 4. Detailed Task List
+
+> **Historical (v0.4.x–v0.6.x era).** The provider rows are shipped and the 0.6.x
+> rows are done; the V2-adapter rows reference an **unverified** API and are
+> superseded for milestone scope by **§2B**. Retained for context.
 
 Each task below includes priority, assigned role(s), effort, and dependencies.  Effort is rough (days) per developer.
 
@@ -485,6 +828,11 @@ Each task below includes priority, assigned role(s), effort, and dependencies.  
 **Dependencies:** Most provider tasks depend only on research and existing core logic. Core refactors should await initial provider policy definitions to know what needs extracting. The V2 work depends on adapter interface and the new context/request hook mappings being defined. Release tasks require all feature tasks complete.
 
 ## 5. File-Level Refactor Plan
+
+> **Historical/illustrative.** The `cache-engine-v1.ts` / `cache-engine-v2.ts`
+> names and snippets are proposals, not current files, and are **unverified**. The
+> runtime-adapter contract is now scoped in **§2B**. The only part already done is
+> the accounting move into `src/cache-usage-core.mjs`.
 
 Organize files to separate the shared policy/logic from runtime-specific code:
 
@@ -565,6 +913,10 @@ export function scanPage(page, startCursor, since) { ... }
 Both V1 and V2 adapters will import and call these.
 
 ## 6. Runtime Adapter Interface and Policy Schema
+
+> **Illustrative/unverified.** The `context` / `model.request` / `compaction` hook
+> names and `ctx.*` shapes are hypotheses until **WP4** verifies them against the
+> actual V2 API. Do not implement from this section. See **§2B**.
 
 Define interfaces for the shared core and how adapters use them:
 
@@ -674,6 +1026,11 @@ Before each release:
 
 ## 9. V2 Migration Checklist
 
+> **Unverified/aspirational.** Every V2 hook/API name below (`Plugin.define`,
+> `ctx.session.hook("context"/"model.request"/"compaction")`, `ctx.location.*`) is
+> a hypothesis to verify in **WP4** (§2B), not verified evidence. Do not implement
+> or claim functionality from it.
+
 - **Plugin Entry:** Use `export default Plugin.define({id, setup})` instead of V1 `export const CachePlugin: Plugin = async ({...})`.
 - **Context Mapping:**
   - V1 `directory` → `ctx.location.directory`.
@@ -733,14 +1090,15 @@ Regular code reviews and CI monitoring will catch issues early. Always ensure a 
 
 ## 13. Timeline and Milestones
 
-The above Gantt chart presents major milestones from 0.5.0 to 1.0.0. Milestone-specific acceptance criteria:
+The roadmap diagram in the header presents the milestone dependency order (no
+fixed calendar dates are promised). Milestone-specific acceptance criteria:
 
-- **0.5.x:** Provider-coverage phase complete — Kimi, Claude, Gemini, and Qwen each landed as a separate validated release (§2). `npm test` passes at every increment.
-- **0.6.x (DONE):** usage/accounting extracted to `cache-usage-core.mjs`; identity audited (no new abstraction); table-driven provider conformance/regression tests added; no provider behavior changed; no regressions.
-- **0.7.x:** Core refactor complete. Shared accounting works; V1 behavior unchanged. Adapter interface defined.
-- **0.8.x:** V2 adapter implemented (context, model.request, compaction). Simulated tests for V2 pass.
-- **0.9.x:** Dual-runtime fully integrated. Both `cache-engine-v1` and `-v2` load in respective environments. Minor fixes done.
-- **1.0.0:** Final release when `main` branch includes both adapters, all tests green, packaging finalized.
+- **0.5.x:** Provider-coverage phase complete — Kimi, Claude, Gemini, Qwen, xAI/Grok, Meta Muse, and MiniMax each landed as a separate validated release (§2, §2.0). `npm test` passes at every increment.
+- **0.6.0 (DONE):** usage/accounting extracted to `cache-usage-core.mjs`; identity audited (no new abstraction); table-driven provider conformance/regression tests added; no provider behavior changed; shipped with a green 277-test suite. See §2.0b.
+- **0.7.x (PLANNED — see §2B):** runtime-independent core contract and session-state model documented and tested; V2 readiness verified-mapped or explicitly deferred; V1 behavior unchanged. This milestone does **not** build a functioning V2 adapter and makes no dual-runtime claim.
+- **0.8.x (future, gated on a verified V2 API contract):** a functioning V2 adapter is implemented and its hook mapping tested.
+- **0.9.x (future):** dual-runtime stabilization and documentation.
+- **1.0.0 (future):** released only when V1 and V2 support are independently validated, all tests are green, and packaging is finalized.
 
 ## 14. Harness Validation Commands
 
