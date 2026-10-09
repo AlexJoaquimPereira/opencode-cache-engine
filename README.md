@@ -1798,7 +1798,6 @@ It owns:
 
 * the legacy `detectPolicy()` compatibility wrapper (delegating to the registry)
 * configuration parsing
-* hashing
 * canonicalization
 * tool fingerprints
 * system-shape decomposition
@@ -1806,10 +1805,31 @@ It owns:
 * cache-option generation
 * GLM environment relocation
 * reasoning diagnostics
-* usage aggregation (chronological cursor + `time.created` watermark)
+* cache-identity helpers (`stableSessionIdFor`, `mimoSessionIdFor`, `gptCacheKeyFor`)
 * compaction guards
 
-Keeping these functions in plain JavaScript allows the logic to be tested independently with Node's built-in test runner.
+Keeping these functions in plain JavaScript allows the logic to be tested independently with Node's built-in test runner. Usage/accounting primitives are re-exported from `cache-usage-core.mjs` so callers keep a single import.
+
+---
+
+## `cache-usage-core.mjs`
+
+The runtime-independent usage/accounting module (v0.6.x core consolidation). It
+has no OpenCode client, hook, routing, or V2 dependency (only `node:crypto`), so
+the same normalized accounting can be reused by a future adapter without pulling
+in the provider registry.
+
+It owns:
+
+* `shorthash` — the shared 16-hex-char digest used for fingerprints/diagnostics
+* `hitRatePct` / `glmHitRatio` / `mimoHitRate` — the provider-specific cache ratios
+* `shouldAggregate` — the "only emit a usage record when a cache token was actually observed" guard
+* `scanPage` / `nextProcessedCursor` — chronological message scanning and the id/`time.created` cursor
+* `reasoningHashesFor` (internal) — reasoning-block hashes for the GLM integrity diagnostics
+
+It never mutates requests and never fabricates usage: a cache read is the
+provider-reported read, a cache write is the provider-reported write, and a read
+never implies a write.
 
 ---
 
