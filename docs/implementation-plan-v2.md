@@ -86,6 +86,29 @@ Remaining deferred candidate: **Mistral** (it still requires its own audit-first
 evidence note; do not implement from plan text). No provider work has touched
 `feature/v2-adapter`, and provider work stays independent of the V2 adapter.
 
+### 2.0b v0.6.x — shared-core consolidation (completed)
+
+- **Usage-accounting extraction (done):** the runtime-independent usage/accounting
+  primitives were moved into `src/cache-usage-core.mjs` (`shorthash`, `hitRatePct`,
+  `glmHitRatio`, `mimoHitRate`, `shouldAggregate`, `scanPage`, `nextProcessedCursor`);
+  `src/cache-engine-core.mjs` re-exports them, so the public surface and the
+  accounting semantics are byte-for-byte unchanged. The module has no
+  OpenCode-client, hook, routing, or V2 dependency.
+- **Cache-identity abstraction (audited — no new abstraction):** the existing
+  `stableSessionIdFor` / `mimoSessionIdFor` / `gptCacheKeyFor` helpers already
+  provide deterministic, non-secret, per-session identifiers. No speculative
+  abstraction was added, and identity is never used to mutate a request where the
+  harness already owns the key.
+- **Policy conformance/regression tests (done):** a table-driven matrix now covers
+  all eleven families — classification, lookalike rejection, the active/passive
+  capability distinction, fail-closed unknown handling, disabled behavior,
+  non-fabricated usage, and the single-definition re-export contract.
+- **Provider work:** already completed in the v0.5.x line; no provider behavior
+  changed in this milestone.
+- **Provider expansion:** not performed; Mistral remains deferred (audit-first).
+- **Out of scope (untouched):** the adapter interface / V2 skeleton (v0.7.x) and
+  the functioning V2 adapter (v0.8.x).
+
 Every provider below still goes through the **audit-first** procedure in
 `AGENTS.md`. The official links in this section are *starting references to
 verify*, not verified evidence: confirm each field name, mechanism, TTL, and
@@ -434,8 +457,8 @@ Each task below includes priority, assigned role(s), effort, and dependencies.  
 | - **Policy Registry Update:** encode new families, strategies | High    | maintainer/policy-dev | 2d    | above provider tasks complete         | Shared `cache-policy-core` updated with new entries. No compile/test failures. |
 | - **Policy Conformance Tests:** Add generic tests (unknown models, no double-count, etc.) | High    | QA                 | 2d    | above policies                        | All provider strategies pass new and existing tests. |
 | **Core Refactoring (0.6.x, not 0.5.x)**              |         |                    |        |                                       |                                             |
-| - **Cache Identity Abstraction:** Extract identity logic  | Medium  | adapter-dev/maintainer | 1d | policy registry extended             | A helper resolves a unique ID (e.g. string) per session. Code reuse across providers. |
-| - **Extract Usage Accounting:** Create `usage-core` module (migrate scanPage, nextCursor) | High | adapter-dev        | 2d    | none                                  | Usage logic is in a pure module (e.g. `cache-usage-core.mjs`). V1 adapter calls it. Tests added pass. |
+| - **Cache Identity Abstraction** (AUDITED — no change): existing `stableSessionIdFor`/`mimoSessionIdFor`/`gptCacheKeyFor` suffice | Medium  | adapter-dev/maintainer | 1d | none             | DONE: audited; deterministic per-session ids already exist. No speculative abstraction added, and identity never mutates a harness-owned key. |
+| - **Extract Usage Accounting** (DONE — v0.6.x): `cache-usage-core.mjs` created (scanPage/nextProcessedCursor/shouldAggregate/ratios; `shorthash`) | High | adapter-dev        | 2d    | none                                  | DONE: usage logic lives in a pure, runtime-independent module re-exported by `cache-engine-core.mjs`; the V1 adapter and tests are unchanged and pass. |
 | - **Define Adapter Interface:** draft TypeScript interface for runtime adapter (hooks, context, messages, etc.) | High  | adapter-dev       | 1d    | none                                  | An interface (or abstract class) like `OpenCodeRuntime` defined; V1 and V2 adapters use it. |
 | - **Session State Model:** Define `SessionState` shape, store (Map or storage) | Medium  | adapter-dev        | 2d    | none                                  | Session state fields (lastID, lastAt, etc.) formalized. Memory usage bound checks. |
 | **Testing & QA**                                     |         |                    |        |                                       |                                             |
@@ -504,7 +527,7 @@ export default Plugin.define({
   - Add tests simulating V2 context and model.request hooks if possible (using the OpenCode testing harness or mocking `ctx`).
 
 Changes summary:
-- **Move**: Pull out accounting from `cache-engine-core.mjs` to `cache-usage-core.mjs`.
+- **Move (DONE — v0.6.x)**: accounting pulled out of `cache-engine-core.mjs` into `cache-usage-core.mjs` (re-exported for compatibility).
 - **Create**: `cache-engine-v2.ts`.
 - **Modify**: Export adapter interface from `cache-engine-core.mjs` so both adapters can use it.
 - **Snippet (policy lookup example):**
@@ -713,7 +736,7 @@ Regular code reviews and CI monitoring will catch issues early. Always ensure a 
 The above Gantt chart presents major milestones from 0.5.0 to 1.0.0. Milestone-specific acceptance criteria:
 
 - **0.5.x:** Provider-coverage phase complete — Kimi, Claude, Gemini, and Qwen each landed as a separate validated release (§2). `npm test` passes at every increment.
-- **0.6.x:** Shared-core consolidation (usage/accounting extraction) and policy conformance tests in place. No regressions in existing features.
+- **0.6.x (DONE):** usage/accounting extracted to `cache-usage-core.mjs`; identity audited (no new abstraction); table-driven provider conformance/regression tests added; no provider behavior changed; no regressions.
 - **0.7.x:** Core refactor complete. Shared accounting works; V1 behavior unchanged. Adapter interface defined.
 - **0.8.x:** V2 adapter implemented (context, model.request, compaction). Simulated tests for V2 pass.
 - **0.9.x:** Dual-runtime fully integrated. Both `cache-engine-v1` and `-v2` load in respective environments. Minor fixes done.
