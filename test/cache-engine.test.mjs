@@ -4935,3 +4935,103 @@ test("v0.7.0 contract: resolveRuntimePolicy returns the documented plain-data ca
     assert.notEqual(typeof value, "function", `capability "${key}" must be plain data, never a runtime function`)
   }
 })
+
+// ===========================================================================
+// v0.7.1 — session-state lifecycle (cursor/watermark) contract
+//
+// The time watermark is an absolute "already counted" floor: a message with a
+// finite time.created <= the watermark is never counted, on ANY scan path. That
+// is what prevents a prune/revert -- which can reset the id cursor behind an
+// already-counted message -- from re-counting history. Timestamp ties undercount
+// rather than double-count.
+// ===========================================================================
+
+test("v0.7.1: the watermark bounds a located-cursor scan so history is never recounted", () => {
+  const cases = [
+    // label, page, cursor, watermark, expectedCount, expectedRead
+    ["tie at the watermark is skipped", [asstT("a1", 100, 10, 1000), asstT("a2", 50, 5, 2000), asstT("a3", 25, 0, 2000)], "a1", 2000, 0, 0],
+    ["below watermark skipped, strictly-newer counted", [asstT("a1", 100, 10, 1000), asstT("a2", 50, 5, 1500), asstT("a3", 25, 0, 2500)], "a1", 2000, 1, 25],
+    ["no watermark => array position decides", [asstT("a1", 100, 10, 1000), asstT("a2", 50, 5, 500)], "a1", null, 1, 50],
+    ["missing cursor + no watermark counts nothing", [asstT("a1", 100, 10, 1000), asstT("a2", 50, 5, 2000)], "ghost", null, 0, 0],
+  ]
+  for (const [label, page, cursor, wm, count, read] of cases) {
+    const s = scanPage(page, cursor, wm)
+    assert.equal(s.count, count, label)
+    assert.equal(s.read, read, label)
+  }
+})
+
+test("v0.7.1: prune/revert then restore never recounts (cursor + watermark lifecycle)", () => {
+  let cursor = null
+  let watermark = null
+  let totalRead = 0
+  const run = (page) => {
+    const s = scanPage(page, cursor, watermark)
+    totalRead += s.read
+    cursor = nextProcessedCursor(page, cursor)
+    if (s.maxCreated != null) watermark = watermark == null ? s.maxCreated : Math.max(watermark, s.maxCreated)
+    return s
+  }
+  const p123 = [asstT("a1", 100, 10, 1000), asstT("a2", 50, 5, 2000), asstT("a3", 25, 3, 3000)]
+  assert.equal(run(p123).read, 175)
+  // a3 reverted: its id disappears; only messages above the watermark count.
+  assert.equal(run([asstT("a1", 100, 10, 1000), asstT("a2", 50, 5, 2000)]).read, 0)
+  // a3 restored: the reset boundary must not re-count it.
+  assert.equal(run(p123).read, 0)
+  // forward progress still works after the revert.
+  assert.equal(run([...p123, asstT("a4", 30, 3, 4000)]).read, 30)
+  assert.equal(totalRead, 205, "each assistant message counted exactly once across the revert/restore")
+  assert.equal(watermark, 4000, "watermark is monotonic (never decreases)")
+})
+
+async function runRollbackUsageProbe() {
+  const home = mkdtempSync(join(tmpdir(), "ce-rb-"))
+  const pluginURL = new URL("../src/cache-engine.ts", import.meta.url).href
+  const script = `
+    import { readFileSync } from "node:fs"
+    process.env.CACHE_ENGINE_METRICS_FILE = process.env.HOME + "/rb.jsonl"
+    const { CacheEngine } = await import(${JSON.stringify(pluginURL)})
+    const responses = {}
+    const fake = {
+      app: { log: async () => ({}) },
+      session: {
+        get: async () => ({ data: { parentID: null } }),
+        messages: async (opts) => responses[opts && opts.path && opts.path.id],
+      },
+      tool: { list: async () => ({ data: [] }) },
+    }
+    const hooks = await CacheEngine({ client: fake, directory: process.env.HOME })
+    const tick = () => new Promise((r) => setTimeout(r, 30))
+    const asst = (id, read, write, created) => ({ info: { id, role: "assistant", time: { created }, tokens: { input: 0, cache: { read, write } } }, parts: [] })
+    const setModel = (sid) => hooks["chat.params"]({ sessionID: sid, agent: "build", model: { providerID: "deepseek", id: "deepseek-flash", api: { id: "deepseek-flash" } }, provider: { source: "config", info: { id: "deepseek" }, options: {} }, message: { id: "u-"+sid, sessionID: sid, role: "user", content: "x" } }, { options: {} })
+    const idle = async (sid) => { await hooks.event({ event: { type: "session.idle", properties: { sessionID: sid } } }); await tick() }
+
+    const SID = "ses_rb"
+    await setModel(SID)
+    responses[SID] = { data: [asst("a1", 100, 10, 1000), asst("a2", 50, 5, 2000)] }
+    await idle(SID)                                                              // counts 150
+    responses[SID] = { data: [asst("a1", 100, 10, 1000)] }                        // a2 reverted
+    await idle(SID)                                                              // must count nothing
+    responses[SID] = { data: [asst("a1", 100, 10, 1000), asst("a2", 50, 5, 2000)] } // a2 restored
+    await idle(SID)                                                              // must NOT recount a2
+    responses[SID] = { data: [asst("a1", 100, 10, 1000), asst("a2", 50, 5, 2000), asst("a4", 30, 3, 3000)] } // forward progress
+    await idle(SID)                                                              // counts 30
+
+    const records = readFileSync(process.env.CACHE_ENGINE_METRICS_FILE, "utf8").trim().split("\\n").map((l) => JSON.parse(l))
+    process.stdout.write(JSON.stringify({ records }))
+  `
+  const stdout = execFileSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], {
+    cwd: process.cwd(),
+    env: { ...process.env, HOME: home },
+    encoding: "utf8",
+  })
+  return JSON.parse(stdout.trim())
+}
+
+test("v0.7.1: adapter-level prune/revert/restore emits no duplicate usage", async () => {
+  const { records } = await runRollbackUsageProbe()
+  const usage = records.filter((r) => r.kind === "usage" && r.sid === "ses_rb")
+  assert.deepEqual(usage.map((u) => u.read), [150, 30], "one usage record before the revert, one after recovery")
+  assert.equal(usage[1].cumulative.read, 180)
+  assert.equal(usage[1].cursor, "a4")
+})
