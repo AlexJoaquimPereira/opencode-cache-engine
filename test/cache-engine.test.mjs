@@ -44,6 +44,7 @@ import {
   mimoSessionIdFor,
   nextProcessedCursor,
   parseConfig,
+  policyEnabled,
   providerChangeEvent,
   relocateVolatileEnvBlock,
   scanPage,
@@ -74,6 +75,7 @@ import {
   resolvePolicy,
   resolveRuntimePolicy,
 } from "../src/cache-policy-core.mjs"
+import * as usageCore from "../src/cache-usage-core.mjs"
 
 const asst = (id, read, write) => ({
   info: { id, role: "assistant", tokens: { cache: { read, write } } },
@@ -4725,4 +4727,121 @@ test("v0.5.x: disabling MiniMax leaves every route unchanged and emits no route 
     assert.deepEqual(out[name].headers, out.preHdrs, `${name}: headers preserved`)
   }
   assert.equal(out.metrics.filter((r) => r.reason === "minimax_route").length, 0)
+})
+
+// ===========================================================================
+// v0.6.x generic provider conformance matrix
+//
+// One table-driven pass over every implemented family asserting the invariants
+// that must hold regardless of provider: correct classification, a neutral
+// result for lookalikes, the active/passive mutation distinction, fail-closed
+// unknown handling, disabled behavior, non-fabricated usage, and the single
+// definition of the usage core. This is a regression guard so a future refactor
+// cannot silently collapse the provider-specific distinctions.
+// ===========================================================================
+
+const FAMILY_CONFORMANCE = [
+  { family: "DeepSeek", policy: POLICY_DEEPSEEK, provider: "deepseek", positive: ["deepseek-v4-pro", "deepseek-flash"], negative: [] },
+  { family: "GPT-5.6+", policy: POLICY_GPT56, provider: "openai", positive: ["gpt-5.6", "gpt-5.6-luna", "gpt-6-sol"], negative: ["gpt-5.5", "gpt-4"] },
+  { family: "GLM-5.3+", policy: POLICY_GLM53, provider: "zai", positive: ["glm-5.3", "glm-5.3-flash"], negative: ["glm-5.2", "glm-4.6"] },
+  { family: "MiMo-V2.6+", policy: POLICY_MIMO26, provider: "xiaomi", positive: ["mimo-v2.6-flash", "mimo-v2.6-pro"], negative: ["mimo-v2.5", "mimo-v2.5-pro"] },
+  { family: "Kimi", policy: POLICY_KIMI, provider: "moonshot", positive: ["kimi-k3", "kimi-k2.6", "kimi-k2.7-code"], negative: ["kimi-k2.5", "kimi-latest"] },
+  { family: "Claude", policy: POLICY_CLAUDE, provider: "anthropic", positive: ["claude-sonnet-4-5", "claude-opus-5-5"], negative: ["claude-2", "claude-instant"] },
+  { family: "Gemini", policy: POLICY_GEMINI, provider: "google", positive: ["gemini-2.5-pro", "gemini-3.8-flash"], negative: ["gemini-2.0-flash", "gemma-4-31b-it"] },
+  { family: "Qwen", policy: POLICY_QWEN, provider: "alibaba", positive: ["qwen3.8-max", "qwen3-max"], negative: ["qwen3-embedding-8b", "myqwen-max", "qwen3.5.1"] },
+  { family: "Grok", policy: POLICY_GROK, provider: "xai", positive: ["grok-4.7", "grok-4.5"], negative: ["grok-imagine-image", "mygrok-4", "grok-4..7"] },
+  { family: "Muse", policy: POLICY_MUSE, provider: "meta", positive: ["muse-spark-1.3", "muse-spark-1.2-contributor"], negative: ["muse-glimmer-30b", "my-muse-spark-1.3", "museum"] },
+  { family: "MiniMax", policy: POLICY_MINIMAX, provider: "minimax", positive: ["MiniMax-M3", "MiniMax-M2.7", "minimax-m2.5"], negative: ["minimax-m1", "minimax-h3", "my-minimax-m3"] },
+]
+
+test("v0.6.x conformance: every family classifies its positive ids and rejects lookalikes", () => {
+  for (const f of FAMILY_CONFORMANCE) {
+    for (const id of f.positive) {
+      assert.equal(detectPolicy(M(f.provider, id)), f.policy, `${f.family}: ${id} should classify as ${f.policy}`)
+      assert.equal(resolveRuntimePolicy(M(f.provider, id)).policy, f.policy, `${f.family}: ${id} runtime policy`)
+    }
+    for (const id of f.negative) {
+      assert.equal(detectPolicy(M(f.provider, id)), POLICY_NEUTRAL, `${f.family}: ${id} must stay neutral`)
+    }
+  }
+})
+
+test("v0.6.x conformance: only the expected families carry active mutation capabilities", () => {
+  for (const f of FAMILY_CONFORMANCE) {
+    const caps = resolveRuntimePolicy(M(f.provider, f.positive[0]))
+    const expectGpt = f.policy === POLICY_GPT56
+    const expectEnv = f.policy === POLICY_GLM53 || f.policy === POLICY_MIMO26
+    assert.equal(caps.gptCacheMetadata, expectGpt, `${f.family}: gptCacheMetadata`)
+    assert.equal(caps.envRelocation !== null, expectEnv, `${f.family}: envRelocation`)
+    // OpenRouter affinity remains scoped to the two documented families only.
+    assert.equal(caps.openRouterAffinity, expectEnv, `${f.family}: openRouterAffinity`)
+    if (!expectGpt) assert.equal(caps.gptCacheMetadata, false, `${f.family}: passive family must not carry GPT metadata`)
+    if (!expectEnv) assert.equal(caps.envRelocation, null, `${f.family}: passive family must not relocate`)
+  }
+})
+
+test("v0.6.x conformance: unknown models, lookalikes, and unknown providers fail closed", () => {
+  const unknowns = [undefined, null, {}, M("acme", "not-a-model"), M("acme", "text-embedding-3-large"), M("acme", "some-voice-model"), M("acme", "totally-unknown-image-pro")]
+  for (const m of unknowns) {
+    assert.equal(detectPolicy(m), POLICY_NEUTRAL, `${JSON.stringify(m)} must be neutral`)
+    assert.equal(resolveRuntimePolicy(m).policy, "neutral", `${JSON.stringify(m)} runtime`)
+  }
+  // A family id on a provider that fails the OpenAI-ish gate must not gain GPT behavior.
+  assert.equal(resolveRuntimePolicy(M("some-openai-compatible", "gpt-5.6")).policy, "neutral")
+  assert.equal(explainPolicyResolution(M("mystery-gateway", "gpt-5.6")).policy, "neutral")
+})
+
+test("v0.6.x conformance: disabled policies stay disabled", () => {
+  for (const f of FAMILY_CONFORMANCE) {
+    assert.equal(policyEnabled({ policies: { [f.policy]: { enabled: false } } }, f.policy), false, f.family)
+    assert.equal(policyEnabled({ policies: { [f.policy]: { enabled: true } } }, f.policy), true, f.family)
+    assert.equal(policyEnabled({ policies: {} }, f.policy), false, f.family)
+  }
+})
+
+test("v0.6.x conformance: usage math never fabricates reads or writes", () => {
+  assert.equal(shouldAggregate(0, 0, 0), false)
+  assert.equal(shouldAggregate(1, 0, 0), false)
+  assert.equal(shouldAggregate(1, 10, 0), true)
+  assert.equal(shouldAggregate(1, 0, 5), true)
+  assert.equal(hitRatePct(0, 0), null)
+  assert.equal(hitRatePct(0, 10), 0)
+  assert.equal(hitRatePct(10, 0), 100)
+  assert.equal(hitRatePct(Number.NaN, 10), null)
+  assert.equal(glmHitRatio(0, 0, 0), null)
+  assert.equal(glmHitRatio(50, 0, 50), 50)
+  assert.equal(mimoHitRate(0, 0), null)
+  assert.equal(mimoHitRate(50, 100), 50)
+  assert.equal(mimoHitRate(-1, 100), null)
+  const scan = scanPage([{ info: { id: "a1", role: "assistant", tokens: { input: 20, cache: { read: 80, write: 0 } } }, parts: [] }], null)
+  assert.equal(scan.read, 80)
+  assert.equal(scan.write, 0)
+  assert.equal(scan.input, 20)
+})
+
+test("v0.6.x conformance: cache-usage-core is the single definition (re-exports are identical)", () => {
+  for (const name of ["shorthash", "hitRatePct", "glmHitRatio", "mimoHitRate", "shouldAggregate", "scanPage", "nextProcessedCursor"]) {
+    assert.equal(typeof usageCore[name], "function", `cache-usage-core must export ${name}`)
+  }
+  assert.equal(usageCore.scanPage, scanPage)
+  assert.equal(usageCore.nextProcessedCursor, nextProcessedCursor)
+  assert.equal(usageCore.shouldAggregate, shouldAggregate)
+  assert.equal(usageCore.hitRatePct, hitRatePct)
+  assert.equal(usageCore.glmHitRatio, glmHitRatio)
+  assert.equal(usageCore.mimoHitRate, mimoHitRate)
+  assert.equal(usageCore.shorthash, shorthash)
+})
+
+test("v0.6.x conformance: session identity is deterministic, distinct, and non-secret", () => {
+  const a = stableSessionIdFor("ses_alpha")
+  assert.equal(a, stableSessionIdFor("ses_alpha"))
+  assert.notEqual(a, stableSessionIdFor("ses_beta"))
+  assert.match(a, /^oc-ses-[0-9a-f]{64}$/)
+  assert.ok(!a.includes("ses_alpha"), "derived id must not embed the raw session id")
+  assert.equal(stableSessionIdFor(""), null)
+  const ma = mimoSessionIdFor("ses_alpha")
+  assert.equal(ma, mimoSessionIdFor("ses_alpha"))
+  assert.notEqual(ma, mimoSessionIdFor("ses_beta"))
+  assert.match(ma, /^mimo-ses-[0-9a-f]{16}$/)
+  assert.equal(mimoSessionIdFor(""), null)
 })
