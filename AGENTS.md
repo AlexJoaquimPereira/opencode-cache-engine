@@ -5,12 +5,16 @@ request structure only for verified provider behavior, and keep each mutation
 narrow, deterministic, and tested; otherwise preserve the request and observe
 provider-reported usage.
 
-**Current state:** v0.4.x maintenance is complete. The audit findings through
-F5 and the N1–N5 concurrency/telemetry defects are fixed, and the verified
-evidence lives in `docs/cache-policy-inventory.md` and
-`docs/research-findings.md`. Treat that as the stable baseline. All planned
-future work — new provider strategies, the shared-core refactor, the OpenCode V2
-adapter, and the dual-runtime 1.0 release — is specified in
+**Current state:** v0.4.x maintenance is complete, and the v0.5.x provider line
+has shipped (Kimi, Claude, Gemini, Qwen, plus xAI/Grok, Meta Muse, and MiniMax —
+each with an audit-first evidence note). The v0.6.x shared-core consolidation is
+implemented in the working tree: the usage/accounting core is extracted to
+`src/cache-usage-core.mjs` (re-exported by `cache-engine-core.mjs`) and a
+table-driven provider conformance suite was added; identity was audited with no
+new abstraction. Release/version assignment for that uncommitted work is pending
+explicit authorization. Evidence lives in `docs/cache-policy-inventory.md` and
+`docs/research-findings.md`. The remaining future work — the runtime-adapter
+interface / V2 skeleton and the dual-runtime 1.0 release — is specified in
 `docs/implementation-plan-v2.md`; read it, and the Roadmap section at the end of
 this file, before starting any of it.
 
@@ -36,9 +40,13 @@ npm pack --dry-run
 
 - `src/cache-engine.ts` owns OpenCode hooks, client/session state, request
   mutation, and plugin wiring. `src/cache-engine-core.mjs` is dependency-light
-  pure JS for config, classification, transforms, IDs, and metrics; keep new
-  testable logic there. `src/tui.mjs` only registers the plugin; it has no
-  CacheEngine-specific UI or server behavior.
+  pure JS for config, classification, transforms, IDs, and diagnostics.
+  `src/cache-usage-core.mjs` is the runtime-independent usage/accounting core
+  (message scanning/cursor, cache ratios, the shared digest); it must stay free
+  of OpenCode-client, hook, routing, and V2 dependencies. Put new provider-
+  agnostic accounting logic there and re-export it from `cache-engine-core.mjs`;
+  keep other new testable logic in `cache-engine-core.mjs`. `src/tui.mjs` only
+  registers the plugin; it has no CacheEngine-specific UI or server behavior.
 - Package exports are separate: `./server` → `src/cache-engine.ts` and `./tui`
   → `src/tui.mjs`. The package is ESM (`"type": "module"`, no `main`) with a
   `files` whitelist (`src/`, `README.md`, `LICENSE`); the packed tarball ships
@@ -249,17 +257,17 @@ checklist rather than as authorization to implement.
 
 Milestones, in order:
 
-1. **0.5.x — provider coverage (Kimi, Claude, Gemini, Qwen).** A
-   provider-coverage phase, *not* an architecture phase. Each family lands as its
-   own validated release: `0.5.0` Kimi (route-scoped: Moonshot Chat/Responses
-   `prompt_cache_options` vs the Anthropic-compatible `cache_control` path),
-   `0.5.1` Anthropic/Claude (cache-control strategy validated against the real V1
-   request shape), `0.5.2` Gemini (passive/implicit), `0.5.3` Qwen (passive
-   first; markers only if the exact endpoint justifies them). **Mistral and
-   xAI/Grok are not prerequisites** for this release line — deferred candidates,
-   each still requiring its own audit-first evidence note.
-2. **0.6.x — core consolidation.** Shared-core usage/accounting extraction and
-   generic policy conformance tests, with no provider prerequisites.
+1. **0.5.x — provider coverage (DONE).** A provider-coverage phase, *not* an
+   architecture phase. Shipped families: DeepSeek, GPT-5.6, GLM-5.3, MiMo-V2.6,
+   Kimi, Claude, Gemini, Qwen, xAI/Grok, Meta Muse, and MiniMax — each researched
+   audit-first and recorded in the inventory and research-findings. **Mistral
+   remains the only deferred candidate**, requiring its own audit-first evidence
+   note.
+2. **0.6.x — core consolidation (DONE, working tree).** Shared-core
+   usage/accounting extraction (`src/cache-usage-core.mjs`, re-exported by
+   `cache-engine-core.mjs`) and generic provider conformance tests, with no
+   provider prerequisites and no provider behavior changes. Version assignment
+   pending explicit release authorization.
 3. **0.7.x — shared-core refactor.** Runtime-adapter interface, formalized
    session-state model, and a V2 plugin skeleton (on the V2 branch).
 4. **0.8.x — V2 adapter.** Map the hooks (`context`, `model.request`,
