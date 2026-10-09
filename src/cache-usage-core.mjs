@@ -86,9 +86,14 @@ export function shouldAggregate(count, read, write) {
 // We track two boundaries:
 //   * `lastProcessedMessageID` — the newest message id already processed.
 //     Everything AFTER it in the chronological array is unprocessed.
-//   * `lastProcessedAt` — the newest `time.created` already processed, used only
-//     as a safety watermark when the id boundary disappears (e.g. the cursor
-//     message was pruned or reverted) so historical messages are never recounted.
+//   * `lastProcessedAt` — the newest `time.created` observed in a prior scan
+//     (it can come from a trailing user or token-less message, so it is a
+//     conservative upper bound rather than "newest counted"). It is a monotonic
+//     floor applied to EVERY scan: a message with a finite `time.created` <= the
+//     watermark is never counted, even if a prune/revert reset the id boundary
+//     behind it. This is what guarantees historical messages are never
+//     recounted; an assistant message that shares the watermark's exact
+//     millisecond undercounts rather than double-counts.
 //
 // This prevents repeated `session.idle` events from double-counting and needs no
 // unbounded per-message Set.
@@ -108,9 +113,10 @@ function reasoningHashesFor(m) {
 
 // page: Array<{ info: { id, role, tokens, time }, parts }>, OLDEST-FIRST.
 // startCursor: lastProcessedMessageID or null (first aggregation).
-// sinceCreated: timestamp watermark (ms), used ONLY when startCursor is set but
-//   no longer present in the page. Assistant messages with
-//   time.created <= sinceCreated are treated as already counted.
+// sinceCreated: monotonic timestamp watermark (ms) — the newest `time.created`
+//   observed in a prior scan. Assistant messages with a finite `time.created`
+//   <= sinceCreated are treated as already processed on every path, so a prune
+//   or revert that resets the id cursor can never recount them.
 //
 // When the cursor is missing and no watermark is known, nothing is counted: a
 // safe undercount is preferred over a double count.
@@ -137,6 +143,12 @@ export function scanPage(page, startCursor, sinceCreated = null) {
     if (!found) {
       // Cursor message was pruned/reverted: only count strictly newer messages.
       if (sinceCreated == null || !Number.isFinite(created) || created <= sinceCreated) continue
+    } else if (sinceCreated != null && Number.isFinite(created) && created <= sinceCreated) {
+      // Cursor located, but this message is at or below the already-counted
+      // watermark. A prune/revert can reset the id boundary behind an already
+      // counted message; skipping it here means it is never recounted (ties
+      // undercount rather than double-count).
+      continue
     }
     if (info.role !== "assistant") continue
     const t = info.tokens
