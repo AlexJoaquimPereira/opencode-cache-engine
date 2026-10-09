@@ -576,6 +576,61 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   rejects those breakpoints on M3 is unverified ([U]). CacheEngine does not
   intervene in OpenCode's transform.
 
+### RF-OC-016 — OpenCode union-merges `plugin` arrays across config files, and `~/.opencode/opencode.json` is outside `XDG_CONFIG_HOME`
+
+- Status: current
+- Verified: 2026-10-09
+- Area: opencode-runtime
+- Fact: OpenCode discovers plugin entries from several config sources and
+  **unions** their `plugin` arrays instead of replacing one source's list with
+  another's. Sources observed on 1.18.35: the global config dir
+  (`$XDG_CONFIG_HOME/opencode/opencode.json[c]`, default `~/.config/opencode`), a
+  separate `~/.opencode/opencode.json[c]` directory, and the project
+  `<dir>/.opencode/opencode.json[c]`; `OPENCODE_CONFIG` is **added** to the
+  candidate path list (it does not replace the others). A `file://` entry in
+  `plugin` is loaded and its module runs (verified with an import marker).
+  Consequences: (a) a project config that sets `"plugin": []` or points `plugin`
+  at a `file://` module does **not** suppress a plugin declared in
+  `~/.opencode/opencode.json`; on this machine that file lists
+  `"opencode-cache-engine"`, resolved to the npm-cached **0.5.7** under
+  `~/.cache/opencode/packages/opencode-cache-engine/`. (b) `~/.opencode/` is not
+  under `XDG_CONFIG_HOME`, so `XDG_CONFIG_HOME=<empty>` (which does bypass
+  `~/.config/opencode`) cannot bypass it. (c) Combining a working-tree `file://`
+  CacheEngine entry with the existing `opencode-cache-engine` entry makes the
+  CacheEngine `event`/session-idle handler run **twice** for one idle (two
+  `idle: no new assistant usage` records for the same session), i.e. two
+  CacheEngine instances are active. There is no config-only way to load exactly
+  one CacheEngine from a working-tree `file://` source while the
+  `~/.opencode/opencode.json` entry remains — doing so requires editing that file
+  or relocating `HOME`/config.
+- Evidence: [O]
+- Sources: OpenCode `v1.18.35` runtime `--print-logs --log-level DEBUG` config-load
+  lines (`loading config from` `~/.config/opencode/...`, `<dir>/.opencode/opencode.json`,
+  `~/.opencode/opencode.json`); the `~/.opencode/opencode.json` `plugin` list;
+  `~/.cache/opencode/packages/opencode-cache-engine/node_modules/opencode-cache-engine/package.json`
+  (`"version": "0.5.7"`); an isolated `file://` wrapper module's import marker and
+  CacheEngine session-idle record counts (1 with an empty project `plugin` list vs
+  2 with the wrapper present). Accessed 2026-10-09.
+- Justifies: why the MiMo-V2.6-Flash live integration test was BLOCKED (the repo
+  v0.6.0 `file://` source could not be isolated from the npm-cached 0.5.7). No
+  runtime or policy change follows: it is an environment/config fact, and
+  CacheEngine must remain loadable as the named npm plugin.
+- Version context: OpenCode 1.18.35 (installed); `~/.opencode/opencode.json` and
+  `~/.config/opencode/opencode.jsonc` as of 2026-10-09; npm-cached
+  `opencode-cache-engine@0.5.7`.
+- Re-verify when: OpenCode changes config/plugin discovery (e.g. makes
+  `OPENCODE_CONFIG` replace rather than add, honors XDG for `~/.opencode`, or adds
+  a plugin dedup/disable flag); or the user edits or relocates
+  `~/.opencode/opencode.json`.
+- Superseded by: null
+- Notes: Distinguishes "loaded from the working tree" from "loaded from the npm
+  cache": a bare `file://` project `plugin` entry **adds** a second instance rather
+  than replacing the named package. To run a clean single-source live test the
+  `opencode-cache-engine` entry must be temporarily removed from
+  `~/.opencode/opencode.json`, or OpenCode run under an isolated `HOME` with
+  `auth.json` available — both edit shared state and require explicit
+  authorization.
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
