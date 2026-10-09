@@ -37,7 +37,7 @@ Milestone status (reconciled 2026-10-09; no fixed calendar dates are promised):
 | v0.4.x | Maintenance; K1/K2 fixes | done |
 | v0.5.x | Provider coverage (Kimi, Claude, Gemini, Qwen, xAI/Grok, Meta Muse, MiniMax) | shipped (last family MiniMax = 0.5.8) |
 | v0.6.x | Shared usage/accounting extraction + provider conformance tests | shipped as **v0.6.0** (tag `v0.6.0` = `c1f3420`; 277-test suite green) |
-| v0.7.x | Runtime-independent core contract, session-state model, V2 readiness | **planned** — specified in **§2B**; nothing implemented |
+| v0.7.x | Runtime-independent core contract, session-state model, V2 readiness | **in progress** — v0.7.0 core/adapter contract implemented (docs + tests; see §2B.8); session-state (v0.7.1) and V2 readiness (v0.7.2+) pending |
 | v0.8.x | Functioning V2 adapter (runtime-specific integration) | future work — gated on a verified V2 API contract |
 | v0.9.x | Dual-runtime stabilization and documentation | future work |
 | v1.0.0 | Dual-runtime release | only when V1 and V2 are independently validated |
@@ -770,6 +770,101 @@ milestone precedes the functioning V2 adapter (v0.8.x).
   `docs/research-findings.md`).
 - All effort figures are **ranges/estimates**, not commitments.
 
+### 2B.8 v0.7.0 — implemented contract (audit result, 2026-10-09)
+
+**Status:** the v0.7.0 **contract** portion (WP1) is implemented as
+**documentation + tests only**. The audit found **no shared-core/runtime-coupling
+violation**, so no source change was made (per the rule: if the code already
+satisfies the requirement, document it and leave it unchanged). Session-state
+lifecycle (WP2) remains **v0.7.1** and V2 readiness (WP4) remains **v0.7.2+**. No
+dual-runtime support is claimed.
+
+**Audit result (verified against the v0.6.0 source):**
+
+- `src/cache-policy-core.mjs`, `src/cache-engine-core.mjs`, and
+  `src/cache-usage-core.mjs` import only `node:*` builtins and sibling shared
+  `.mjs` modules — no `@opencode-ai/*`, no hook registration, no OpenCode
+  client/session access, no V2 dependency. (`cache-engine-core.mjs` uses
+  `node:fs` for config/metrics IO, which is runtime-independent.)
+- No function is defined twice across the modules; the usage functions live only
+  in `cache-usage-core.mjs` and are re-exported (identical bindings) by
+  `cache-engine-core.mjs`.
+- The only OpenCode-runtime code is `src/cache-engine.ts` (the V1 adapter), which
+  registers the hooks and performs client calls.
+- `cache-policy-core.mjs` `OVERLAYS` entries carry a declarative `hook:` name
+  string (e.g. `"chat.params"`); this is **metadata, not coupling** — the adapter
+  does not read `overlay.hook` and instead drives behaviour from
+  `resolveRuntimePolicy(model)`.
+
+**Contract A — Policy resolution.** Inputs: a model descriptor
+`{ providerID, id, api: { id, npm } }`. Owner: `cache-policy-core.mjs`
+(`resolvePolicy` → the full result; `resolveRuntimePolicy` → the `runtime`
+descriptor). Output: a `policy` family string
+(`deepseek|gpt56|glm53|mimo26|kimi|claude|gemini|qwen|grok|muse|minimax|neutral`)
+plus the plain-data capability object. Missing/unknown provider identity resolves
+to `neutral` (fail-closed — no mutation). The adapter does not re-classify or hold
+a second registry; it calls the resolver and branches on the returned
+capabilities.
+
+**Contract B — Shared transformations & identity.** Pure helpers:
+`canonicalStringify`; the prefix/tool diagnostics (`commonPrefixLength`,
+`systemShapeHashes`, `normalizeTool`, `toolFingerprint`, `toolWireFingerprint`,
+`shapeDiff`, `shapeFieldDiffs`, `prefixChangeReasons`, `digestDecision`);
+`relocateVolatileEnvBlock` (returns a new string; content-preserving); and the GPT
+option deltas (`gptCacheOptionFieldNames`, `gptCacheOptionsDelta`) which compute a
+*delta* the adapter applies. Identity: `stableSessionIdFor` (`oc-ses-<sha256>`),
+`mimoSessionIdFor` (`mimo-ses-<16hex>`), `gptCacheKeyFor` / `resolveCacheRootSync`
+— deterministic and non-secret, and they never mutate a harness-owned key.
+Eligibility: `isOpenRouterAffinityEligible(policyFamily, providerID)` is `true`
+only for GLM/MiMo with `providerID === "openrouter"`; `affinityTelemetryFields`
+classifies eligible/attached/bypassed/missing. Ineligible or ambiguous input is
+returned unchanged (`<env>` relocation is a no-op unless exactly one eligible
+marker block is present). The adapter applies provider mutations at the hook
+points; the shared core never registers hooks.
+
+**Contract C — Usage/accounting.** Owner: `cache-usage-core.mjs`.
+`scanPage(page, startCursor, sinceCreated)` reads chronological assistant messages
+and returns `{ read, write, input, lastCursor, maxCreated }`;
+`nextProcessedCursor(page, startCursor)` advances the cursor; `shouldAggregate`,
+`hitRatePct`, `glmHitRatio`, `mimoHitRate`, `shorthash` provide eligibility,
+ratios, and the shared digest. Missing usage stays missing (never fabricated; no
+zero-usage record on idle). Cursor/watermark semantics (newest processed id +
+timestamp watermark; undercount-not-fabricate; no double count) are unchanged.
+`cache-engine-core.mjs` re-exports these seven functions identically for
+compatibility.
+
+**Contract D — Runtime adapter boundary (V1, `cache-engine.ts`).** Owns:
+(1) receiving hooks/events (`chat.headers`, `chat.params`,
+`experimental.chat.system.transform`, `experimental.session.compacting`, and
+`event` / `session.idle`); (2) obtaining runtime data via the OpenCode client
+(`client.session.*`); (3) calling shared-core functions; (4) applying verified
+mutations at the hook points; (5) collecting provider-reported usage via the
+accounting helpers; (6) emitting telemetry under the existing privacy/schema
+rules. These cannot move into the shared core because they require the OpenCode
+client, session state, and hook registration. No V2 event types are defined here.
+
+**Contract E — Error / unknown input.** Unknown provider/model → neutral (no
+mutation). Missing provider identity → fail closed. Missing usage fields → left
+missing. Ineligible/malformed transformation input → returned unchanged.
+Missing/pruned cursor with no safe boundary → undercount (count nothing), never
+fabricate. No retry loops, synthetic records, or assumed cache hits.
+
+**Implemented artifacts (this milestone):** four contract tests in
+`test/cache-engine.test.mjs` — shared-core import isolation; adapter
+hook-registration ownership; full re-export single-definition contract;
+`resolveRuntimePolicy` capability-shape contract. Suite: **277 → 281**. No source
+change (audit found no boundary violation).
+
+**Deferred:** session-state lifecycle/cleanup model (**v0.7.1**, WP2);
+V2 API verification/mapping (**v0.7.2+**, WP4); functioning V2 adapter
+(**v0.8.x**).
+
+**Acceptance (v0.7.0):** boundary documented (above); every contract statement
+supported by current code or tests; exports/re-exports compatible; shared usage
+core runtime-independent (test); V1 owns hooks/client/state (test); provider
+behavior unchanged (existing suite); new tests pass; `npm pack --dry-run` and
+`git diff --check` clean.
+
 ## 3. Branch Strategy
 
 Use Git branches for parallel development:
@@ -1095,7 +1190,7 @@ fixed calendar dates are promised). Milestone-specific acceptance criteria:
 
 - **0.5.x:** Provider-coverage phase complete — Kimi, Claude, Gemini, Qwen, xAI/Grok, Meta Muse, and MiniMax each landed as a separate validated release (§2, §2.0). `npm test` passes at every increment.
 - **0.6.0 (DONE):** usage/accounting extracted to `cache-usage-core.mjs`; identity audited (no new abstraction); table-driven provider conformance/regression tests added; no provider behavior changed; shipped with a green 277-test suite. See §2.0b.
-- **0.7.x (PLANNED — see §2B):** runtime-independent core contract and session-state model documented and tested; V2 readiness verified-mapped or explicitly deferred; V1 behavior unchanged. This milestone does **not** build a functioning V2 adapter and makes no dual-runtime claim.
+- **0.7.x (IN PROGRESS — see §2B and §2B.8):** the v0.7.0 core/adapter contract is implemented (boundary audited; documentation + 4 contract tests; no source change was required). The session-state model/lifecycle (v0.7.1) and V2 readiness/verification (v0.7.2+) remain; V2 readiness must be verified-mapped or explicitly deferred. V1 behavior is unchanged. This milestone does **not** build a functioning V2 adapter and makes no dual-runtime claim.
 - **0.8.x (future, gated on a verified V2 API contract):** a functioning V2 adapter is implemented and its hook mapping tested.
 - **0.9.x (future):** dual-runtime stabilization and documentation.
 - **1.0.0 (future):** released only when V1 and V2 support are independently validated, all tests are green, and packaging is finalized.
