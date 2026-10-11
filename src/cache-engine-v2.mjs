@@ -400,11 +400,19 @@ export const CacheEngineV2 = {
       }
     }
 
-    // ---- event consumer: session.idle (usage) + session.deleted (cleanup) --
+    // ---- event consumer: session.usage.updated / session.idle (usage) +
+    // ---- session.deleted (cleanup) ----------------------------------------
     // `subscribe()` returns an AsyncIterable<V2Event> with no signal support, so
     // each iteration races the iterator's `next()` against the abort signal and
-    // calls `return()` on shutdown. Events are processed one at a time, so
-    // `session.idle` scans for the same session cannot overlap.
+    // calls `return()` on shutdown. Events are consumed strictly one at a time
+    // and each usage trigger is awaited before the next event is read, so history
+    // scans can never overlap and the per-session cursor can never be advanced
+    // concurrently. `session.usage.updated` is the primary trigger (fired on each
+    // usage change); `session.idle` is retained as a secondary trigger. Only the
+    // event's `data.sessionID` is used to drive the shared history scan — the
+    // event's token totals are cumulative session snapshots that can include
+    // auxiliary usage absent from `session.context`, so they are never used for
+    // accounting.
     const ac = new AbortController()
     const abortPromise = new Promise((resolve) => {
       if (ac.signal.aborted) resolve("abort")
@@ -428,7 +436,12 @@ export const CacheEngineV2 = {
           const ev = next.r.value
           if (ev && ev.type === "session.deleted" && ev.data && typeof ev.data.sessionID === "string") {
             forgetSession(ev.data.sessionID)
+          } else if (ev && ev.type === "session.usage.updated" && ev.data && typeof ev.data.sessionID === "string") {
+            // Primary usage trigger. Serialized with all other events by the loop
+            // above, so a slow scan defers the next event rather than overlapping.
+            await collectUsage(ev.data.sessionID)
           } else if (ev && ev.type === "session.idle" && ev.data && typeof ev.data.sessionID === "string") {
+            // Secondary trigger, sharing the same safe accounting path.
             await collectUsage(ev.data.sessionID)
           }
         }
