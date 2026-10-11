@@ -771,6 +771,117 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   in the 2.0.26 binary), not a live runtime registration test; actual plugin
   registration/loading in 2.0.26 remains unverified.
 
+### RF-OC-019 — In an isolated 2.0.26 `run --standalone` flow the runtime delivered `session.usage.updated` but no `session.idle`/`session.deleted`, so the V2 adapter's usage consumer never ran
+
+- Status: current
+- Verified: 2026-10-11
+- Area: opencode-runtime
+- Fact: In a single isolated OpenCode 2.0.26 `opencode run --standalone`
+  session driven by a local mock OpenAI-compatible provider, the plugin runtime
+  delivered 24 event notifications to the adapter's `event.subscribe()` iterator,
+  including `session.usage.updated` (×2), `session.execution.started` /
+  `session.execution.succeeded`, `session.step.started` / `session.step.streamed`
+  / `session.step.ended`, `session.text.started` / `session.text.delta` /
+  `session.text.ended`, `session.inbox.enqueued` / `session.inbox.delivered`,
+  `session.renamed`, `session.instructions.updated`, and `location.shutdown` —
+  but **neither `session.idle` nor `session.deleted`**. In the same session the
+  `context` hook was invoked **once** (the primary request) and `model.request`
+  **twice**; the mock provider received exactly two `POST /v1/chat/completions`
+  requests and returned responses.
+- Evidence: [O]
+- Sources: local isolated test 2026-10-11 — disposable `bubblewrap --unshare-net`
+  project; OpenCode 2.0.26 (`/home/alex/.opencode/bin/opencode`); checkpoint
+  adapter `feature/v2-adapter-checkpoint` @ `1091084`
+  (`src/cache-engine-v2.mjs` sha256 `9dc623a8…`); a plugin probe wrapped
+  `session.hook` and `event.subscribe` and wrote a marker file; the mock provider
+  request log recorded two `/v1/chat/completions` posts and no rejected paths; no
+  usage metrics file was produced.
+- Justifies: `src/cache-engine-v2.mjs` `consumeEvents` filters
+  `ev.type === "session.idle"` (usage) and `ev.type === "session.deleted"`
+  (cleanup). This observation shows neither type fired on this runtime path, so
+  the adapter's usage consumer stayed inert. Contrasts with `RF-OC-018`, which
+  lists `session.idle` as the usage trigger.
+- Version context: OpenCode 2.0.26; `@opencode/plugin` 2.0.16; adapter
+  checkpoint `1091084`.
+- Re-verify when: the adapter's event filters change, OpenCode changes the V2
+  event stream, or a flow that is expected to idle (e.g. an interactive/TUI
+  session) is tested.
+- Superseded by: null
+- Notes: **Directly observed:** the 24 event notifications above and the hook
+  invocation counts. **Adapter behavior established by this test:** its usage
+  consumer did not run and no usage metrics file was written, so usage accounting
+  for this runtime path is **unverified**, not failed universally.
+  **Hypotheses still needing investigation:** `session.idle` / `session.deleted`
+  may be emitted only in other flows (e.g. an interactive/TUI idle, or session
+  deletion), or the runtime may name the usage notification
+  `session.usage.updated` (which carries `data.tokens`) rather than `session.idle`
+  on the `run` path. A single `opencode run --standalone` flow does **not** prove
+  `session.idle` / `session.deleted` are never emitted elsewhere. **Evidence
+  limits:** one flow, mock OpenAI-compatible provider, no real provider traffic,
+  network-isolated; no credentials, prompts, or request bodies were recorded. No
+  adapter code was changed.
+
+### RF-OC-020 — OpenCode 2.0.26 emits `session.usage.updated` per turn with cumulative totals and delivers `session.deleted` to an active subscriber; the V2 adapter can drive its shared history scan from `session.usage.updated`
+
+- Status: current
+- Verified: 2026-10-11
+- Area: opencode-runtime
+- Fact:
+  - `session.usage.updated` payload: `{ id, created, type: "session.usage.updated",
+    data: { sessionID, cost, tokens: { input, output, reasoning, cache: { read,
+    write } } } }`, with **no `durable` block** (volatile). It is emitted by the
+    server `SessionProjector.publishUsage`, which SELECTs the session row's stored
+    totals and publishes them; the row is incremented (`UPDATE … = ${existing} +
+    ${added}`) before publishing, and the client reducer **replaces** the stored
+    session cost/tokens — so the totals are **cumulative session snapshots, not
+    deltas**.
+  - It fires per usage change (observed ~1–2 per turn: the primary request plus an
+    auxiliary/title request), carries a usable `data.sessionID`, and its totals can
+    exceed the sum of `session.context` assistant tokens when auxiliary usage is
+    absent from history.
+  - `session.deleted` is durable (`durable: { aggregateID, seq, version: 2 }`,
+    published by `Session.remove`) and WAS delivered to an **already-active** plugin
+    subscriber when deletion targeted that same long-lived server.
+  - The `event.subscribe` stream is documented **volatile by contract** ("a slow
+    consumer overflows and fails the stream, and events during disconnection are
+    missed") — no replay or ordering guarantee.
+  - In a persistent server process, `usage.updated` arrives with the just-completed
+    assistant already visible in `session.context`; running the shared
+    `scanPage`/`nextProcessedCursor` with one persistent cursor/watermark counts
+    each assistant exactly once, is idempotent across repeated events over unchanged
+    history, and advances only on newly visible messages. Validated with the actual
+    checkpoint adapter: two turns produced exactly two `usage` records (cumulative
+    read 5 → 10; the auxiliary usage event produced none).
+  - `session.idle` is defined and subscribable, but no publisher was found in the
+    readable bundle and it was not emitted in the headless server flows →
+    emission conditions remain **unverified**.
+- Evidence: [O] (server publisher selection/replace + client reducer; isolated
+  long-lived `serve` runtime), [I] (cumulative semantics inferred from both)
+- Sources: installed `@opencode/client@2.0.16`
+  `dist/promise/generated/types.d.ts` (`SessionUsageUpdated`, `SessionDeleted`,
+  `SessionIdle`, `TokenUsageInfo`) and `dist/chunks/*` reducer; embedded OpenCode
+  2.0.26 binary (`SessionProjector.publishUsage`, `Session.remove`, the
+  `event.subscribe` volatile-contract description); isolated `serve` test
+  2026-10-11 (`bubblewrap --unshare-net`, local mock OpenAI-compatible provider)
+  loading the real checkpoint adapter.
+- Justifies: `src/cache-engine-v2.mjs` `consumeEvents` triggering `collectUsage` on
+  `session.usage.updated` (primary) while retaining `session.idle` (secondary); its
+  regression tests in `test/cache-engine.test.mjs`.
+- Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
+  adapter checkpoint `1091084`.
+- Re-verify when: OpenCode changes the V2 event names/payloads or the usage
+  projector, the `event.subscribe` volatility contract, or the deletion emission
+  path.
+- Superseded by: null
+- Notes: **Evidence bounds:** a single mock OpenAI-compatible model, two turns, one
+  deletion path, no real provider traffic. `session.usage.updated` is volatile, so
+  a trigger on it is best-effort (undercount possible, never double-count by design;
+  the event's cumulative totals are intentionally not used for accounting).
+  `session.deleted` delivery was observed once with an active subscriber; other
+  deletion paths (child/subagent removal) are not established. The `session.idle`
+  publisher remains unidentified (likely bytecode/interactive). See `RF-OC-019` for
+  the original observation and `RF-OC-018` for the event/type shapes.
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
