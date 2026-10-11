@@ -5,18 +5,17 @@ request structure only for verified provider behavior, and keep each mutation
 narrow, deterministic, and tested; otherwise preserve the request and observe
 provider-reported usage.
 
-**Current state:** v0.4.x maintenance is complete, and the v0.5.x provider line
-has shipped (Kimi, Claude, Gemini, Qwen, plus xAI/Grok, Meta Muse, and MiniMax —
-each with an audit-first evidence note). The v0.6.x shared-core consolidation is
-implemented in the working tree: the usage/accounting core is extracted to
-`src/cache-usage-core.mjs` (re-exported by `cache-engine-core.mjs`) and a
-table-driven provider conformance suite was added; identity was audited with no
-new abstraction. Release/version assignment for that uncommitted work is pending
-explicit authorization. Evidence lives in `docs/cache-policy-inventory.md` and
-`docs/research-findings.md`. The remaining future work — the runtime-adapter
-interface / V2 skeleton and the dual-runtime 1.0 release — is specified in
-`docs/implementation-plan-v2.md`; read it, and the Roadmap section at the end of
-this file, before starting any of it.
+**Current state:** the v0.5.x provider line (DeepSeek, GPT‑5.6+, GLM‑5.3,
+MiMo‑V2.6, Kimi, Claude, Gemini, Qwen, xAI/Grok, Meta Muse, MiniMax) and the
+v0.6.0 shared-core consolidation have shipped; v0.7.0 (core/adapter contract) and
+v0.7.1 (session-state lifecycle) are tagged. The V2 adapter
+(`src/cache-engine-v2.mjs`, exported as `./v2`) is implemented and offline-tested,
+but **V2 runtime registration and hook installation are UNVERIFIED** — never
+claim them without real runtime evidence. `docs/implementation-plan-v2.md` is the
+single authoritative roadmap (Phases A–D, capability matrix, release gates,
+deferred work); read it before starting work. Per-model evidence lives in
+`docs/cache-policy-inventory.md`; harness/transport/API evidence in
+`docs/research-findings.md`.
 
 ## Commands
 
@@ -255,31 +254,31 @@ actually resolved before assuming anything about it.
 v0.4.x. Read it before starting roadmap work, and treat it as a milestone
 checklist rather than as authorization to implement.
 
-Milestones, in order:
+Milestones (authoritative detail in the consolidated plan, §4–§9):
 
-1. **0.5.x — provider coverage (DONE).** A provider-coverage phase, *not* an
-   architecture phase. Shipped families: DeepSeek, GPT-5.6, GLM-5.3, MiMo-V2.6,
-   Kimi, Claude, Gemini, Qwen, xAI/Grok, Meta Muse, and MiniMax — each researched
-   audit-first and recorded in the inventory and research-findings. **Mistral
-   remains the only deferred candidate**, requiring its own audit-first evidence
-   note.
-2. **0.6.x — core consolidation (DONE, working tree).** Shared-core
-   usage/accounting extraction (`src/cache-usage-core.mjs`, re-exported by
-   `cache-engine-core.mjs`) and generic provider conformance tests, with no
-   provider prerequisites and no provider behavior changes. Version assignment
-   pending explicit release authorization.
-3. **0.7.x — shared-core refactor.** Runtime-adapter interface, formalized
-   session-state model, and a V2 plugin skeleton (on the V2 branch).
-4. **0.8.x — V2 adapter.** Map the hooks (`context`, `model.request`,
-   `compaction`), confirm TUI/CLI integration, then dual-runtime integration
-   testing.
-5. **0.9.x — polish and compliance.** V2 performance/logging, final docs review.
-6. **1.0.0 — dual-runtime release.** Shared core plus both adapters, green
-   tests, finalized packaging.
+1. **Phase A — 0.7.x stabilization (current).** Preserve V1 and the shared core;
+   keep the V2 adapter and its regression coverage; finish the locally-answerable
+   telemetry/lifecycle/accounting investigations; keep V2 runtime registration
+   explicitly unverified. Document bounded session-state eviction and its
+   accounting tradeoffs.
+2. **Phase B — 0.8.x V2 runtime integration.** Establish a supported, safe
+   runtime validation procedure; verify `./v2` entry resolution, `setup(ctx)`
+   execution, and hook installation against the installed API; confirm
+   usage-source semantics and ordering. Fix real defects narrowly; keep V1
+   unchanged. Do not edit shared config or risk the user's managed service to
+   force a smoke test.
+3. **Phase C — 0.9.x dual-runtime stabilization.** Validate V1 and V2
+   independently; decide the V1→V2 parity contract (including whether compaction
+   isolation / fork cache-root are required for 1.0.0); complete
+   installation/export/lifecycle docs; cut a release candidate only when the
+   plan's acceptance gates pass.
+4. **Phase D — 1.0.0 stable dual-runtime release.** Requires demonstrated V1
+   compatibility and **demonstrated V2 registration and hook installation**; no
+   calendar deadlines — exit criteria only.
 
-Read §2 of the plan before starting any provider work: it carries the per-provider
-tasks, references-to-verify, required tests, acceptance criteria, branch/release
-workflow, and the v0.5.x definition of done.
+Mistral remains the only deferred provider candidate, pending an audit-first
+evidence note. Read the consolidated plan for the capability matrix, work
+packages, acceptance criteria, testing strategy, release policy, and rollback.
 
 Branches: `master`/`main` carries the V1 shared core, policies, and releases.
 `feature/v2-adapter` is branched off the `v0.4.13` tag and continues
