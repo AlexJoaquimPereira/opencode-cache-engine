@@ -5228,6 +5228,161 @@ test("v2 adapter: session.deleted evicts state and suppresses a late idle", asyn
   })
 })
 
+test("v2 adapter: session.usage.updated triggers a history scan for its sessionID", async () => {
+  await withTempMetrics(async (metrics) => {
+    const mod = await import("../src/cache-engine-v2.mjs")
+    const msgs = { ses_u: [{ id: "a1", type: "assistant", time: { created: 10 }, tokens: { input: 1000, output: 5, reasoning: 0, cache: { read: 300, write: 20 } } }] }
+    const { ctx, pushEvent } = makeV2Ctx(msgs)
+    const cleanup = await mod.default.setup(ctx)
+    pushEvent({ type: "session.usage.updated", data: { sessionID: "ses_u", cost: 0, tokens: { input: 1000, output: 5, reasoning: 0, cache: { read: 300, write: 20 } } } })
+    await new Promise((r) => setTimeout(r, 30))
+    const usage = readRecords(metrics).filter((r) => r.kind === "usage")
+    assert.equal(usage.length, 1)
+    assert.equal(usage[0].sid, "ses_u")
+    assert.equal(usage[0].read, 300)
+    assert.equal(usage[0].write, 20)
+    assert.equal(usage[0].input, 1000)
+    assert.equal(usage[0].cursor, "a1")
+    await cleanup()
+  })
+})
+
+test("v2 adapter: usage.updated with a malformed session id fails safely", async () => {
+  await withTempMetrics(async (metrics) => {
+    const mod = await import("../src/cache-engine-v2.mjs")
+    const msgs = { ses_ok: [{ id: "a1", type: "assistant", time: { created: 1 }, tokens: { input: 1, output: 0, reasoning: 0, cache: { read: 7, write: 0 } } }] }
+    const { ctx, pushEvent } = makeV2Ctx(msgs)
+    const cleanup = await mod.default.setup(ctx)
+    for (const bad of [
+      { type: "session.usage.updated" },
+      { type: "session.usage.updated", data: {} },
+      { type: "session.usage.updated", data: null },
+      { type: "session.usage.updated", data: { sessionID: 123 } },
+      { type: "session.usage.updated", data: { sessionID: "" } },
+    ]) pushEvent(bad)
+    pushEvent({ type: "session.usage.updated", data: { sessionID: "ses_ok" } })
+    await new Promise((r) => setTimeout(r, 40))
+    const usage = readRecords(metrics).filter((r) => r.kind === "usage")
+    assert.equal(usage.length, 1, "malformed usage events must not produce records")
+    assert.equal(usage[0].sid, "ses_ok")
+    await cleanup()
+  })
+})
+
+test("v2 adapter: repeated usage.updated events over unchanged history do not duplicate", async () => {
+  await withTempMetrics(async (metrics) => {
+    const mod = await import("../src/cache-engine-v2.mjs")
+    const msgs = { ses_r: [{ id: "a1", type: "assistant", time: { created: 5 }, tokens: { input: 1, output: 0, reasoning: 0, cache: { read: 50, write: 5 } } }] }
+    const { ctx, pushEvent } = makeV2Ctx(msgs)
+    const cleanup = await mod.default.setup(ctx)
+    pushEvent({ type: "session.usage.updated", data: { sessionID: "ses_r" } })
+    await new Promise((r) => setTimeout(r, 25))
+    pushEvent({ type: "session.usage.updated", data: { sessionID: "ses_r" } })
+    await new Promise((r) => setTimeout(r, 25))
+    const usage = readRecords(metrics).filter((r) => r.kind === "usage" && r.sid === "ses_r")
+    assert.equal(usage.length, 1)
+    await cleanup()
+  })
+})
+
+test("v2 adapter: a later usage.updated processes only the newly visible assistant message", async () => {
+  await withTempMetrics(async (metrics) => {
+    const mod = await import("../src/cache-engine-v2.mjs")
+    const msgs = { ses_t: [{ id: "a1", type: "assistant", time: { created: 10 }, tokens: { input: 1, output: 0, reasoning: 0, cache: { read: 10, write: 0 } } }] }
+    const { ctx, pushEvent } = makeV2Ctx(msgs)
+    const cleanup = await mod.default.setup(ctx)
+    pushEvent({ type: "session.usage.updated", data: { sessionID: "ses_t" } })
+    await new Promise((r) => setTimeout(r, 25))
+    msgs.ses_t.push({ id: "a2", type: "assistant", time: { created: 20 }, tokens: { input: 1, output: 0, reasoning: 0, cache: { read: 20, write: 0 } } })
+    pushEvent({ type: "session.usage.updated", data: { sessionID: "ses_t" } })
+    await new Promise((r) => setTimeout(r, 25))
+    const usage = readRecords(metrics).filter((r) => r.kind === "usage" && r.sid === "ses_t")
+    assert.deepEqual(usage.map((u) => u.read), [10, 20], "each assistant message is counted exactly once, in order")
+    assert.equal(usage[1].cursor, "a2")
+    await cleanup()
+  })
+})
+
+test("v2 adapter: overlapping usage events are serialized (no concurrent scan, no double count)", async () => {
+  await withTempMetrics(async (metrics) => {
+    const mod = await import("../src/cache-engine-v2.mjs")
+    const handlers = {}
+    const queue = []
+    const waiters = []
+    const pushEvent = (e) => { queue.push(e); const w = waiters.shift(); if (w) w() }
+    const history = [{ id: "a1", type: "assistant", time: { created: 10 }, tokens: { input: 1, output: 0, reasoning: 0, cache: { read: 40, write: 4 } } }]
+    let inFlight = 0
+    let maxInFlight = 0
+    const ctx = {
+      session: {
+        hook: async (name, cb) => { handlers[name] = cb; return { dispose: async () => {} } },
+        context: async () => {
+          inFlight += 1
+          maxInFlight = Math.max(maxInFlight, inFlight)
+          await new Promise((r) => setTimeout(r, 20))
+          inFlight -= 1
+          return { data: history }
+        },
+      },
+      event: { subscribe: () => ({ [Symbol.asyncIterator]: async function* () { while (true) { if (queue.length === 0) await new Promise((r) => waiters.push(r)); while (queue.length) yield queue.shift() } } }) },
+    }
+    const cleanup = await mod.default.setup(ctx)
+    pushEvent({ type: "session.usage.updated", data: { sessionID: "ses_o" } })
+    pushEvent({ type: "session.usage.updated", data: { sessionID: "ses_o" } })
+    await new Promise((r) => setTimeout(r, 120))
+    const usage = readRecords(metrics).filter((r) => r.kind === "usage" && r.sid === "ses_o")
+    assert.equal(usage.length, 1, "overlapping usage events must not double-count")
+    assert.equal(maxInFlight, 1, "history scans must never run concurrently")
+    await cleanup()
+  })
+})
+
+test("v2 adapter: session.deleted suppresses a late usage.updated", async () => {
+  await withTempMetrics(async (metrics) => {
+    const mod = await import("../src/cache-engine-v2.mjs")
+    const msgs = { ses_d: [{ id: "a1", type: "assistant", time: { created: 1 }, tokens: { input: 1, output: 0, reasoning: 0, cache: { read: 11, write: 0 } } }] }
+    const { ctx, pushEvent } = makeV2Ctx(msgs)
+    const cleanup = await mod.default.setup(ctx)
+    pushEvent({ type: "session.usage.updated", data: { sessionID: "ses_d" } })
+    await new Promise((r) => setTimeout(r, 25))
+    assert.equal(readRecords(metrics).filter((r) => r.kind === "usage").length, 1)
+    pushEvent({ type: "session.deleted", data: { sessionID: "ses_d" } })
+    await new Promise((r) => setTimeout(r, 10))
+    msgs.ses_d.push({ id: "a2", type: "assistant", time: { created: 2 }, tokens: { input: 1, output: 0, reasoning: 0, cache: { read: 99, write: 0 } } })
+    pushEvent({ type: "session.usage.updated", data: { sessionID: "ses_d" } })
+    await new Promise((r) => setTimeout(r, 30))
+    assert.equal(readRecords(metrics).filter((r) => r.kind === "usage").length, 1, "a late usage event after deletion must not be recorded")
+    await cleanup()
+  })
+})
+
+test("v2 adapter: cleanup prevents a late usage scan from recording", async () => {
+  await withTempMetrics(async (metrics) => {
+    const mod = await import("../src/cache-engine-v2.mjs")
+    const handlers = {}
+    const queue = []
+    const waiters = []
+    const pushEvent = (e) => { queue.push(e); const w = waiters.shift(); if (w) w() }
+    let resolveHistory
+    const ctx = {
+      session: {
+        hook: async (name, cb) => { handlers[name] = cb; return { dispose: async () => {} } },
+        context: () => new Promise((resolve) => { resolveHistory = resolve }),
+      },
+      event: { subscribe: () => ({ [Symbol.asyncIterator]: async function* () { while (true) { if (queue.length === 0) await new Promise((r) => waiters.push(r)); while (queue.length) yield queue.shift() } } }) },
+    }
+    const cleanup = await mod.default.setup(ctx)
+    pushEvent({ type: "session.usage.updated", data: { sessionID: "ses_late" } })
+    await new Promise((r) => setTimeout(r, 20)) // let the scan start and call ctx.session.context
+    await cleanup() // aborts; must not wait on the pending history
+    resolveHistory?.({ data: [{ id: "a1", type: "assistant", time: { created: 1 }, tokens: { input: 1, output: 0, reasoning: 0, cache: { read: 5, write: 0 } } }] })
+    await new Promise((r) => setTimeout(r, 30))
+    let usageCount = 0
+    try { usageCount = readRecords(metrics).filter((r) => r.kind === "usage").length } catch { usageCount = 0 }
+    assert.equal(usageCount, 0, "a late scan after cleanup must not record")
+  })
+})
+
 test("v2 adapter: the session map is bounded — eviction undercounts, never recounts", async () => {
   await withTempMetrics(async (metrics) => {
     const mod = await import("../src/cache-engine-v2.mjs")
