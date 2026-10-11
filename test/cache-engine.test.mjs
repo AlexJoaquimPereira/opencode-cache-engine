@@ -10,7 +10,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import {
@@ -5034,4 +5034,594 @@ test("v0.7.1: adapter-level prune/revert/restore emits no duplicate usage", asyn
   assert.deepEqual(usage.map((u) => u.read), [150, 30], "one usage record before the revert, one after recovery")
   assert.equal(usage[1].cumulative.read, 180)
   assert.equal(usage[1].cursor, "a4")
+})
+
+// ===========================================================================
+// v0.7.x (emergency migration) — OpenCode V2 adapter contract
+//
+// Targets the verified V2 plugin API (plain `{ id, setup(ctx) }`; `define` is
+// identity). The adapter must reuse the shared core, stay free of OpenCode/V1
+// imports, and fail safe. These tests use a synthetic `ctx` whose shape is
+// grounded in the verified @opencode/plugin 2.0.25 types (SessionDomain.hook,
+// EventDomain.subscribe -> AsyncIterable, SessionDomain.context -> messages).
+// ===========================================================================
+
+const makeV2Ctx = (messagesBySid = {}) => {
+  const handlers = {}
+  const queue = []
+  const waiters = []
+  const pushEvent = (e) => {
+    queue.push(e)
+    const w = waiters.shift()
+    if (w) w()
+  }
+  const ctx = {
+    session: {
+      hook: async (name, cb) => {
+        handlers[name] = cb
+        return { dispose: async () => {} }
+      },
+      context: async (input) => ({ data: messagesBySid[input?.sessionID] ?? [] }),
+    },
+    event: {
+      subscribe: () => ({
+        [Symbol.asyncIterator]: async function* () {
+          while (true) {
+            if (queue.length === 0) await new Promise((r) => waiters.push(r))
+            while (queue.length) yield queue.shift()
+          }
+        },
+      }),
+    },
+  }
+  return { ctx, handlers, pushEvent }
+}
+
+test("v2 adapter: export shape and runtime isolation (no OpenCode/V1 imports)", async () => {
+  const mod = await import("../src/cache-engine-v2.mjs")
+  assert.equal(mod.default.id, "opencode-cache-engine")
+  assert.equal(typeof mod.default.setup, "function")
+  assert.equal(mod.CacheEngineV2, mod.default)
+  const src = readFileSync(join(SRC_DIR, "cache-engine-v2.mjs"), "utf8")
+  const sibling = /^\.\/(cache-policy-core|cache-engine-core|cache-usage-core)\.mjs$/
+  for (const spec of importSpecifiers(src)) {
+    assert.ok(spec.startsWith("node:") || sibling.test(spec), `v2 adapter: forbidden import "${spec}"`)
+  }
+  assert.ok(!importSpecifiers(src).some((s) => /@opencode/.test(s)), "v2 adapter must not import OpenCode packages")
+})
+
+test("v1 adapter: entry point has no V2-only dependency", () => {
+  const src = readFileSync(join(SRC_DIR, "cache-engine.ts"), "utf8")
+  const sibling = /^\.\/(cache-policy-core|cache-engine-core|cache-usage-core)\.mjs$/
+  for (const spec of importSpecifiers(src)) {
+    const ok = spec.startsWith("node:") || spec.startsWith("@opencode-ai/") || sibling.test(spec)
+    assert.ok(ok, `v1 adapter: unexpected import "${spec}"`)
+  }
+  assert.ok(!importSpecifiers(src).some((s) => /@opencode\/plugin/.test(s)), "v1 adapter must not import the V2 API package")
+  assert.ok(!importSpecifiers(src).some((s) => /cache-engine-v2\.mjs$/.test(s)), "v1 adapter must not import the V2 adapter")
+})
+
+test("v2 adapter: context hook relocates the <env> block for MiMo/GLM and is passive for DeepSeek", async () => {
+  const mod = await import("../src/cache-engine-v2.mjs")
+  const { ctx, handlers } = makeV2Ctx()
+  const cleanup = await mod.default.setup(ctx)
+  const env = "A\nYou are powered by the model named X\n<env>\nToday: 2026-01-01\n</env>\nZ\nTAIL"
+
+  const mimo = { sessionID: "ses_v2_env", model: { id: "mimo-v2.6-flash", providerID: "opencode-go" }, system: [{ type: "text", text: env }], messages: [], options: {} }
+  await handlers["context"](mimo)
+  const moved = mimo.system[0].text
+  assert.notEqual(moved, env, "MiMo env block must be relocated")
+  assert.ok(moved.endsWith("</env>"), "the relocated block must end the system string")
+  const norm = (t) =>
+    t
+      .split("\n")
+      .filter((l) => l.trim().length > 0)
+      .sort()
+      .join("\n")
+  assert.equal(norm(moved), norm(env), "line set preserved (content-preserving reorder)")
+
+  const deepseek = { sessionID: "ses_v2_ds", model: { id: "deepseek-v4-pro", providerID: "deepseek" }, system: [{ type: "text", text: env }], messages: [], options: {} }
+  await handlers["context"](deepseek)
+  assert.equal(deepseek.system[0].text, env, "passive family must not mutate the system")
+  assert.deepEqual(deepseek.options, {}, "passive family must not inject options")
+
+  await cleanup()
+})
+
+test("v2 adapter: model.request adds x-session-id only for OpenRouter GLM/MiMo", async () => {
+  await withTempMetrics(async () => {
+    const mod = await import("../src/cache-engine-v2.mjs")
+    const { ctx, handlers } = makeV2Ctx()
+    const cleanup = await mod.default.setup(ctx)
+
+    const orMimo = { sessionID: "ses_v2_or", model: { id: "mimo-v2.6-pro", providerID: "openrouter" }, headers: {} }
+    await handlers["model.request"](orMimo)
+    assert.equal(typeof orMimo.headers["x-session-id"], "string", "OpenRouter MiMo must receive the affinity header")
+
+    const goMimo = { sessionID: "ses_v2_go", model: { id: "mimo-v2.6-flash", providerID: "opencode-go" }, headers: {} }
+    await handlers["model.request"](goMimo)
+    assert.equal(goMimo.headers["x-session-id"], undefined, "OpenCode Go must not receive the header")
+
+    const ds = { sessionID: "ses_v2_ds2", model: { id: "deepseek-v4-pro", providerID: "openrouter" }, headers: {} }
+    await handlers["model.request"](ds)
+    assert.equal(ds.headers["x-session-id"], undefined, "DeepSeek must not receive affinity")
+
+    const pre = { sessionID: "ses_v2_pre", model: { id: "z-ai/glm-5.3", providerID: "openrouter" }, headers: { "X-Session-Id": "user" } }
+    await handlers["model.request"](pre)
+    assert.equal(pre.headers["X-Session-Id"], "user")
+    assert.equal(pre.headers["x-session-id"], undefined, "a pre-existing header must be preserved, not duplicated")
+
+    await cleanup()
+  })
+})
+
+test("v2 adapter: session.idle aggregates usage from session history without fabrication", async () => {
+  const mod = await import("../src/cache-engine-v2.mjs")
+  const metrics = join(mkdtempSync(join(tmpdir(), "ce-v2-")), "v2.jsonl")
+  const prev = process.env.CACHE_ENGINE_METRICS_FILE
+  process.env.CACHE_ENGINE_METRICS_FILE = metrics
+  try {
+    const { ctx, pushEvent } = makeV2Ctx({
+      ses_v2_usage: [
+        { id: "u1", type: "user", time: { created: 1000 } },
+        { id: "a1", type: "assistant", time: { created: 2000 }, tokens: { input: 1000, output: 10, reasoning: 0, cache: { read: 3000, write: 500 } } },
+      ],
+    })
+    const cleanup = await mod.default.setup(ctx)
+    pushEvent({ type: "session.idle", data: { sessionID: "ses_v2_usage" } })
+    await new Promise((r) => setTimeout(r, 40))
+    const records = readFileSync(metrics, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l))
+    const usage = records.filter((r) => r.kind === "usage")
+    assert.equal(usage.length, 1, "one usage record for the assistant message")
+    assert.equal(usage[0].read, 3000)
+    assert.equal(usage[0].write, 500)
+    assert.equal(usage[0].input, 1000)
+    assert.equal(usage[0].messages, 1)
+    assert.equal(usage[0].cursor, "a1")
+
+    // A second idle with no new messages must not fabricate a record.
+    const { ctx: ctx2, pushEvent: push2 } = makeV2Ctx({ ses_v2_usage: [] })
+    const cleanup2 = await mod.default.setup(ctx2)
+    push2({ type: "session.idle", data: { sessionID: "ses_v2_usage" } })
+    await new Promise((r) => setTimeout(r, 40))
+    const records2 = readFileSync(metrics, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l))
+    assert.equal(records2.filter((r) => r.kind === "usage").length, 1, "empty history must not fabricate a usage record")
+    await cleanup()
+    await cleanup2()
+  } finally {
+    if (prev === undefined) delete process.env.CACHE_ENGINE_METRICS_FILE
+    else process.env.CACHE_ENGINE_METRICS_FILE = prev
+  }
+})
+
+const withTempMetrics = async (fn) => {
+  const metrics = join(mkdtempSync(join(tmpdir(), "ce-v2-")), "m.jsonl")
+  const prev = process.env.CACHE_ENGINE_METRICS_FILE
+  process.env.CACHE_ENGINE_METRICS_FILE = metrics
+  try {
+    return await fn(metrics)
+  } finally {
+    if (prev === undefined) delete process.env.CACHE_ENGINE_METRICS_FILE
+    else process.env.CACHE_ENGINE_METRICS_FILE = prev
+  }
+}
+const readRecords = (metrics) =>
+  readFileSync(metrics, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l))
+
+test("v2 adapter: session.deleted evicts state and suppresses a late idle", async () => {
+  await withTempMetrics(async (metrics) => {
+    const mod = await import("../src/cache-engine-v2.mjs")
+    const msgs = { ses_del: [{ id: "a1", type: "assistant", time: { created: 1 }, tokens: { input: 1, output: 0, reasoning: 0, cache: { read: 10, write: 0 } } }] }
+    const { ctx, handlers, pushEvent } = makeV2Ctx(msgs)
+    const cleanup = await mod.default.setup(ctx)
+    await handlers["context"]({ sessionID: "ses_del", model: { id: "deepseek-v4-pro", providerID: "deepseek" }, system: [], options: {} })
+    pushEvent({ type: "session.idle", data: { sessionID: "ses_del" } })
+    await new Promise((r) => setTimeout(r, 30))
+    assert.equal(readRecords(metrics).filter((r) => r.kind === "usage").length, 1)
+
+    pushEvent({ type: "session.deleted", data: { sessionID: "ses_del" } })
+    msgs.ses_del.push({ id: "a2", type: "assistant", time: { created: 2 }, tokens: { input: 1, output: 0, reasoning: 0, cache: { read: 99, write: 0 } } })
+    pushEvent({ type: "session.idle", data: { sessionID: "ses_del" } })
+    await new Promise((r) => setTimeout(r, 30))
+    assert.equal(readRecords(metrics).filter((r) => r.kind === "usage").length, 1, "a deleted session must not be recounted")
+    await cleanup()
+  })
+})
+
+test("v2 adapter: the session map is bounded — eviction undercounts, never recounts", async () => {
+  await withTempMetrics(async (metrics) => {
+    const mod = await import("../src/cache-engine-v2.mjs")
+    const msgs = { ses_a: [{ id: "a1", type: "assistant", time: { created: 1 }, tokens: { input: 1, output: 0, reasoning: 0, cache: { read: 10, write: 0 } } }] }
+    const { ctx, handlers, pushEvent } = makeV2Ctx(msgs)
+    const cleanup = await mod.default.setup(ctx)
+    const ds = { id: "deepseek-v4-pro", providerID: "deepseek" }
+    await handlers["context"]({ sessionID: "ses_a", model: ds, system: [], options: {} })
+    pushEvent({ type: "session.idle", data: { sessionID: "ses_a" } })
+    await new Promise((r) => setTimeout(r, 20))
+    assert.equal(readRecords(metrics).filter((r) => r.kind === "usage").length, 1)
+    // Overflow the cap (1024) so ses_a (oldest) is evicted + tombstoned.
+    for (let i = 0; i < 1025; i += 1) await handlers["context"]({ sessionID: `ses_bulk_${i}`, model: ds, system: [], options: {} })
+    msgs.ses_a.push({ id: "a2", type: "assistant", time: { created: 2 }, tokens: { input: 1, output: 0, reasoning: 0, cache: { read: 99, write: 0 } } })
+    pushEvent({ type: "session.idle", data: { sessionID: "ses_a" } })
+    await new Promise((r) => setTimeout(r, 30))
+    assert.equal(readRecords(metrics).filter((r) => r.kind === "usage" && r.sid === "ses_a").length, 1, "evicted session is undercounted, not recounted or fabricated")
+    await cleanup()
+  })
+})
+
+test("v2 adapter: GPT cache-options telemetry reports only injected values, once per session", async () => {
+  await withTempMetrics(async (metrics) => {
+    const mod = await import("../src/cache-engine-v2.mjs")
+    const { ctx, handlers } = makeV2Ctx()
+    const cleanup = await mod.default.setup(ctx)
+    const gpt = { id: "gpt-5.6", providerID: "openai" }
+
+    const ev1 = { sessionID: "ses_gpt", model: gpt, system: [], options: {} }
+    await handlers["context"](ev1)
+    assert.equal(typeof ev1.options.promptCacheKey, "string", "missing key is injected")
+    assert.ok(ev1.options.promptCacheOptions, "missing options are injected")
+
+    const ev2 = { sessionID: "ses_gpt", model: gpt, system: [], options: {} }
+    await handlers["context"](ev2) // must not add a second record
+
+    const ev3 = { sessionID: "ses_gpt_pre", model: gpt, system: [], options: { promptCacheKey: "user-key", promptCacheOptions: { mode: "implicit", ttl: "30m" } } }
+    await handlers["context"](ev3)
+    assert.equal(ev3.options.promptCacheKey, "user-key", "existing key preserved")
+    assert.deepEqual(ev3.options.promptCacheOptions, { mode: "implicit", ttl: "30m" }, "existing options preserved")
+
+    const ev4 = { sessionID: "ses_gpt_key", model: gpt, system: [], options: { promptCacheKey: "user-key" } }
+    await handlers["context"](ev4)
+
+    const recs = readRecords(metrics).filter((r) => r.kind === "cache-options")
+    assert.deepEqual(recs.map((r) => r.sid), ["ses_gpt", "ses_gpt_key"], "one record per session that injected something; none when everything was preexisting")
+    assert.equal(recs[0].keyInjected, true)
+    assert.equal(typeof recs[0].key, "string")
+    assert.equal(recs[1].keyInjected, false)
+    assert.equal(recs[1].key, null)
+    await cleanup()
+  })
+})
+
+test("v2 adapter: GPT transform safely skips missing/malformed options", async () => {
+  await withTempMetrics(async () => {
+    const mod = await import("../src/cache-engine-v2.mjs")
+    const { ctx, handlers } = makeV2Ctx()
+    const cleanup = await mod.default.setup(ctx)
+    for (const bad of [undefined, null, "nope", 42]) {
+      const ev = { sessionID: "ses_opt", model: { id: "gpt-5.6", providerID: "openai" }, system: [], options: bad }
+      await handlers["context"](ev)
+      assert.equal(ev.options, bad, "options must be left untouched, never replaced")
+    }
+    await cleanup()
+  })
+})
+
+test("v2 adapter: <env> relocation safely skips multi-part system content", async () => {
+  const mod = await import("../src/cache-engine-v2.mjs")
+  const { ctx, handlers } = makeV2Ctx()
+  const cleanup = await mod.default.setup(ctx)
+  const env = "A\nYou are powered by the model named X\n<env>\nToday: 2026-01-01\n</env>\nZ\nTAIL"
+  const ev = { sessionID: "ses_mp", model: { id: "mimo-v2.6-flash", providerID: "opencode-go" }, system: [{ type: "text", text: env }, { type: "text", text: "extra" }], options: {} }
+  await handlers["context"](ev)
+  assert.equal(ev.system[0].text, env, "multi-part system content is left unchanged")
+  assert.equal(ev.system[1].text, "extra")
+  await cleanup()
+})
+
+test("v2 adapter: cleanup unblocks a pending event consumer via iterator.return()", async () => {
+  const mod = await import("../src/cache-engine-v2.mjs")
+  let returned = false
+  const ctx = {
+    session: { hook: async () => ({ dispose: async () => {} }), context: async () => [] },
+    event: {
+      subscribe: () => ({
+        [Symbol.asyncIterator]() {
+          return {
+            next: () => new Promise(() => {}),
+            return: async () => {
+              returned = true
+              return { done: true }
+            },
+          }
+        },
+      }),
+    },
+  }
+  const cleanup = await mod.default.setup(ctx)
+  await Promise.race([
+    cleanup(),
+    new Promise((_, rej) => setTimeout(() => rej(new Error("cleanup did not unblock the consumer")), 1500)),
+  ])
+  assert.equal(returned, true, "cleanup must call iterator.return()")
+})
+
+test("v2 adapter: affinity telemetry matches the shared schema (V1 parity)", async () => {
+  await withTempMetrics(async (metrics) => {
+    const mod = await import("../src/cache-engine-v2.mjs")
+    const { ctx, handlers } = makeV2Ctx()
+    const cleanup = await mod.default.setup(ctx)
+    await handlers["model.request"]({ sessionID: "ses_or", model: { id: "mimo-v2.6-pro", providerID: "openrouter" }, headers: {} })
+    await handlers["model.request"]({ sessionID: "ses_go", model: { id: "mimo-v2.6-flash", providerID: "opencode-go" }, headers: {} })
+    const recs = readFileSync(metrics, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((r) => r.kind === "boundary")
+    const or = recs.find((r) => r.sid === "ses_or")
+    const expected = affinityTelemetryFields("mimo26", "openrouter", "cache_engine")
+    for (const k of ["reason", "eligible", "providerIdentityKnown", "provider", "headerPresent", "headerAttached", "headerSource"]) {
+      assert.equal(or[k], expected[k], `field ${k}`)
+    }
+    assert.equal(or.headerAttached, true)
+    const go = recs.find((r) => r.sid === "ses_go")
+    assert.equal(go.eligible, false)
+    assert.equal(go.headerAttached, false)
+    assert.equal(go.reason, "openrouter_affinity_bypassed_non_openrouter")
+    for (const r of recs) {
+      for (const k of ["prompt", "headers", "authorization", "messages", "reasoning"]) assert.ok(!(k in r), `telemetry must not include ${k}`)
+    }
+    await cleanup()
+  })
+})
+
+test("v2 adapter: capacity eviction skips the backlog on re-entry (undercount, no recount)", async () => {
+  await withTempMetrics(async (metrics) => {
+    const mod = await import("../src/cache-engine-v2.mjs")
+    const tick = () => new Promise((r) => setTimeout(r, 20))
+    const A = (id, read, created) => ({ id, type: "assistant", time: { created }, tokens: { input: 0, output: 0, reasoning: 0, cache: { read, write: 0 } } })
+    const msgs = { ses_a: [A("a1", 10, 1)] }
+    const { ctx, handlers, pushEvent } = makeV2Ctx(msgs)
+    const cleanup = await mod.default.setup(ctx)
+    const ds = { id: "deepseek-v4-pro", providerID: "deepseek" }
+    await handlers["context"]({ sessionID: "ses_a", model: ds, system: [], options: {} })
+    pushEvent({ type: "session.idle", data: { sessionID: "ses_a" } })
+    await tick()
+    const reads = () => readFileSync(metrics, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((r) => r.kind === "usage" && r.sid === "ses_a").map((r) => r.read)
+    assert.deepEqual(reads(), [10])
+    for (let i = 0; i < 1025; i += 1) await handlers["context"]({ sessionID: `fill_${i}`, model: ds, system: [], options: {} })
+    // Re-entry: a2 was already counted before eviction; the backlog is skipped.
+    msgs.ses_a.push(A("a2", 20, 2))
+    pushEvent({ type: "session.idle", data: { sessionID: "ses_a" } })
+    await tick()
+    assert.deepEqual(reads(), [10], "the pre-eviction backlog is not recounted")
+    // New activity after re-entry is counted.
+    msgs.ses_a.push(A("a3", 30, 3))
+    pushEvent({ type: "session.idle", data: { sessionID: "ses_a" } })
+    await tick()
+    assert.deepEqual(reads(), [10, 30], "only the message after re-entry is counted")
+    await cleanup()
+  })
+})
+
+test("v2 adapter: cleanup does not wait on a pending history retrieval", async () => {
+  const mod = await import("../src/cache-engine-v2.mjs")
+  let resolveHistory = null
+  const ctx = {
+    session: { hook: async () => ({ dispose: async () => {} }), context: () => new Promise((res) => { resolveHistory = res }) },
+    event: { subscribe: () => ({ [Symbol.asyncIterator]: async function* () { yield { type: "session.idle", data: { sessionID: "ses_pend" } } } }) },
+  }
+  const cleanup = await mod.default.setup(ctx)
+  await new Promise((r) => setTimeout(r, 15))
+  await Promise.race([
+    cleanup(),
+    new Promise((_, rej) => setTimeout(() => rej(new Error("cleanup hung on pending history")), 1500)),
+  ])
+  if (resolveHistory) resolveHistory({ data: [] }) // late settle must not throw
+  await new Promise((r) => setTimeout(r, 10))
+})
+
+test("v2 adapter: a session evicted during history retrieval is not recorded", async () => {
+  await withTempMetrics(async (metrics) => {
+    const mod = await import("../src/cache-engine-v2.mjs")
+    const handlers = {}
+    const queue = []
+    const waiters = []
+    const push = (e) => {
+      queue.push(e)
+      const w = waiters.shift()
+      if (w) w()
+    }
+    let resolveHistory = null
+    const ctx = {
+      session: {
+        hook: async (n, cb) => {
+          handlers[n] = cb
+          return { dispose: async () => {} }
+        },
+        context: () =>
+          new Promise((res) => {
+            resolveHistory = () => res({ data: [{ id: "a1", type: "assistant", time: { created: 1 }, tokens: { input: 1, output: 0, reasoning: 0, cache: { read: 10, write: 0 } } }] })
+          }),
+      },
+      event: {
+        subscribe: () => ({
+          [Symbol.asyncIterator]: async function* () {
+            while (true) {
+              if (queue.length === 0) await new Promise((r) => waiters.push(r))
+              while (queue.length) yield queue.shift()
+            }
+          },
+        }),
+      },
+    }
+    const cleanup = await mod.default.setup(ctx)
+    const ds = { id: "deepseek-v4-pro", providerID: "deepseek" }
+    push({ type: "session.idle", data: { sessionID: "ses_ev" } })
+    await new Promise((r) => setTimeout(r, 15)) // let the consumer start the pending retrieval
+    for (let i = 0; i < 1025; i += 1) await handlers["context"]({ sessionID: `fill_${i}`, model: ds, system: [], options: {} })
+    if (resolveHistory) resolveHistory()
+    await new Promise((r) => setTimeout(r, 30))
+    let usage = []
+    try {
+      usage = readFileSync(metrics, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((r) => r.kind === "usage" && r.sid === "ses_ev")
+    } catch {
+      usage = []
+    }
+    assert.equal(usage.length, 0, "a session evicted mid-retrieval must not be recorded")
+    await cleanup()
+  })
+})
+
+test("v2 adapter: history ordering is normalized deterministically", async () => {
+  await withTempMetrics(async (metrics) => {
+    const mod = await import("../src/cache-engine-v2.mjs")
+    const A = (id, read, created) => ({ id, type: "assistant", time: { created }, tokens: { input: 0, output: 0, reasoning: 0, cache: { read, write: 0 } } })
+    const noId = { type: "assistant", time: { created: 1500 }, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 7, write: 0 } } }
+    const msgs = { ses_ord: [A("a3", 30, 3000), A("a1", 10, 1000), A("a2", 20, 2000), A("a2b", 5, 2000), noId] }
+    const { ctx, handlers, pushEvent } = makeV2Ctx(msgs)
+    const cleanup = await mod.default.setup(ctx)
+    await handlers["context"]({ sessionID: "ses_ord", model: { id: "deepseek-v4-pro", providerID: "deepseek" }, system: [], options: {} })
+    pushEvent({ type: "session.idle", data: { sessionID: "ses_ord" } })
+    await new Promise((r) => setTimeout(r, 25))
+    const u = readFileSync(metrics, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)).find((r) => r.kind === "usage" && r.sid === "ses_ord")
+    assert.ok(u)
+    assert.equal(u.messages, 4, "four identified assistant messages counted; the id-less one is skipped")
+    assert.equal(u.read, 65, "descending input + equal timestamps are normalized")
+    assert.equal(u.cursor, "a3", "cursor is the newest by time.created")
+    await cleanup()
+  })
+})
+
+// --- Installed V2 API type contract (declaration-level) ---------------------
+// Pins the DECLARED shape of the installed @opencode/plugin `SessionContext`
+// (the `context` hook payload) versus `SessionModelRequest` (the `model.request`
+// payload). This is a declaration fact only: it does NOT assert which request
+// kinds actually invoke the `context` hook at runtime (that remains unverified).
+
+const findInstalledV2Plugin = () => {
+  const cacheRoot = join(homedir(), ".cache", "opencode", "packages")
+  const candidates = []
+  const add = (dir) => {
+    try {
+      const p = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"))
+      if (p.name === "@opencode/plugin") candidates.push({ dir, version: String(p.version ?? "") })
+    } catch {
+      /* not present */
+    }
+  }
+  const under = (base) => {
+    let names = []
+    try {
+      names = readdirSync(base)
+    } catch {
+      return
+    }
+    for (const n of names) {
+      if (n.startsWith("@")) {
+        let subs = []
+        try {
+          subs = readdirSync(join(base, n))
+        } catch {
+          /* ignore */
+        }
+        for (const s of subs) add(join(base, n, s, "node_modules", "@opencode", "plugin"))
+      } else {
+        add(join(base, n, "node_modules", "@opencode", "plugin"))
+      }
+    }
+  }
+  under(cacheRoot)
+  for (const root of [join(homedir(), ".opencode", "node_modules"), join(homedir(), ".config", "opencode", "node_modules")]) {
+    add(join(root, "@opencode", "plugin"))
+  }
+  return (
+    candidates.filter((c) => /^2\./.test(c.version)).sort((a, b) => a.version.localeCompare(b.version, undefined, { numeric: true })).pop() ?? null
+  )
+}
+
+const extractInterfaceBody = (src, name) => {
+  const m = new RegExp(`(?:export\\s+)?interface\\s+${name}\\b[^{]*\\{`).exec(src)
+  if (!m) return null
+  const open = src.indexOf("{", m.index)
+  let depth = 0
+  for (let i = open; i < src.length; i += 1) {
+    if (src[i] === "{") depth += 1
+    else if (src[i] === "}") {
+      depth -= 1
+      if (depth === 0) return src.slice(open + 1, i)
+    }
+  }
+  return null
+}
+
+test("v2 contract: installed SessionContext has no request-kind field (declaration-level)", (t) => {
+  const pkg = findInstalledV2Plugin()
+  if (!pkg) {
+    t.skip("installed @opencode/plugin (2.x) not found on disk")
+    return
+  }
+  const declPath = join(pkg.dir, "dist", "promise", "session.d.ts")
+  let src
+  try {
+    src = readFileSync(declPath, "utf8")
+  } catch {
+    t.skip(`declaration file not found: ${declPath}`)
+    return
+  }
+  const request = extractInterfaceBody(src, "SessionRequest")
+  const context = extractInterfaceBody(src, "SessionContext")
+  const modelRequest = extractInterfaceBody(src, "SessionModelRequest")
+  assert.ok(request && context && modelRequest, "expected SessionRequest/SessionContext/SessionModelRequest declarations")
+
+  const hasField = (body, name) => new RegExp(`\\b${name}\\s*\\??\\s*:`).test(body)
+
+  // 1. The context-hook payload exposes the verified context fields.
+  for (const f of ["sessionID", "model", "system", "messages", "options"]) assert.ok(hasField(request, f), `SessionRequest must declare ${f}`)
+  for (const f of ["agent", "tools"]) assert.ok(hasField(context, f), `SessionContext must declare ${f}`)
+
+  // 2. SessionContext (and its base SessionRequest) declare no `kind`, so the
+  //    context hook cannot filter on request kind.
+  assert.ok(!hasField(request, "kind"), "SessionRequest must NOT declare kind")
+  assert.ok(!hasField(context, "kind"), "SessionContext must NOT declare kind")
+
+  // 3. The model-request payload declares the request-kind field.
+  assert.ok(hasField(modelRequest, "kind"), "SessionModelRequest must declare kind")
+
+  // 4. The two payloads are distinct contracts (distinct request kinds).
+  const kindUnion = /export type SessionRequestKind\s*=\s*([^;]+);/.exec(src)
+  assert.ok(kindUnion, "SessionRequestKind union must be declared")
+  for (const v of ["primary", "compaction", "title", "generate"]) assert.ok(kindUnion[1].includes(`"${v}"`), `SessionRequestKind must include ${v}`)
+})
+
+test("v2 adapter: GPT transform rejects a non-plain (array) options value", async () => {
+  await withTempMetrics(async (metrics) => {
+    const mod = await import("../src/cache-engine-v2.mjs")
+    const { ctx, handlers } = makeV2Ctx()
+    const cleanup = await mod.default.setup(ctx)
+    const arr = []
+    const ev = { sessionID: "ses_arr", model: { id: "gpt-5.6", providerID: "openai" }, system: [], options: arr }
+    await handlers["context"](ev)
+    assert.equal(ev.options, arr, "options identity must be unchanged")
+    assert.equal(Object.keys(arr).length, 0, "array must not receive injected cache-key/option properties")
+    assert.equal(arr.length, 0, "array length must be unchanged")
+    let recs = []
+    try {
+      recs = readFileSync(metrics, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l))
+    } catch {
+      recs = []
+    }
+    assert.equal(recs.filter((r) => r.kind === "cache-options").length, 0, "no cache-options record for a malformed options value")
+    await cleanup()
+  })
+})
+
+test("v2 adapter: pruneMarks honors its explicit TTL and capacity", async () => {
+  const { pruneMarks } = await import("../src/cache-engine-v2.mjs")
+  const now = 1_000_000
+
+  // Over cap: entries older than the supplied ttl are dropped (ttl is honored).
+  const m1 = new Map([["old1", now - 200], ["old2", now - 150], ["new1", now - 10], ["new2", now - 5], ["new3", now - 1]])
+  pruneMarks(m1, 3, 100, now)
+  assert.deepEqual([...m1.keys()], ["new1", "new2", "new3"], "entries older than the ttl are pruned")
+
+  // Same data, a huge ttl: nothing expires, so the cap trims the oldest-inserted.
+  const m2 = new Map([["old1", now - 200], ["old2", now - 150], ["new1", now - 10], ["new2", now - 5], ["new3", now - 1]])
+  pruneMarks(m2, 3, 1_000_000, now)
+  assert.deepEqual([...m2.keys()], ["new1", "new2", "new3"], "a different ttl changes what survives")
+
+  // Cap enforcement removes oldest-inserted entries when nothing is expired.
+  const m3 = new Map([["a", now - 1], ["b", now - 2], ["c", now - 3], ["d", now - 4]])
+  pruneMarks(m3, 3, 1_000_000, now)
+  assert.deepEqual([...m3.keys()], ["b", "c", "d"])
+
+  // No-op when at or under cap.
+  const m4 = new Map([["x", now - 9999]])
+  pruneMarks(m4, 3, 1, now)
+  assert.deepEqual([...m4.keys()], ["x"])
 })
