@@ -631,6 +631,146 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   `auth.json` available — both edit shared state and require explicit
   authorization.
 
+### RF-OC-017 — OpenCode V2 (2.0.26) is a plain `{ id, setup }` plugin model with a `./v2` package entry
+
+- Status: current
+- Verified: 2026-10-10
+- Area: opencode-runtime
+- Fact: The running OpenCode is **v2.0.26** and its V2 plugin API package is
+  **`@opencode/plugin@2.0.25`** (observed at
+  `~/.cache/opencode/packages/opencode-mem@latest/node_modules/@opencode/plugin`).
+  A V2 plugin is a plain object `{ id, setup(ctx) }`; `define()` from
+  `@opencode/plugin` (and `@opencode/plugin/effect`) is the **identity function**
+  (`export function define(plugin){ return plugin }`), so a plugin requires no
+  runtime import. `setup` may return a cleanup callback. Package discovery: an
+  npm plugin declares its V2 entry via the **`"./v2"` export** while V1 uses
+  `"./server"` (working example `opencode-mem` maps `"."`/`"./server"` → V1 and
+  `"./v2"` → V2, and declares `"opencode": { "type": "plugin", "hooks": [...] }`).
+  The V2 user-config key is **`"plugins"`** (renamed from V1 `"plugin"`;
+  `providers`, model `settings` are likewise renamed). The on-disk
+  `@opencode-ai/plugin@1.18.35` exposes a *partial*, older `v2` surface
+  (`./v2/promise`, `./v2/effect`) whose `PluginContext` omits `session`/`event`;
+  the runtime's real context is richer — do **not** target the 1.18.35 types for V2.
+- Evidence: [O]
+- Sources: local — `opencode --version` (`2.0.26`);
+  `.../opencode-mem@latest/node_modules/@opencode/plugin/package.json` (2.0.25) and
+  `dist/promise/plugin.js` (`define` identity); `opencode-mem/package.json`
+  (`exports`, `opencode` field); `~/.config/opencode/opencode.jsonc` (`plugins`).
+  Accessed 2026-10-10.
+- Justifies: the `src/cache-engine-v2.mjs` registration shape and the
+  `package.json` `./v2` export + `opencode` field.
+- Version context: OpenCode 2.0.26; `@opencode/plugin` 2.0.25.
+- Re-verify when: OpenCode changes plugin registration, entry resolution, or the
+  config key.
+- Superseded by: null
+- Notes: `@opencode-ai/plugin` remains the V1 authoring package. The
+  `"opencode"` metadata field (seen on `opencode-mem`/`harness-memory`) is **not
+  required** for discovery: `@slkiser/opencode-quota` and
+  `@tarquinen/opencode-dcp` are configured in the V2 `plugins` list with no
+  `opencode` field and no `"./v2"` export. The `"./v2"` export is the V2 entry
+  convention observed on the V2-capable reference (`opencode-mem`); whether the
+  loader prefers `"./v2"` over `"."`/`"./server"` was not verified in a live
+  session (deferred). `opencode plugin list` reads configuration only and does
+  **not** execute a plugin; local plugins in `~/.opencode/plugins/*.ts` are listed
+  as `local`. Plugin discovery/service binding is **not** fully env-isolatable:
+  with `HOME`/`XDG_*` redirected to a temp tree the runtime still resolved the
+  user's plugin set, and a private `opencode serve` neither accepts `--standalone`
+  nor loaded a local plugin probe — so a package cannot be load-tested without
+  editing shared configuration. The 2.0.26 CLI honors neither `OPENCODE_CONFIG`
+  nor `OPENCODE_CONFIG_DIR` for `opencode plugin list`, which queries the running
+  **managed** service (registered in `<XDG_STATE_HOME>/opencode/service.json`) that
+  owns plugin discovery; a competing `serve --service` risks deregistering it.
+
+### RF-OC-018 — OpenCode V2 hook, event, message and usage shapes
+
+- Status: current
+- Verified: 2026-10-10
+- Area: opencode-runtime
+- Fact: V2 `PluginContext` domains (from `@opencode/plugin@2.0.25`
+  `dist/promise/plugin.d.ts`): `app, location, options, agent, aisdk, command,
+  event, experimental, integration, mcp, model, generate, permission, plugin,
+  provider, reference, rpc, session, shell, skill, storage, tool, vcs, websearch,
+  worktree`. Relevant contracts:
+  - `session.hook(name, cb, options?)` (ModelHooks; `options.providerID` scopes a
+    hook to one provider). Session events: `prompt`, `context`, `compaction`,
+    `generate`, `title`, `model.request`, `http.request`, `http.response`,
+    `retry`, plus experimental `experimental.ws.*`. Inputs are mutable.
+    - `context` input `SessionContext`: `{ sessionID, agent, model: { id,
+      providerID }, system: SystemPart[], messages, options, tools }`.
+      `SystemPart = { type: "text", text }`. `options` (SessionRequestOptions) =
+      typed generation settings plus arbitrary provider options.
+    - `model.request` input `SessionModelRequest`: `{ sessionID, agent, model,
+      kind: "primary"|"compaction"|"title"|"generate", baseURL?, headers:
+      Record<string,string> }`.
+  - `event.subscribe()` → `AsyncIterable<V2Event>`; `session.idle` is
+    `{ type: "session.idle", data: { sessionID } }` and `session.deleted` is
+    `{ type: "session.deleted", durable: {…}, data: { sessionID } }` (session-scoped;
+    use it to drop per-session state).
+  - `session.context({ sessionID })` → `Promise<SessionMessageInfo[]>`; an
+    assistant message is `{ id, type: "assistant", time: { created }, model: {
+    id, providerID }, tokens?: TokenUsageInfo }`; `TokenUsageInfo = { input,
+    output, reasoning, cache: { read, write } }` (matches CacheEngine's
+    normalized usage).
+  - `session.usage.updated` event carries `data.tokens: TokenUsageInfo`.
+- Evidence: [O]
+- Sources: local — `.../@opencode/plugin/dist/promise/{plugin,session,event,aisdk,registration}.d.ts`;
+  `.../@opencode/client/dist/promise/client.d.ts` and
+  `.../generated/types.d.ts` (`SessionMessageAssistant`, `TokenUsageInfo`,
+  `MessageListInput`, `V2Event`). Accessed 2026-10-10.
+- Justifies: `src/cache-engine-v2.mjs` — `<env>`/GPT transforms at `context`,
+  OpenRouter affinity at `model.request`, and usage aggregation from
+  `session.context` on `session.idle`.
+- Version context: `@opencode/plugin` 2.0.25 / OpenCode 2.0.26.
+- Re-verify when: OpenCode changes the session hook names/shapes, the event
+  stream, or the usage/message schema.
+- Superseded by: null
+- Notes: `session.usage.updated` delta-vs-cumulative semantics and
+  `session.context` array ordering are **unverified**; the adapter sorts by
+  `info.time.created` (ties keep input order) and reuses the shared
+  cursor/watermark. `SessionContext` (the `context` hook input) exposes
+  `sessionID`, `model`, `system`, `messages`, `options`, `tools` but **no
+  `kind`**; only `model.request` (`SessionModelRequest`) carries
+  `kind ∈ {primary, compaction, title, generate}` — so the `context` hook cannot
+  filter by request kind. Re-verified 2026-10-11 against the currently installed
+  **`@opencode/plugin@2.0.16`** (same `SessionContext`/`SessionModelRequest`
+  shape as the earlier 2.0.25 observation). **Related test:**
+  `test/cache-engine.test.mjs` → "v2 contract: installed SessionContext has no
+  request-kind field (declaration-level)" pins the declared shape (it does **not**
+  assert which request kinds invoke the `context` hook at runtime). **Implementation
+  inspection (2026-10-11, installed `@opencode/plugin@2.0.16`, resolved at
+  `~/.cache/opencode/packages/@slkiser/opencode-quota@latest/node_modules/@opencode/plugin`):**
+  `dist/promise/adapter.js` is only a promise→Effect forwarder —
+  `session.hook: (name, callback, options) => register(host.session.hook(name, (event) => Effect.promise(() => Promise.resolve(callback(event))), options))`
+  (~L418), where `register` resolves the registration to `{ dispose }` (~L177) and
+  `host` is the runtime-provided plugin host. The package ships **no** local hook
+  registry or dispatch: `dist/promise/session.js`, `dist/promise/registration.js`,
+  `dist/effect/session.js`, and `dist/effect/registration.js` are **0 bytes**, and
+  `dist/host.js` contains no session/hook/kind logic. Dispatch and any request-kind
+  gating are therefore entirely **server-side (the OpenCode runtime)** and are not
+  present in this package. Observed: the adapter neither adds nor strips a `kind`
+  discriminator and forwards the `{ providerID }` scoping option verbatim.
+  **Consequence:** whether auxiliary request kinds (`compaction`/`title`/`generate`)
+  invoke `context` cannot be established from the installed package source and
+  remains **unverified** (it requires the server implementation or a live runtime
+  test). No code change is justified. **Server-side dispatch (observed in the
+  embedded OpenCode 2.0.26 implementation, `@opencode/SessionModelRequest`
+  service):** each session request kind maps to exactly one hook name —
+  `primary → trigger("session","context", …)`, `compaction →
+  trigger("session","compaction", …)`, `generate → trigger("session","generate", …)`,
+  `title → trigger("session","title", …)` — through the trigger helper
+  `r = (name, agent) => (payload, tools) => H.trigger("session", name, { ...payload, agent, tools })`
+  and the per-kind entries
+  `primary: f("primary", i, r("context", i.agent)); compaction: f("compaction", i, r("compaction", i.agent)); generate: f("generate", i, r("generate", i.agent)); title: f("title", i, (u) => H.trigger("session","title", u))`.
+  The payload `p = { sessionID, agent, model, kind }` is assembled in
+  `SessionModelRequest.prepare` (the same structure whose `kind` is exposed on
+  `model.request`). **Consequence:** the `context` hook is invoked only for the
+  `primary` kind; the auxiliary kinds (`compaction`, `generate`, `title`) invoke
+  their own hook names and do **not** invoke `context`. So `onContext` needs no
+  request-kind guard — it is simply not called for auxiliary kinds by this
+  dispatcher. Evidence class: **observed server implementation** (embedded code
+  in the 2.0.26 binary), not a live runtime registration test; actual plugin
+  registration/loading in 2.0.26 remains unverified.
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
