@@ -1338,6 +1338,55 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   (unit-level), neutral passivity PASS (body scope), kind PASS, **overall Gate 4
   NOT PASS**. Gate 5 / Gate 6 not run.
 
+### RF-OC-030 — The OpenAI-compatible provider decodes provider options through schema `A = { user, reasoningEffort, textVerbosity, strictJsonSchema }`, stripping the GPT cache fields; the positive GPT criterion must use an OpenAI/Azure schema that accepts `promptCacheKey`
+
+- Status: current
+- Verified: 2026-10-12
+- Area: opencode-runtime
+- Fact:
+  - The `@opencode/ai/providers/openai-compatible` provider's `getArgs` decodes
+    provider options via `KI({provider, providerOptions, schema:A})`, merging
+    the `"openai-compatible"` (deprecated), `"openaiCompatible"`, and
+    `this.providerOptionsName` namespaces — **each decoded through schema `A`**:
+    `var A = Le({ user: ae().optional(), reasoningEffort: ae().optional(),
+    textVerbosity: ae().optional(), strictJsonSchema: Ry().optional() })`.
+  - `KI({provider:e, providerOptions:t, schema:r})` returns `undefined` when
+    `t?.[e]` is absent; otherwise it decodes `t[e]` through `r` and returns the
+    **decoded** value (or throws `invalid <e> provider options`). Schema `A`
+    accepts only the four keys above — **no** `prompt_cache_key`,
+    `prompt_cache_options`, `promptCacheKey`, or `promptCacheOptions`.
+    Consequently any cache field (and any synthetic marker) placed under those
+    namespaces on this route is not carried into the request body.
+  - A **different** (OpenAI/Responses-style) provider-options schema **does**
+    include `promptCacheKey` (camel, `ae().nullish()`); the OpenAI SDK serializes
+    it to the wire `prompt_cache_key`. No located schema includes
+    `promptCacheOptions`.
+- Evidence: [O] (embedded 2.0.26 source: schema `A`; `KI`; the openai-compatible
+  `getArgs` three-namespace merge) / [U] (`promptCacheOptions` support)
+- Sources: embedded OpenCode 2.0.26 binary — openai-compatible provider `getArgs`,
+  `function KI({provider,providerOptions,schema})`, and
+  `var A=Le({user,reasoningEffort,textVerbosity,strictJsonSchema})`. Read-only
+  inspection 2026-10-12; no runtime executed.
+- Justifies: `docs/implementation-plan-v2.md` §2D.7 corrected GPT criterion
+  (OpenAI/Azure route; drop `promptCacheOptions`; wire-level adapter-off/on).
+- Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
+  adapter checkpoint `d5bd3ab`.
+- Re-verify when: OpenCode changes the openai-compatible provider-options schema
+  (`A`) or the `KI` decode, or adds a schema that accepts the cache options.
+- Superseded by: null
+- Notes: **Verified:** the openai-compatible route **cannot** carry the GPT cache
+  fields (schema `A` strips them); OpenCode reads provider options only as
+  schema-decoded namespace slices, not verbatim objects. **Consequence:** the
+  plan's prior `prompt_cache_options` discriminator is **not** a supported
+  positive criterion and is **removed**; the positive GPT criterion must be
+  demonstrated on an OpenAI/Azure SDK route whose schema accepts `promptCacheKey`,
+  distinguished at the **wire level** from OpenCode's pre-existing
+  session-derived key (telemetry `keyInjected=true` is not wire-level proof).
+  **Unresolved:** whether any provider-options schema accepts
+  `promptCacheOptions`/`prompt_cache_options`; and the exact
+  `config.provider`/`providerOptionsName` for a custom provider (moot for the
+  openai-compatible route). **Gate 4 remains NOT PASS.** Gate 5 / Gate 6 not run.
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
