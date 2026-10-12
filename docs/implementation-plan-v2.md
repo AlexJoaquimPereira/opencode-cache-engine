@@ -758,14 +758,28 @@ is unchanged, and stages 1–9 above are green.
 Dependency order: WP0 → {WP1, WP2} → WP4 → WP5, with WP3 alongside WP1/WP2. The
 milestone precedes the functioning V2 adapter (v0.8.x).
 
-**Unverified / unresolved (do not present as fact):**
+**Reconciled 2026-10-12 — locally established (inspection / offline / isolated
+runtime) but not live-loader-proven:**
 
 - The V2 plugin API surface (`context`, `model.request`, `compaction`,
-  `Plugin.define`, `ctx.location.*`) is historical plan text — **unverified**
-  against the actual target API. WP4 must confirm it.
-- Whether a V2 session-messages equivalent returns messages oldest-first, and
-  whether a V2-side cursor/watermark source exists.
-- Whether V2 exposes a `session.idle`-equivalent or other lifecycle/cleanup event.
+  `Plugin.define`, `ctx.location.*`) is **locally investigated** against the
+  installed `@opencode/plugin` / `@opencode/client` 2.0.16 types and the embedded
+  2.0.26 binary — see `RF-OC-017` and `RF-OC-018`.
+- `ctx.session.context({ sessionID })` returns the complete active history
+  ("all messages after the last compaction") from the non-paginated
+  `/api/session/:sessionID/context` route, distinct from the paginated
+  `/message` list — so a V2-side cursor/watermark source exists and
+  oldest-first ordering is available (the adapter sorts by `time.created`) —
+  see `RF-OC-021`.
+- **No V2 `session.idle`-equivalent was observed** on the `opencode run
+  --standalone` flow; the adapter uses `session.usage.updated` as the primary
+  usage trigger and keeps `session.idle` as a secondary one — see `RF-OC-019`
+  and `RF-OC-020`.
+
+**Still unverified (do not present as fact):**
+
+- **Live runtime registration/hook installation and `./v2` entry resolution**
+  remain **unverified** until the permitted loader test is performed.
 - Whether the installed V1 runtime supplies the exact `promptCacheKey` /
   `promptCacheOptions` shape assumed here (see the `RF-OC-*` findings in
   `docs/research-findings.md`).
