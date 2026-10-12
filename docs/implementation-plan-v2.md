@@ -1124,6 +1124,14 @@ dependencies), and register the subpath directly in the disposable project confi
   / unknown plugin / resolves `./server`/`./tui`).
 - **Not proof:** `exports` metadata; a bare `node -e "import(...)"`; `npm pack`
   listings.
+- **Result (2026-10-12): FAIL** in the tested **offline** setup — the loader
+  **read** the direct `plugins: ["opencode-cache-engine/v2"]` entry but treated it
+  as an npm package specifier and failed to install it
+  (`NpmInstallFailedError`); no plugin identity and no adapter initialization
+  side effect were observed. See `RF-OC-023`. Indirect online-install behavior
+  and alternate loader configurations remain untested; this result does **not**
+  establish universal impossibility of direct subpath loading. The shim fallback
+  (§2D.4) has **not** been tested.
 
 ### 2D.4 Gate 1b — shim fallback (weaker; must not count for Gate 1)
 Only if Gate 1 fails: a disposable project plugin
