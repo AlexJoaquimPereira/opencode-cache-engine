@@ -1124,6 +1124,61 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   host managed service unchanged; branch/HEAD/status and `package-lock.json`
   unchanged. **Not executed:** Gates 4–6.
 
+### RF-OC-026 — Source-level trace of Gate 4: the OpenAI wire fields are `prompt_cache_key`/`prompt_cache_options`, and OpenCode 2.0.26 pre-sets `X-Session-Id`/`promptCacheKey`, confounding the Gate 4 observables
+
+- Status: current
+- Verified: 2026-10-12
+- Area: opencode-runtime
+- Fact:
+  - Adapter mutation path: `src/cache-engine-v2.mjs` `onContext` (GPT block)
+    mutates the `context`-hook `event.options` (`SessionRequestOptions =
+    DeepMutable<GenerationOptionsFields> & Record<string, unknown>`,
+    `@opencode/plugin@2.0.16` `dist/promise/session.d.ts:21`) via the
+    `gptCacheOptionFieldNames` / `gptCacheOptionsDelta` helpers in
+    `src/cache-engine-core.mjs`.
+  - Embedded OpenCode 2.0.26 request construction builds the model request with a
+    session-derived `promptCacheKey` (`promptCacheKey: /^ses_[0-9a-f]{64}$/.test(fH)
+    ? fH.slice(4) : fH`) and HTTP headers including `"x-session-affinity": fH` and
+    `"X-Session-Id": fH` (plus `x-opencode-session-id`, `x-opencode-project`,
+    `x-opencode-session`). The literal lowercase `x-session-id` does **not**
+    appear in the binary; OpenCode emits `X-Session-Id`.
+  - Wire serialization maps camel→snake: `prompt_cache_key: … i.promptCacheKey ??
+    e.promptCacheKey` and `prompt_cache_options: … { mode, ttl }`. The on-wire GPT
+    fields are therefore **`prompt_cache_key` / `prompt_cache_options`**, not
+    camelCase.
+  - Adapter `onModelRequest` checks a pre-existing session header
+    **case-insensitively** (`name.toLowerCase() === "x-session-id"`), which
+    matches OpenCode's `X-Session-Id`, so it **declines to attach** — matching the
+    Gate 4 boundary telemetry (`headerPresent:true, headerAttached:false,
+    headerSource:"preexisting"`).
+- Evidence: [O]
+- Sources: repository `src/cache-engine-v2.mjs` / `src/cache-engine-core.mjs`;
+  installed `@opencode/plugin@2.0.16` `dist/promise/session.d.ts`; embedded
+  OpenCode 2.0.26 binary strings (request-header build, `promptCacheKey` from the
+  session, `prompt_cache_key`/`prompt_cache_options` serialization, model catalog
+  `duo-chat-gpt-6-luna`). Read-only source inspection 2026-10-12; **no runtime
+  executed**.
+- Justifies: `docs/implementation-plan-v2.md` §2D.7 Gate 4 criteria (corrected
+  wire fields + adapter-off/on controls) and the Gate 4 INCONCLUSIVE verdict.
+- Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
+  adapter checkpoint `bc01c6b`.
+- Re-verify when: OpenCode changes request construction/serialization or the
+  session headers it pre-sets, or the transport packages change.
+- Superseded by: null
+- Notes: **Consequence for Gate 4:** the first run's mock recorded camelCase body
+  fields (`promptCacheKey`/`promptCacheOptions`), so their absence is a **harness
+  detection mismatch**, not evidence of non-propagation; and because OpenCode
+  pre-sets `promptCacheKey`/`X-Session-Id`, presence alone is **not attributable**
+  to the adapter. **No adapter defect was confirmed;** Gate 4 remains
+  **INCONCLUSIVE (limited/unverified)**. Proposed controls: adapter-off vs
+  adapter-on, checking wire fields `prompt_cache_key`/`prompt_cache_options`
+  (discriminator: `prompt_cache_options` only in the adapter-on run) and
+  case-sensitive lowercase `x-session-id` separately from `X-Session-Id`; the
+  `model.request` `kind` (per `RF-OC-018`) discriminates primary vs auxiliary,
+  leaving the `gpt-6-luna` purpose **unconfirmed**. Limitations: the binary is the
+  embedded, opaque/minified implementation, so the trace is observed behavior, not
+  a formal spec.
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
