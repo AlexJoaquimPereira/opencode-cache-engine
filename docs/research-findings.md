@@ -1274,6 +1274,70 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   positive criteria are satisfied. No runtime executed for this finding; no
   adapter defect confirmed.
 
+### RF-OC-029 — Corrected Gate 4 run 3 (isolated): OpenCode selects the Responses API for `openai`/`gpt-5.6`, whose body carries `prompt_cache_key` but not `prompt_cache_options`; OpenRouter fallback unit test passes
+
+- Status: current
+- Verified: 2026-10-12
+- Area: opencode-runtime
+- Fact:
+  - Isolated run (fresh disposable; `bubblewrap --unshare-net`; private HOME/XDG;
+    offline tarball; loopback mock; OFF = empty `.opencode/plugins/`, ON = adapter
+    via the project-local shim; identical providers/models/mock/sandbox).
+  - **GPT route selection:** with a custom provider `npm: "@ai-sdk/openai"`
+    (`providerID=openai`, model `gpt-5.6`, loopback base URL), OpenCode sent
+    **`POST /v1/responses`** (the **Responses API**), not `/v1/chat/completions`.
+    The mock implemented chat-completions only, so the Responses turn did not
+    parse (`Error: Invalid openai/openai-responses stream event`); the **sent
+    request body was still captured**.
+  - **GPT body (presence only):** `prompt_cache_key` present in **both** OFF and
+    ON (OpenCode pre-set); `prompt_cache_options` present in **neither**. The
+    adapter's ON telemetry still reported `cache-options` (`policy=gpt56,
+    transport=promptCacheKey, keyInjected=true`). The required discriminator
+    (`prompt_cache_options` only ON) was **not** met; `prompt_cache_options`
+    appears in a chat-completions serialization (`prompt_cache_key:…,
+    prompt_cache_retention:…, prompt_cache_options:{mode,ttl}`) and was not emitted
+    on the Responses route.
+  - **OpenRouter integration (presence only):** lowercase `x-session-id` present in
+    **both** OFF and ON; ON telemetry `headerPresent=true, headerAttached=false,
+    headerSource="preexisting"` — the pre-existing (OpenCode) header is preserved
+    and delivered, and the adapter does not duplicate it.
+  - **OpenRouter adapter fallback (unit-level):** the existing test in
+    `test/cache-engine.test.mjs` — "v2 adapter: model.request adds x-session-id
+    only for OpenRouter GLM/MiMo" — **passes** (1/1): the handler adds the
+    lowercase `x-session-id` for an eligible OpenRouter GLM/MiMo request with no
+    pre-existing header, and preserves a pre-existing header.
+  - **Neutral passivity:** `mock/synthetic` body carried no cache fields in either
+    control; the lowercase session header was present in both (OpenCode-supplied).
+  - **`kind`:** the ON marker recorded `model.request kind=title` and
+    `kind=primary`, confirming the auxiliary-title vs primary distinction.
+- Evidence: [O]
+- Sources: isolated corrected Gate 4 run 2026-10-12 (`bubblewrap --unshare-net`;
+  OpenCode 2.0.26; offline tarball from checkpoint `d5bd3ab`; mock recording
+  request **path** + presence-only snake_case body fields + case-sensitive raw
+  header names; adapter telemetry to `CACHE_ENGINE_METRICS_FILE`);
+  `test/cache-engine.test.mjs`.
+- Justifies: `docs/implementation-plan-v2.md` §2D.7 route correction and Gate 4
+  outcomes; Gate 4 remains **NOT PASS**.
+- Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
+  adapter checkpoint `d5bd3ab`.
+- Re-verify when: OpenCode changes model→API-type selection (chat vs responses),
+  its OpenAI/Azure serialization, or the session headers it pre-sets; or when a
+  chat-route GPT-5.6 path or a Responses-capable mock is used.
+- Superseded by: null
+- Notes: **Confirmed:** OpenCode selects the **Responses API** for
+  `openai`/`gpt-5.6`; the Responses body carries `prompt_cache_key` (also pre-set
+  by OpenCode) but **not** `prompt_cache_options`; the OpenRouter integration
+  preserves OpenCode's header; the adapter fallback unit test passes. **Unresolved
+  boundary:** whether V2 `context` options reach the OpenAI SDK provider options on
+  the Responses route, and whether `prompt_cache_options` is a chat-only field —
+  not isolable here because the Responses stream was not implemented (turn
+  unparsed). **No adapter defect confirmed.** Open questions: can a GPT-5.6-policy
+  model be forced onto the **chat** route; and does a Responses-capable mock show
+  the adapter's options reaching the wire. Verdicts: GPT INCONCLUSIVE, OpenRouter
+  integration PASS (preservation; not attribution), adapter fallback PASS
+  (unit-level), neutral passivity PASS (body scope), kind PASS, **overall Gate 4
+  NOT PASS**. Gate 5 / Gate 6 not run.
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
