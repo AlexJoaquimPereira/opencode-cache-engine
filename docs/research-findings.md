@@ -882,6 +882,50 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   publisher remains unidentified (likely bytecode/interactive). See `RF-OC-019` for
   the original observation and `RF-OC-018` for the event/type shapes.
 
+### RF-OC-021 — `ctx.session.context({ sessionID })` returns the complete active history (all messages after the last compaction) and is distinct from the paginated `/message` list
+
+- Status: current
+- Verified: 2026-10-12
+- Area: opencode-runtime
+- Fact: The V2 client `SessionApi.context` op (exposed to plugins as
+  `SessionDomain.context`) maps to the route
+  `/api/session/:sessionID/context`, whose **only** input is `{ sessionID }`
+  (no `limit`/`cursor`/`order`; `SessionContextInput`), returning
+  `SessionMessageInfo[]` (`{ data: [...] }`). The embedded 2.0.26 route
+  description is "Retrieve the active context messages for a session (all
+  messages after the last compaction)". This is **distinct** from the paginated
+  list route `/api/session/:sessionID/message` (`message.list`), which applies
+  `limit: r.query.limit ?? 50` (default), `order` default `"desc"`, and returns
+  `{ data, cursor }`. In an isolated 2.0.26 runtime a 78-message session returned
+  **78** messages from `/context` and **50** (+ `cursor`) from `/message` — so
+  `session.context` is **not** truncated to the 50-message page.
+- Evidence: [O] (route definition in the 2.0.26 binary; client types/impl) and
+  [O] (isolated runtime measurement).
+- Sources: embedded OpenCode 2.0.26 binary (`session.context` route definition,
+  `/api/session/:sessionID/context`); `@opencode/client@2.0.16`
+  `dist/promise/generated/{client,types}.d.ts` (`SessionContextInput` /
+  `SessionContextOutput`) and `dist/chunks/*` (`context` path vs `message` list);
+  isolated `serve` runtime test 2026-10-12 (`bubblewrap --unshare-net`, local mock
+  provider).
+- Justifies: `src/cache-engine-v2.mjs` `collectUsage` scanning the full
+  `session.context` result (the adapter's `Array.isArray(res) ? res : res.data`
+  handling matches the `{ data: [...] }` shape); it resolves the earlier
+  pagination-undercount concern.
+- Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16.
+- Re-verify when: OpenCode changes the `context` route, its message limit, the
+  `/message` default, or the compaction boundary.
+- Superseded by: null
+- Notes: **Accepted accounting limitations** (complementary to `RF-OC-020`): the
+  `context` route returns only "messages after the last compaction", so compaction
+  is the sole truncation boundary — history removed/summarized before a scan is a
+  best-effort **undercount**. The adapter's cursor/watermark are in-memory
+  (restart re-counts), capacity/mark eviction undercounts (mark expiry can
+  recount), `session.usage.updated` is volatile, and same-millisecond watermark
+  ties undercount; exactly-once accounting is not claimed. `RF-OC-018` previously
+  marked the `session.context` array ordering unverified; the adapter sorts by
+  `time.created` regardless, so ordering is handled regardless of the route's
+  default order.
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
