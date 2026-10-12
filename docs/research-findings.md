@@ -1179,6 +1179,56 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   embedded, opaque/minified implementation, so the trace is observed behavior, not
   a formal spec.
 
+### RF-OC-027 — Corrected Gate 4 control run: GPT wire fields and adapter-attributed session header remain unverified; the wire session header is lowercase in both controls
+
+- Status: current
+- Verified: 2026-10-12
+- Area: opencode-runtime
+- Fact:
+  - Corrected control run (fresh disposable project; `bubblewrap --unshare-net`,
+    private HOME/XDG; offline tarball install; loopback mock; **OFF** = empty
+    `.opencode/plugins/`, **ON** = the adapter via the tested project-local shim;
+    identical providers/models/mock/sandbox). Presence-only evidence.
+  - **GPT (`openai` / `gpt-5.6`):** the mock body had **neither
+    `prompt_cache_key` nor `prompt_cache_options` in either the OFF or ON run**,
+    while the ON adapter telemetry reported `cache-options`
+    (`policy=gpt56, transport=promptCacheKey, keyInjected=true`). The required
+    discriminator (`prompt_cache_options` only ON) was **not** met.
+  - **OpenRouter (`openrouter` / `z-ai/glm-5.3`):** case-sensitive raw headers
+    showed lowercase `x-session-id` present in **both** OFF and ON, and
+    `X-Session-Id` absent in both; the ON adapter reported `headerPresent=true,
+    headerAttached=false, headerSource="preexisting"`.
+  - **Neutral (`mock` / `synthetic`):** no GPT cache fields; lowercase
+    `x-session-id` present in both (OpenCode-supplied).
+  - **Request kind (ON):** the marker recorded `model.request kind=title` and
+    `kind=primary` per turn (3 each) — the `gpt-6-luna` requests are auxiliary
+    **title** requests (established via `kind`, not model-name inference).
+- Evidence: [O]
+- Sources: isolated corrected Gate 4 run 2026-10-12 (`bubblewrap --unshare-net`;
+  OpenCode 2.0.26; offline tarball; mock recording presence-only snake_case body
+  fields and case-sensitive raw header names; ON adapter telemetry to
+  `CACHE_ENGINE_METRICS_FILE`). No runtime in this documentation task.
+- Justifies: `docs/implementation-plan-v2.md` §2D.7 corrected Gate 4 outcomes;
+  corrects `RF-OC-026`'s header interpretation.
+- Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
+  adapter checkpoint `d5bd3ab`.
+- Re-verify when: the provider route/serialization changes, OpenCode changes the
+  session headers it pre-sets, or the transport packages change.
+- Superseded by: null
+- Notes: **Correction to `RF-OC-026`:** on the wire the session header is observed
+  **lowercase** (`x-session-id`) in **both** controls — the HTTP client normalizes
+  header-name case — so casing **cannot** establish whether OpenCode or the
+  adapter supplied it. **No adapter defect was confirmed.** **Hypotheses
+  (unconfirmed):** (1) the GPT fields do not serialize on the
+  `@ai-sdk/openai-compatible` route and would require the `@ai-sdk/openai`/Azure
+  SDK path; (2) OpenCode's pre-set session header engages the adapter's
+  existing-header guard, making adapter-added affinity unobservable in this route.
+  **Proposed follow-ups:** validate the GPT fields on the OpenAI/Azure SDK path;
+  determine a safe way to demonstrate adapter-added OpenRouter affinity, or
+  document the guard limitation instead of forcing a positive result. **Verdicts:**
+  GPT INCONCLUSIVE, affinity INCONCLUSIVE, neutral passivity PASS (body scope),
+  kind PASS, **overall Gate 4 NOT PASS**. Gate 5 / Gate 6 not run.
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
