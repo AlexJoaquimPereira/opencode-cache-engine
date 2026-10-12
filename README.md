@@ -1805,14 +1805,18 @@ It currently:
   key/options and the GLM/MiMo `<env>` relocation (single system text part only);
 * registers `session.hook("model.request")` for the OpenRouter `x-session-id`
   affinity (GLM/MiMo only), emitting the same affinity telemetry schema as V1;
-* aggregates usage on `session.idle` via `session.context({ sessionID })`,
-  reusing the shared cursor/watermark, with bounded per-session state and
-  fail-safe handling.
+* aggregates usage from `session.usage.updated` (primary) and `session.idle`
+  (secondary) via `session.context({ sessionID })`, reusing the shared
+  cursor/watermark, with bounded per-session state and fail-safe handling
+  (RF-OC-020).
 
 **Status: preview.** The adapter imports and passes offline contract tests, but
 OpenCode V2 plugin registration and hook installation have **not** been verified
 against a live runtime. V2 compaction isolation, fork cache-root, and the
 secondary V1 diagnostics are not ported. Treat V2 as preview, not production.
+
+See [Installation → OpenCode V2 (preview)](#opencode-v2-preview) for the preview
+enable/verify procedure and the accepted accounting limitations.
 
 ---
 
@@ -2164,8 +2168,44 @@ benchmarking cache behavior.
 ### OpenCode V2 (preview)
 
 The V2 adapter is exposed as the `./v2` export and is selected by the OpenCode
-2.x plugin loader. V2 plugin registration and hook installation are **not yet
-verified**, so treat V2 as preview and do not rely on it in a critical setup.
+2.x plugin loader; the V1 `./server` and `./tui` exports are unchanged, so
+enabling V2 is additive and does not disturb a V1 setup. A V2 configuration
+lists the package under the V2 `plugins` key (renamed from the V1 `plugin` key);
+pin an exact version as in the released-package example above (RF-OC-017).
+
+The plugin-API surface the adapter targets was verified against OpenCode
+**2.0.26** with `@opencode/plugin` **2.x**: a V2 plugin is a plain
+`{ id, setup(ctx) }` object and `./v2` is the V2 entry convention (RF-OC-017,
+RF-OC-018). V2 plugin registration and hook installation are **not yet
+verified** against a managed OpenCode configuration, so treat V2 as preview and
+do not rely on it in a critical setup. The isolated runtime observations in
+RF-OC-019, RF-OC-020, and RF-OC-021 cover specific flows only; they do not
+establish managed-config discovery or `./v2` entry resolution by the loader.
+
+To evaluate the preview:
+
+1. Register the package in the V2 `plugins` list and confirm OpenCode reports
+   it. `opencode plugin list` reads configuration only and does not execute the
+   plugin, so it is a discovery check, not a load test (RF-OC-017).
+2. Confirm hook dispatch in a session: `context` runs for the primary request
+   and `model.request` runs for the same request; auxiliary request kinds do not
+   invoke `context` (RF-OC-018, RF-OC-019).
+3. Confirm usage accounting: `session.usage.updated` drives the shared history
+   scan and appends `kind:"usage"` records to the configured metrics file. The
+   event's cumulative totals are intentionally not used for accounting
+   (RF-OC-020, RF-OC-021).
+
+Accepted accounting limitations (best-effort; exactly-once is **not** claimed;
+RF-OC-020, RF-OC-021):
+
+* the usage trigger is a volatile event stream, so a missed event undercounts;
+* the cursor/watermark are in-memory, so a restart re-counts;
+* `session.context` returns only messages after the last compaction, so history
+  removed by compaction is a best-effort undercount;
+* same-millisecond watermark ties undercount;
+* bounded per-session state (LRU cap, tombstones, evicted marks) keeps memory
+  bounded but can undercount, and an expired mark can recount;
+* a telemetry write failure after the cursor advances undercounts.
 
 ---
 
@@ -2204,6 +2244,13 @@ Kimi / Claude / Gemini / Qwen / Grok / Meta Muse / MiniMax (passive families):
     classification and cache-read usage recorded when the provider reports them
     no fabricated cache-write tokens
 ```
+
+The checklist above describes the V1 adapter (`./server`). For the V2 adapter
+(`./v2`), follow the preview procedure under
+[Installation → OpenCode V2 (preview)](#opencode-v2-preview); V2 registration and
+hook installation are not yet verified against a live runtime, and whether the
+loader prefers the `./v2` export over `"."` / `./server` remains unverified
+(RF-OC-017).
 
 ---
 
