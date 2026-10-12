@@ -976,9 +976,62 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   server. `RF-OC-017`'s remaining true point stands: package discovery is not
   fully env-isolatable via `HOME`/`XDG_*` alone, and a competing `serve --service`
   could deregister the user's managed service — so isolated runs must avoid
-  `--service` and the managed port. Whether the loader resolves a package
-  **subpath** (`<pkg>/v2`) from a project-local install remains **unverified**
-  (Phase B, §2D).
+  `--service` and the managed port. Gate 1 (2026-10-12) tested whether the loader
+  resolves a package **subpath** (`<pkg>/v2`) from a project-local install: the
+  direct `opencode-cache-engine/v2` config entry failed under the offline setup
+  (see `RF-OC-023`). That result does **not** establish universal impossibility of
+  direct subpath resolution; online-install behavior and alternative loader
+  configurations remain untested.
+
+### RF-OC-023 — OpenCode 2.0.26 treats a config `plugins` entry as an npm package spec: the direct subpath `opencode-cache-engine/v2` does not resolve via the package `exports` map (Gate 1 FAIL, offline)
+
+- Status: current
+- Verified: 2026-10-12
+- Area: opencode-runtime
+- Fact:
+  - With the package offline-installed into the disposable project's
+    `node_modules` and registered directly in config as
+    `plugins: ["opencode-cache-engine/v2"]` (project `.opencode/opencode.json`
+    **and** the private global config; **no shim**), the OpenCode 2.0.26 loader
+    **read** the entry but used its **npm-install path** instead of resolving the
+    subpath from the project or the `exports` map. Server log (sanitized):
+    `WARN "failed to load plugin" target=opencode-cache-engine/v2
+    cause="NpmInstallFailedError (cause: Error: An unknown git error occurred)"`
+    (twice) and `WARN "failed to check plugin update"
+    target=opencode-cache-engine/v2 cause="NpmInstallFailedError
+    (cause: Package is not installed: opencode-cache-engine/v2)"`.
+  - No plugin identity and no adapter initialization side effect were observed
+    (the isolated `CACHE_ENGINE_METRICS_FILE` directory was not created) — the
+    plugin never loaded.
+  - A client `GET /api/config` returned both config documents including
+    `"plugins":["opencode-cache-engine/v2"]`; OpenCode's own `models.dev` fetch
+    failed with `getaddrinfo ETIMEOUT` (expected under the isolated network
+    namespace).
+- Evidence: [O]
+- Sources: isolated Gate 1 run 2026-10-12 — `bubblewrap --unshare-net`, private
+  HOME/XDG, OpenCode 2.0.26 `serve`; tarball `opencode-cache-engine-0.7.1.tgz`
+  from the checkpoint worktree; offline `npm install`; direct config entry; no
+  shim; server-log lines; no adapter side effect.
+- Justifies: `docs/implementation-plan-v2.md` §2D.3 (Gate 1 result) and the §2D.4
+  (Gate 1b) fallback.
+- Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
+  adapter checkpoint `bc01c6b`.
+- Re-verify when: OpenCode changes plugin resolution to honor local
+  package/subpath resolution, the `plugins` config-entry semantics change, or an
+  online-install variant is tested.
+- Superseded by: null
+- Notes: **Observed:** the loader used its npm-install path for the config entry;
+  `NpmInstallFailedError`; no identity/side effect. **Gate verdict:** FAIL under
+  §2D.3 for the tested **offline** setup. **Qualification:** the offline install
+  failure does **not** establish universal impossibility of direct subpath loading
+  under every configuration (online-install behavior and alternate loader
+  configurations remain untested); this is neither PASS nor PARTIAL, and no
+  successful `exports`-map resolution is claimed. **Not executed:** Gate 1b and
+  Gates 2–6. **Isolation/cleanup:** Gate 0 invariants re-verified (distinct
+  network namespace; `/proc/net/dev` = `lo` only; no default route; host
+  `127.0.0.1:49374` listening with the sandbox connection refused); disposable
+  artifacts removed; no test process remained; host managed service unchanged;
+  branch/HEAD/status and `package-lock.json` unchanged.
 
 ## RF-OR — OpenRouter transport and routing
 
