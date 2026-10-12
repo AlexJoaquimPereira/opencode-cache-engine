@@ -1329,6 +1329,43 @@ exactly what this procedure must establish. The isolation recipe and
 registration/usage evidence reuse the established isolated `serve` +
 local-mock-provider setup. This procedure has **not been executed**.
 
+### 2D.13 Gate 4 closure and next phase (checkpoint verification → controlled-preview readiness)
+
+**Gate 4 closure — the GPT criterion is NOT PASS (attribution unresolved).**
+- OpenAI-compatible route: schema `A` strips cache fields (`RF-OC-030`) — a
+  transport/schema limitation, **not** proof of an adapter defect.
+- OpenAI/Azure route: the provider-options schema accepts `promptCacheKey`
+  (serialized to wire `prompt_cache_key`), but OpenCode **independently populates
+  a session-derived `prompt_cache_key`**, so the prior isolated evidence had the
+  field present with the adapter **off and on**; the presence-only comparison
+  **cannot attribute** it to the adapter. The final Phase 1 attempt **stopped
+  before launching a new runtime** (it was not a new test run).
+- `promptCacheOptions` support was **not** established in any inspected schema
+  and is **not** a required positive criterion.
+- **Close the investigation:** no further namespace experiments or presence-only
+  cache-key tests under the current acceptance criteria. Reopen only if a
+  **genuinely discriminating, privacy-safe measurement** becomes available.
+- Preserve the existing Gate 2/Gate 3 (loading/setup/hook-execution) evidence and
+  the OpenRouter header findings as **preservation/fallback** evidence (not proof
+  the adapter attached the header in the tested integration). Keep the accepted
+  best-effort accounting limitations (§2D.12); exactly-once is not claimed.
+
+**Next phase (read-only first):**
+1. **Verify the current checkpoint (read-only):** actual branch/HEAD/upstream/
+   worktree; the two docs; unit-test baseline evidence; package-contents evidence;
+   the lockfile hash. Do not assume historical results are current; do not
+   commit or push.
+2. **Assess V2 controlled-preview readiness:** review exports, package contents,
+   tests, setup/enablement instructions, the verification procedure, a rollback
+   procedure, and documented limitations; separate verified capabilities from
+   unresolved behavior; produce a readiness recommendation with explicit blockers
+   and risks. **Preview readiness ≠ production readiness.**
+3. **Decide whether Gates 5 and 6 are necessary:** review their stated purpose and
+   risk; leave them untouched until explicitly authorized; record each as
+   necessary, deferred, or outside the intended preview scope.
+4. **Separate preview/release decision:** no automatic release, version bump,
+   commit, push, or publication; production readiness remains a separate decision.
+
 ## 3. Branch Strategy
 
 Use Git branches for parallel development:
