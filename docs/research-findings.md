@@ -1229,6 +1229,51 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   GPT INCONCLUSIVE, affinity INCONCLUSIVE, neutral passivity PASS (body scope),
   kind PASS, **overall Gate 4 NOT PASS**. Gate 5 / Gate 6 not run.
 
+### RF-OC-028 — Finalized Gate 4 test design: the GPT cache fields require the `@ai-sdk/openai` (or Azure) SDK route; OpenRouter affinity splits into an integration check and an existing unit-level fallback
+
+- Status: current
+- Verified: 2026-10-12
+- Area: opencode-runtime
+- Fact:
+  - OpenCode 2.0.26 selects the provider SDK from the provider's `npm` (a mapping
+    table routes `@ai-sdk/openai` to a bundled `@opencode/ai/providers/…`; the
+    provider SDKs are bundled in the binary), and selects the API type via
+    `Im(modelID) => catalog[modelID]?.openaiApiType ?? "chat"` (default `chat`).
+    The OpenAI/Azure SDK serializes camel→snake cache options
+    (`prompt_cache_key`, `prompt_cache_options`); the `@ai-sdk/openai-compatible`
+    route does **not** emit them.
+  - The adapter mutation stays at `src/cache-engine-v2.mjs` `onContext` (mutates
+    `event.options`) via `gptCacheOptionFieldNames`/`gptCacheOptionsDelta` in
+    `src/cache-engine-core.mjs`.
+  - Adapter `onModelRequest` adds `x-session-id` for providerID `openrouter` +
+    GLM/MiMo **only when no session header is already present** (case-insensitive
+    check); OpenCode pre-sets a session header (lowercased on the wire by the HTTP
+    client), so the guard prevents attachment on the integration route.
+- Evidence: [O] (source tracing), [U] (runtime behavior of the corrected route)
+- Sources: repository `src/cache-engine-v2.mjs` / `src/cache-engine-core.mjs`;
+  embedded OpenCode 2.0.26 binary (`openaiApiType` selector, npm→SDK mapping,
+  `prompt_cache_key`/`prompt_cache_options` serialization);
+  `test/cache-engine.test.mjs` existing affinity unit test.
+- Justifies: `docs/implementation-plan-v2.md` §2D.7 finalized criteria; keeps
+  Gate 4 **NOT PASS**.
+- Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
+  adapter checkpoint `d5bd3ab`.
+- Re-verify when: OpenCode changes SDK/API-type selection or the OpenAI/Azure
+  serialization, or the session headers it pre-sets.
+- Superseded by: null
+- Notes: **Confirmed (source tracing):** the wire field names and the SDK/API-type
+  selection mechanism; the affinity guard behavior. **Still to verify (runtime):**
+  that the GPT fields serialize on the `@ai-sdk/openai` chat route, that V2
+  `context` `options` reach the SDK provider options, and the integration
+  preservation observation. **Test design:** GPT case uses a custom
+  `npm: "@ai-sdk/openai"` provider (`providerID=openai`, model `gpt-5.6`, loopback
+  mock `POST /v1/chat/completions`) with adapter-off/on; PASS requires
+  `prompt_cache_options` present **only** ON. Affinity splits into (1) integration
+  preservation/reach (mock; header presence is **not** attribution) and (2) the
+  existing unit-level fallback test. Gate 4 stays **NOT PASS** until the revised
+  positive criteria are satisfied. No runtime executed for this finding; no
+  adapter defect confirmed.
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
