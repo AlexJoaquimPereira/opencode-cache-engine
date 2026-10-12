@@ -1033,6 +1033,50 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   artifacts removed; no test process remained; host managed service unchanged;
   branch/HEAD/status and `package-lock.json` unchanged.
 
+### RF-OC-024 — OpenCode 2.0.26 loads a project-local shim that re-exports `opencode-cache-engine/v2`, resolving the subpath via the project `node_modules` exports map (Gate 1b PASS, shim route only)
+
+- Status: current
+- Verified: 2026-10-12
+- Area: opencode-runtime
+- Fact:
+  - In an isolated OpenCode 2.0.26 runtime with the package offline-installed
+    into the disposable project's `node_modules`, a **single** project-local
+    plugin file `.opencode/plugins/v2-entry.ts` containing
+    `export { default } from "opencode-cache-engine/v2"` was **discovered and
+    loaded** by the loader — server log: `INFO msg="loading plugin"
+    id=…/project/.opencode/plugins/v2-entry.ts
+    entrypoint=file:///…/v2-entry.ts`. No direct `plugins` config entry and no
+    other shim were present.
+  - The adapter's initialization side effect was observed: the isolated
+    `CACHE_ENGINE_METRICS_FILE` directory was created (adapter `setup` ran),
+    demonstrating the subpath import resolved from the shim.
+  - No shim-related load/import error occurred; the only server error was
+    OpenCode's own `models.dev` fetch failing with `getaddrinfo ETIMEOUT`
+    (expected under the isolated network namespace).
+- Evidence: [O]
+- Sources: isolated Gate 1b run 2026-10-12 — `bubblewrap --unshare-net`, private
+  HOME/XDG, OpenCode 2.0.26 `serve`; tarball `opencode-cache-engine-0.7.1.tgz`
+  from the checkpoint worktree; offline `npm install`; one local shim file;
+  loader log line; adapter metrics-dir side effect.
+- Justifies: `docs/implementation-plan-v2.md` §2D.4 (Gate 1b) result and its
+  PARTIAL classification of the shim route.
+- Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
+  adapter checkpoint `bc01c6b`.
+- Re-verify when: OpenCode changes local plugin discovery/loading or module
+  resolution, or the package `exports` map changes.
+- Superseded by: null
+- Notes: **Gate 1b verdict: PASS** for the narrow shim test only.
+  **Qualification:** this is **partial evidence for V2 integration** and does
+  **not** overturn Gate 1's direct-entry FAIL (`RF-OC-023`), nor show the loader
+  accepts a subpath **config entry**. It does **not** establish hook invocation,
+  provider-policy transformations, usage accounting, or preview readiness (none
+  were exercised). **Isolation/cleanup:** Gate 0 invariants re-verified (distinct
+  network namespace; `/proc/net/dev` = `lo` only; no default route; host
+  `127.0.0.1:49374` listening with the sandbox connection refused); disposable
+  artifacts removed; no test process remained; host managed service unchanged;
+  branch/HEAD/status and `package-lock.json` unchanged. **Not executed:** Gates
+  2–6.
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
