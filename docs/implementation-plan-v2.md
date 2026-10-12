@@ -38,7 +38,7 @@ Milestone status (reconciled 2026-10-09; no fixed calendar dates are promised):
 | v0.5.x | Provider coverage (Kimi, Claude, Gemini, Qwen, xAI/Grok, Meta Muse, MiniMax) | shipped (last family MiniMax = 0.5.8) |
 | v0.6.x | Shared usage/accounting extraction + provider conformance tests | shipped as **v0.6.0** (tag `v0.6.0` = `c1f3420`; 277-test suite green) |
 | v0.7.x | Runtime-independent core contract, session-state model, V2 readiness | **in progress** — v0.7.0 core/adapter contract (§2B.8) and v0.7.1 session-state lifecycle (§2B.9) implemented; the OpenCode V2 adapter is implemented and offline-tested (**preview** — runtime registration/hooks unverified; see §2C) |
-| v0.8.x | Functioning V2 adapter (runtime-specific integration) | future work — gated on a verified V2 API contract |
+| v0.8.x | Functioning V2 adapter (runtime-specific integration) | future work — gated on a verified V2 API contract; safe isolated validation procedure in §2D (Phase B) |
 | v0.9.x | Dual-runtime stabilization and documentation | future work |
 | v1.0.0 | Dual-runtime release | only when V1 and V2 are independently validated |
 
@@ -779,7 +779,8 @@ runtime) but not live-loader-proven:**
 **Still unverified (do not present as fact):**
 
 - **Live runtime registration/hook installation and `./v2` entry resolution**
-  remain **unverified** until the permitted loader test is performed.
+  remain **unverified** until the permitted loader test is performed
+  (procedure: §2D).
 - Whether the installed V1 runtime supplies the exact `promptCacheKey` /
   `promptCacheOptions` shape assumed here (see the `RF-OC-*` findings in
   `docs/research-findings.md`).
@@ -985,19 +986,182 @@ Implemented hooks and behavior:
   families.
 - `session.hook("model.request")` — OpenRouter `x-session-id` affinity (GLM/MiMo
   only), emitting the same telemetry schema as V1.
-- Usage — on `session.idle`, `session.context({ sessionID })` feeds the shared
-  cursor/watermark; bounded per-session state (LRU + tombstones + evicted marks),
-  async cancellation, and stale-session guards.
+- Usage — `session.usage.updated` (primary) and `session.idle` (secondary) each
+  feed `session.context({ sessionID })` into the shared cursor/watermark;
+  bounded per-session state (LRU + tombstones + evicted marks), async
+  cancellation, and stale-session guards (RF-OC-020).
 
 **Status: preview.** The adapter imports and passes offline contract tests
 (including a declaration-level `SessionContext` contract check and a V1-adapter
 isolation test), but OpenCode V2 **plugin registration and hook installation are
-not verified** against a live runtime. V2 compaction isolation, fork cache-root,
+not verified** against a live runtime (live-loader validation procedure:
+**§2D**). V2 compaction isolation, fork cache-root,
 and the secondary V1 diagnostics are deferred.
 
 The runtime dispatches the `context` hook only for the `primary` request kind;
 auxiliary kinds (`compaction`/`generate`/`title`) use their own hook names, so no
 request-kind guard is needed (RF-OC-018).
+
+## 2D. v0.8.x — Phase B: safe V2 runtime validation procedure (proposal — pending review and execution)
+
+Phase B (see the Roadmap in `AGENTS.md`) is to establish a supported, safe
+procedure proving that OpenCode resolves the package's `./v2` entry, executes the
+V2 plugin's `setup(ctx)`, and installs the expected hooks — **against a live
+runtime, without touching the user's managed service or shared configuration**.
+
+> **Status: proposal, not executed.** This section is the reviewable procedure
+> only. It is **not yet run**, so §2C remains *preview* and V2 runtime
+> registration/hook installation remain **unverified**. Do not present any gate
+> below as evidence until it has actually been executed and recorded.
+
+> **Hard stop rule (Gate 0).** If safe isolation cannot be demonstrated, the live
+> test **stops before the server is started**. Do not change the managed OpenCode
+> plugin configuration, installed plugins, or the running service without
+> separate explicit user authorization.
+
+### 2D.0 Verified toolchain and CLI surface (read-only inspection)
+- OpenCode **v2.0.26**; `@opencode/plugin` **2.0.16**; `@opencode/client`
+  **2.0.16**; Node 22. These are recorded values, not assumptions.
+- Repo exports (unchanged): `./server`→`src/cache-engine.ts`, `./tui`→
+  `src/tui.mjs`, `./v2`→`src/cache-engine-v2.mjs`.
+- **Verified flags/commands only** (from `opencode --help` / `plugin --help`):
+  - `opencode --version`
+  - `opencode serve --hostname <ip> --port <n>`
+  - `opencode run --server <url> [--session <id>] "<prompt>"`
+  - `opencode session list --server <url> --format json`
+  - `opencode session delete --server <url> <sid>`
+  - Config/plugin env: `OPENCODE_CONFIG_DIR`, `OPENCODE_CONFIG`,
+    `OPENCODE_CONFIG_CONTENT`, `OPENCODE_CONFIG_PROJECT_DISABLE`,
+    `OPENCODE_SERVER_PASSWORD`.
+  - **Forbidden:** `opencode plugin add|remove|update` (they mutate the *global*
+    configuration); the non-existent `opencode run --plugin …` (that flag is not
+    in the installed CLI).
+
+### 2D.1 Open questions the test must answer (do not assume)
+- Does the 2.0.26 loader accept a **package subpath**
+  (`opencode-cache-engine/v2`) as a `plugins` entry, or only bare package names /
+  `file://` / git URLs?
+- Does the loader honor the package `exports` map for subpaths?
+- Does the loader resolve a package installed in the disposable project's
+  `node_modules`, or does it always (re)install into `~/.cache/opencode/packages`
+  (which needs network)?
+- Whether registration needs a session/prompt (earlier evidence: registration at
+  server boot; hook invocation needs a turn).
+
+### 2D.2 Gate 0 — isolation preflight (fail-closed; before any server start)
+Run the entire test inside one `bubblewrap --unshare-net --unshare-pid
+--unshare-uts --unshare-ipc` namespace with private dirs under `/tmp`, `--chdir`
+the disposable project, binding **only** read-only system paths + the binary (on a
+writable tmpfs mountpoint) + the disposable directory. Do **not** bind
+`~/.config/opencode`, `~/.cache/opencode`, or `~/.local/state`.
+
+All of the following must hold; otherwise **stop**:
+- **Private config paths.** Inside the namespace, `HOME` and
+  `XDG_CONFIG_HOME`/`XDG_DATA_HOME`/`XDG_STATE_HOME`/`XDG_CACHE_HOME` all resolve
+  under the disposable dir (optionally also set `OPENCODE_CONFIG_DIR` there); the
+  host config dir is not bound and is not visible.
+- **Test-owned PIDs.** Capture the sandbox init PID (PID 1 inside) and the host
+  wrapper PID (`$!`); `/proc` inside lists only the sandbox's processes (host PIDs
+  absent).
+- **Disposable project isolation.** `pwd` is the disposable project; no other
+  project config is discovered (e.g. `OPENCODE_CONFIG_PROJECT_DISABLE`); the only
+  visible `.opencode` is the disposable one.
+- **Before-state recorded.** Host `~/.local/state/opencode/service.json` `pid`
+  **and** process start identity (`ps -o pid,lstart -p <pid>`).
+- **Network.** TCP `127.0.0.1:49374` **refused** from inside (necessary, not
+  sufficient on its own).
+
+### 2D.3 Gate 1 — direct `./v2` subpath resolution (the target claim)
+Test direct resolution **without any shim**. Offline-install the package into the
+disposable project (`npm pack` the worktree read-only, then `npm install <tarball>
+--no-audit --no-fund --ignore-scripts --offline`; the package has no
+dependencies), and register the subpath directly in the disposable project config
+(`plugins: ["opencode-cache-engine/v2"]`, in `.opencode/opencode.json` or via
+`OPENCODE_CONFIG_CONTENT`).
+- **Proof:** the loader itself resolves the subpath and the loaded plugin has
+  `id === "opencode-cache-engine"` with the adapter's own side effect (metrics
+  dir/file), with **no shim** present.
+- **Failure:** loader rejects/ignores the subpath (`ERR_PACKAGE_PATH_NOT_EXPORTED`
+  / unknown plugin / resolves `./server`/`./tui`).
+- **Not proof:** `exports` metadata; a bare `node -e "import(...)"`; `npm pack`
+  listings.
+
+### 2D.4 Gate 1b — shim fallback (weaker; must not count for Gate 1)
+Only if Gate 1 fails: a disposable project plugin
+`.opencode/plugins/v2-entry.ts` doing
+`export { default } from "opencode-cache-engine/v2"`.
+- **Result:** the package subpath resolves under the loader's **Node resolve**
+  (the `exports` map is honored when a plugin file imports it) and the loader
+  loads that file. It does **not** show the loader accepts a subpath *config
+  entry*.
+- Reported separately as **PARTIAL**, never as Gate 1 proof.
+
+### 2D.5 Gate 2 — loader discovery + `setup(ctx)` execution
+- **Proof:** the loader discovers and loads the package and `setup` runs — the
+  metrics dir/file is created and, with `CACHE_ENGINE_DEBUG=1`, the
+  `opencode-cache-engine V2 adapter ready` line appears in the server log.
+- **Not proof:** `opencode plugin list`; configuration inspection.
+
+### 2D.6 Gate 3 — hook installation + basic invocation (policy-independent)
+- **Installation:** a counting wrapper that imports the resolved specifier reports
+  `hooks = ["context","model.request"]` and one `event.subscribe()` call.
+- **Basic invocation:** one primary turn to a **neutral** family (e.g. DeepSeek)
+  against the mock completes and the server dispatched a primary request; no
+  transform is expected.
+- **Not proof:** registration counting alone; direct-handler unit tests.
+
+### 2D.7 Gate 4 — provider-policy-transform checks (separate gate)
+Runtime, behavioral, from mock-observed requests:
+- `context`: GPT-5.6+ (`providerID` `openai`, model `gpt-5.6`) → mock-observed
+  request **body** contains the injected `promptCacheKey`/`promptCacheOptions`.
+- `model.request`: provider id exactly `openrouter` + a GLM/MiMo model →
+  mock-observed request **headers** contain `x-session-id`.
+- **Passivity:** a neutral family shows no injection.
+- Reported as its own PASS/PARTIAL/FAIL; **not** proven by Gate 3.
+
+### 2D.8 Gate 5 — event subscription + usage-accounting smoke test
+- **Proof:** after a deterministic mock turn, `CACHE_ENGINE_METRICS_FILE` holds a
+  `kind:"usage"` record derived from history (`read/write/input/messages`,
+  `cumulative`, `cursor`); a second turn adds one record without recounting the
+  first; auxiliary/title usage adds no message-level record.
+- **Not proof:** a probe-simulated shared-core scan; unit tests.
+
+### 2D.9 Gate 6 — cleanup and after-state
+- Targeted termination of the exact `bwrap` PID only (**never `pkill -f`**); the
+  disposable directory is removed; `ps` shows no process referencing it.
+- Host `service.json` pid and start identity unchanged; repo `git status`, HEAD,
+  and `package-lock.json` SHA1 unchanged; the sandbox created its **own**
+  `service.json` under its private state dir.
+
+### 2D.10 Evidence classification and not-proof
+- Distinguish **direct runtime evidence** (Gates 1–6, observed on the running
+  system) from **unit-test-only evidence** and **inference**. Offline unit tests,
+  export metadata, a bind-mounted file import, `opencode plugin list`,
+  configuration inspection, and static grep are **not** proof; the earlier
+  isolated runs loaded the adapter from a bind-mounted file path, so `./v2` entry
+  resolution through the loader is exactly what remains open.
+
+### 2D.11 Rubric
+- **PASS** only if Gates 1, 2, 3 (and 4 for the policy claim), 5, and 6 hold with
+  **direct runtime evidence** and the separation above is preserved; then update
+  the `AGENTS.md` Roadmap, §2B.7, §2C, and the README to mark `./v2` resolution +
+  registration + hook installation **verified** (still *preview*).
+- **PARTIAL** if only the Gate 1b shim resolves the subpath (not the loader), or
+  only one of `context`/`model.request` is proven.
+- **FAIL** if the loader cannot resolve `./v2`, or the hooks are not
+  installed/invoked.
+
+### 2D.12 Accepted limitations (unchanged; do not claim exactly-once)
+Usage accounting remains **best-effort**: in-memory cursor (a restart re-counts);
+compaction is the sole history truncation boundary (possible undercount);
+`session.usage.updated` is volatile; same-millisecond watermark ties undercount;
+capacity/mark eviction undercounts (mark expiry can recount); a telemetry-write
+failure after cursor advancement undercounts. Exactly-once accounting is **not**
+claimed.
+
+Provenance: `RF-OC-017`–`RF-OC-021` in `docs/research-findings.md`; the isolation
+recipe and registration/usage evidence reuse the established isolated `serve` +
+local-mock-provider setup. This procedure has **not been executed**.
 
 ## 3. Branch Strategy
 
@@ -1344,11 +1508,10 @@ npm test
 # Check packaging contents
 npm pack --dry-run
 
-# (Optional) Smoke test on a cheap model via OpenCode
-# First, link or pack+install the plugin, then run:
-opencode run --plugin . -m <provider>/<small-model> -c "console.log('hi')"
-# or simulate session:
-opencode run --plugin . -m openai/gpt-3.5-turbo -p  Hello
+# (Optional) Live runtime smoke test: use the isolated, gated procedure in §2D.
+# NOTE: `opencode run --plugin …` is NOT a real flag in the installed CLI
+# (v2.0.26 help) and must not be used. The V2 package-subpath loader test is
+# specified only in §2D.
 ```
 
 For feature branches (e.g. `feature/v2-adapter`):
@@ -1370,5 +1533,12 @@ npm test
 ```
 
 Finalize each milestone by merging to `main` only after all CI checks pass (including `npm pack` and any integration tests).
+
+**V2 live-loader validation:** the safe, isolated procedure for proving `./v2`
+entry resolution, `setup(ctx)` execution, and hook installation on OpenCode 2.x
+is specified in **§2D** (Phase B). The installed CLI (v2.0.26) has **no**
+`--plugin` flag, so the removed `opencode run --plugin …` snippets were invalid
+and are not the supported V2 loader test — do not treat them, `opencode plugin
+list`, export metadata, or offline handler tests as proof.
 
 **Summary:** This implementation plan provides step-by-step guidance for the CacheEngine project to expand its functionality and runtime support. Each task is scoped, assigned, and has clear criteria. The testing matrix and timelines ensure that all changes are validated and release-ready. Follow this guide as a checklist to ensure nothing is missed.
