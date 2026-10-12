@@ -1077,6 +1077,53 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   branch/HEAD/status and `package-lock.json` unchanged. **Not executed:** Gates
   2–6.
 
+### RF-OC-025 — Isolated Gate 2/Gate 3 run: the local shim loads, `setup(ctx)` runs, and `context`/`model.request` are actually dispatched (shim route; neutral family)
+
+- Status: current
+- Verified: 2026-10-12
+- Area: opencode-runtime
+- Fact:
+  - **Gate 2 (discovery + `setup(ctx)`) — PASS:** in an isolated OpenCode 2.0.26
+    runtime (`opencode run --standalone`, `bubblewrap --unshare-net`, private
+    HOME/XDG) with the package offline-installed and the single local plugin file
+    `.opencode/plugins/v2-entry.ts` (no direct `plugins` config entry), the loader
+    logged `loading plugin … v2-entry.ts`, `setup(ctx)` executed (adapter-ready
+    log `[cache-engine-v2] opencode-cache-engine V2 adapter ready` with
+    `CACHE_ENGINE_DEBUG=1`), and the isolated `CACHE_ENGINE_METRICS_FILE`
+    directory/file were created.
+  - **Gate 3 (hook installation + invocation) — PASS:** a counting wrapper that
+    imports the resolved specifier reported registration
+    `hooks=["context","model.request"]`, `subscribeCalls=1`; on one neutral turn
+    (`mock/synthetic`) the server **actually dispatched** the hooks — `context`
+    invoked once and `model.request` invoked twice — and the loopback mock
+    received two `POST /v1/chat/completions` (primary + auxiliary); the turn
+    completed with exit code 0.
+  - No plugin/loader error; no transform is expected for a neutral family
+    (provider-policy transform behavior is Gate 4, not tested).
+- Evidence: [O]
+- Sources: isolated Gate 2/Gate 3 run 2026-10-12 — `bubblewrap --unshare-net`,
+  private HOME/XDG, OpenCode 2.0.26; tarball `opencode-cache-engine-0.7.1.tgz`
+  from the checkpoint worktree; offline `npm install`; one local
+  shim/counting-wrapper file; loader log; wrapper marker; mock request log.
+- Justifies: `docs/implementation-plan-v2.md` §2D.5/§2D.6 results and the plan's
+  Gate 2/Gate 3 verdicts on the shim route.
+- Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
+  adapter checkpoint `bc01c6b`.
+- Re-verify when: OpenCode changes plugin discovery/loading, the session hook
+  names/dispatch, or the event subscription mechanism.
+- Superseded by: null
+- Notes: **Scope:** demonstrates **shim-based initialization** and
+  **policy-independent hook dispatch** only. It does **not** establish direct
+  package-entry (`plugins: ["opencode-cache-engine/v2"]`) support
+  (Gate 1 = FAIL; `RF-OC-023`), provider-policy transformation (Gate 4),
+  usage-accounting correctness (Gate 5), or production readiness. The metrics
+  record's accounting content was not evaluated. **Isolation/cleanup:** Gate 0
+  invariants re-verified (distinct network namespace; `/proc/net/dev` = `lo`
+  only; no default route; host `127.0.0.1:49374` listening with the sandbox
+  connection refused); disposable artifacts removed; no test process remained;
+  host managed service unchanged; branch/HEAD/status and `package-lock.json`
+  unchanged. **Not executed:** Gates 4–6.
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
