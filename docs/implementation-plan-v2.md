@@ -1036,6 +1036,10 @@ runtime, without touching the user's managed service or shared configuration**.
   - **Forbidden:** `opencode plugin add|remove|update` (they mutate the *global*
     configuration); the non-existent `opencode run --plugin …` (that flag is not
     in the installed CLI).
+- CLI-surface evidence: `RF-OC-022` records the plugin subcommands, the verified
+  `run`/`serve`/top-level flags, and the config/plugin env vars. It establishes
+  the **CLI surface only** — it does **not** establish direct
+  `opencode-cache-engine/v2` subpath resolution or V2 runtime readiness.
 
 ### 2D.1 Open questions the test must answer (do not assume)
 - Does the 2.0.26 loader accept a **package subpath**
@@ -1068,8 +1072,43 @@ All of the following must hold; otherwise **stop**:
   visible `.opencode` is the disposable one.
 - **Before-state recorded.** Host `~/.local/state/opencode/service.json` `pid`
   **and** process start identity (`ps -o pid,lstart -p <pid>`).
-- **Network.** TCP `127.0.0.1:49374` **refused** from inside (necessary, not
-  sufficient on its own).
+- **Host listener precondition (read-only; recorded immediately before the
+  sandbox connection check).** Establish that the host's `127.0.0.1:49374` port
+  is actually **listening** at test time, using a **narrowly scoped read-only**
+  inspection (for example a single loopback connection attempt from the host, or
+  the host's listener table) — do **not** scan ports or services. Record the
+  result and the observation time. If the port is not listening, or listener
+  status cannot be established, **stop**: a refused connection inside the sandbox
+  must **not** be treated as isolation evidence when the host-side precondition is
+  absent.
+- **Network namespace and `/proc` evidence (required).** Using **narrowly scoped,
+  non-destructive reads only** (no network or service scanning, and **without
+  starting OpenCode or a server**), capture sanitized raw evidence that the
+  sandbox uses its **own** `/proc` mounted by Bubblewrap, in the intended host and
+  sandbox contexts, showing:
+  - the host and sandbox network-namespace identities differ — `readlink
+    /proc/self/ns/net` captured once on the host and once inside the sandbox,
+    each in the context it labels;
+  - inside the sandbox, `/proc/net/dev` lists **only loopback (`lo`)**;
+  - inside the sandbox, `/proc/net/route` contains **no default route**.
+  `/proc/net/dev` and `/proc/net/route` are **required** checks; if either is
+  unavailable, inconsistent, or ambiguous, Gate 0 **fails closed**.
+- **`/sys/class/net` (optional corroboration only).** The sandbox recipe does
+  **not** guarantee a namespace-aware `sysfs` mount, so `/sys/class/net` is
+  **optional**. Its absence must not, by itself, fail an otherwise valid
+  preflight, and it must **not** override contradictory `/proc` evidence. Do not
+  add a sysfs mount for this purpose.
+- **Sandbox connection check (interpreted only with the above).** Record the
+  sandbox-side TCP connection result to `127.0.0.1:49374` (expected refused) and
+  its error. Interpret it **only together** with the namespace, `/proc`, and
+  host-listener evidence above.
+- **Evidence capture (for later audit).** Retain sanitized raw artifacts
+  sufficient to re-audit: the host and sandbox network-namespace identities; the
+  sandbox `/proc/net/dev` and `/proc/net/route` contents; the host listener
+  result and observation time; and the sandbox connection result and error. Do
+  not capture credentials or unrelated sensitive data. If the available
+  environment cannot demonstrate this isolation, the procedure **stops before any
+  server starts.**
 
 ### 2D.3 Gate 1 — direct `./v2` subpath resolution (the target claim)
 Test direct resolution **without any shim**. Offline-install the package into the
@@ -1159,8 +1198,14 @@ capacity/mark eviction undercounts (mark expiry can recount); a telemetry-write
 failure after cursor advancement undercounts. Exactly-once accounting is **not**
 claimed.
 
-Provenance: `RF-OC-017`–`RF-OC-021` in `docs/research-findings.md`; the isolation
-recipe and registration/usage evidence reuse the established isolated `serve` +
+Provenance: `RF-OC-017`–`RF-OC-021` in `docs/research-findings.md` cover the V2
+Plugin API, the hook/event/message/usage shapes, the isolated runtime
+observations, and the `session.context` contract; `RF-OC-022` covers the OpenCode
+2.0.26 plugin-management CLI surface (verified `run`/`serve`/top-level flags and
+the absence of `opencode run --plugin`). Neither establishes direct
+`opencode-cache-engine/v2` subpath resolution or V2 runtime readiness — that is
+exactly what this procedure must establish. The isolation recipe and
+registration/usage evidence reuse the established isolated `serve` +
 local-mock-provider setup. This procedure has **not been executed**.
 
 ## 3. Branch Strategy
