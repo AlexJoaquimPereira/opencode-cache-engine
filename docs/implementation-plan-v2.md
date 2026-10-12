@@ -1142,6 +1142,14 @@ Only if Gate 1 fails: a disposable project plugin
   loads that file. It does **not** show the loader accepts a subpath *config
   entry*.
 - Reported separately as **PARTIAL**, never as Gate 1 proof.
+- **Result (2026-10-12): PASS** for the narrow shim test — the local plugin file
+  `.opencode/plugins/v2-entry.ts` was discovered and loaded and the adapter
+  initialization side effect (isolated `CACHE_ENGINE_METRICS_FILE` directory) was
+  observed; no shim-related load/import error occurred. See `RF-OC-023` /
+  `RF-OC-024`. This remains **PARTIAL** evidence for V2 integration: it does
+  **not** prove the loader accepts a direct subpath **config entry** (Gate 1,
+  `RF-OC-023`), and it does not establish hook invocation, provider transforms,
+  usage accounting, or preview readiness.
 
 ### 2D.5 Gate 2 — loader discovery + `setup(ctx)` execution
 - **Proof:** the loader discovers and loads the package and `setup` runs — the
