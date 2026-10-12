@@ -1432,6 +1432,40 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   best-effort accounting limitations (no exactly-once claim). Gates 5/6 remain
   unrun and unauthorized.
 
+### RF-OC-032 — OpenCode's `PluginHooks.trigger` returns the same payload object, so V2 `context`-hook mutations of `options` survive dispatch and become the request's generic `providerOptions`
+
+- Status: current
+- Verified: 2026-10-12
+- Area: opencode-runtime
+- Fact:
+  - `@opencode/PluginHooks` registers hooks under `<scope>.<name>` and
+    `trigger(scope, name, payload)` iterates the matching callbacks, invokes each
+    `callback(payload)` with **the same object**, and **returns that same
+    `payload`** — no copy, decode, reconstruct, or filter. In-place mutations
+    (e.g., of `options`) are therefore preserved.
+  - `SessionModelRequest.prepare` calls the producer
+    `l = (payload,tools) => H.trigger("session","context", {...payload, agent, tools})`
+    and receives `w`; it then splits `oH = Object.entries(w.options)` into `K`
+    (generation settings, keys in `_s`) and `$H` (all other keys = provider
+    options), and builds the request with `providerOptions: $H`.
+  - Therefore a V2 `context`-hook addition to `options` becomes the request's
+    generic (flat) `providerOptions`; it is then subject to **provider-side**
+    schema decoding (`KI`, `RF-OC-030`), which is where cache fields are dropped
+    on the openai-compatible route.
+- Evidence: [O]
+- Sources: embedded OpenCode 2.0.26 binary (`@opencode/PluginHooks`
+  `register`/`trigger`; `SessionModelRequest.prepare` `options` split). Read-only
+  inspection 2026-10-12; no runtime executed.
+- Justifies: `docs/implementation-plan-v2.md` §2D.7 (forwarding boundary) and
+  §2D.13.
+- Version context: OpenCode 2.0.26; adapter checkpoint `d5bd3ab`.
+- Re-verify when: OpenCode changes the plugin hook registry/dispatch or the
+  request-options split.
+- Superseded by: null
+- Notes: Confirms the loss on the openai-compatible route is **provider-side
+  schema processing** (`RF-OC-030`), not hook dispatch. Complements `RF-OC-031`
+  (OpenAI-route pre-population of `promptCacheKey`).
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
