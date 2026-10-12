@@ -926,6 +926,60 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   `time.created` regardless, so ordering is handled regardless of the route's
   default order.
 
+### RF-OC-022 — OpenCode 2.0.26 V2 plugin-management CLI: `plugin add/remove/update` mutate the global configuration; `run` has no `--plugin` flag
+
+- Status: current
+- Verified: 2026-10-12
+- Area: opencode-runtime
+- Fact:
+  - `opencode plugin` subcommands are `list`, `add`, `check`, `update`, `remove`.
+    `add` = "Install a plugin and add it to the global configuration"; `remove` =
+    "Remove a plugin from global configuration"; `check`/`update` operate on
+    installed package plugins. So `add`/`remove`/`update` **mutate the user's
+    global configuration** and must not be used for an isolated test; `list` and
+    `check` are read-only.
+  - `opencode run` has **no `--plugin` flag**. Verified `run` flags:
+    `--standalone`, `--server <url>`, `--continue/-c`, `--session/-s <id>`,
+    `--model/-m`, `--agent`, `--format <choice>`, `--file/-f`, `--title`,
+    `--thinking`, `--auto`.
+  - Top-level flags: `--standalone`, `--server <url>`, `--auto`, `--continue/-c`,
+    `--session/-s <id>`, `--prompt`; globals `--log-level <choice>`,
+    `--print-logs`, `--help/-h`, `--version/-v`, `--wizard`,
+    `--completions <shell>`.
+  - `opencode serve` flags: `--hostname <str>`, `--port <int>`, `--cors <str>`,
+    `--service`, `--stdio`.
+  - Config/plugin env vars present: `OPENCODE_CONFIG`, `OPENCODE_CONFIG_CONTENT`,
+    `OPENCODE_CONFIG_DIR`, `OPENCODE_CONFIG_PROJECT_DISABLE`,
+    `OPENCODE_SERVER_PASSWORD`, `OPENCODE_CLIENT`.
+  - Installed `@opencode/plugin` / `@opencode/client` = **2.0.16** (reconfirmed
+    2026-10-12; `RF-OC-017`/`RF-OC-018` cited 2.0.25 earlier).
+- Evidence: [O]
+- Sources: local — `opencode --version`, `opencode --help`, `opencode plugin
+  --help`, `opencode run --help`, `opencode serve --help` on the installed
+  v2.0.26 binary; env-var names grepped from the binary; installed
+  `@opencode/plugin`/`@opencode/client` `package.json` (2.0.16). Accessed
+  2026-10-12.
+- Justifies: `docs/implementation-plan-v2.md` §2D.0 (verified command surface)
+  and §2D.2 (Gate 0 isolation); the prohibition on `plugin add/remove/update`
+  during an isolated V2 loader test.
+- Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16.
+- Re-verify when: the CLI help/subcommands change, plugin management moves out
+  of the global configuration, or the `run`/`serve` flags change.
+- Superseded by: null
+- Notes: Partially supersedes the **operational** conclusion in `RF-OC-017`'s
+  Notes ("a private `opencode serve` … loaded a local plugin probe … so a package
+  cannot be load-tested without editing shared configuration"). Later isolated
+  runs (2026-10-11/12; `RF-OC-019`–`RF-OC-021`) showed a private `opencode serve
+  --hostname 127.0.0.1 --port <p>` inside a `bubblewrap` namespace with a private
+  `HOME` **did** discover and load project-local `.opencode/plugins/*.ts` and run
+  `setup`, and `OPENCODE_SERVER_PASSWORD` lets clients attach to that private
+  server. `RF-OC-017`'s remaining true point stands: package discovery is not
+  fully env-isolatable via `HOME`/`XDG_*` alone, and a competing `serve --service`
+  could deregister the user's managed service — so isolated runs must avoid
+  `--service` and the managed port. Whether the loader resolves a package
+  **subpath** (`<pkg>/v2`) from a project-local install remains **unverified**
+  (Phase B, §2D).
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
