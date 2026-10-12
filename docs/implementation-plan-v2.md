@@ -1168,15 +1168,68 @@ Only if Gate 1 fails: a disposable project plugin
   against the mock completes and the server dispatched a primary request; no
   transform is expected.
 - **Not proof:** registration counting alone; direct-handler unit tests.
+- **Result (2026-10-12): PASS** — a counting wrapper distinguished registration
+  from invocation: registered `hooks = ["context","model.request"]` with one
+  `event.subscribe()` call; on one neutral turn the server **actually dispatched**
+  `context` once and `model.request` twice, and the loopback mock received two
+  `POST /v1/chat/completions` (turn exit 0). See `RF-OC-025`. This is
+  **policy-independent dispatch only** — provider-policy transforms (Gate 4) and
+  usage accounting (Gate 5) were **not** tested.
 
 ### 2D.7 Gate 4 — provider-policy-transform checks (separate gate)
-Runtime, behavioral, from mock-observed requests:
-- `context`: GPT-5.6+ (`providerID` `openai`, model `gpt-5.6`) → mock-observed
-  request **body** contains the injected `promptCacheKey`/`promptCacheOptions`.
+Runtime, behavioral, from mock-observed requests. Record only field **presence**
+plus the minimum case metadata; never values, prompts, responses, credentials, or
+wholesale headers.
+- `context`: GPT-5.6+ (`providerID` `openai`, model `gpt-5.6`) → the
+  **serialized wire** fields `prompt_cache_key` and `prompt_cache_options` appear
+  in the mock-observed request **body**. Check the **wire names**, not the
+  camelCase `promptCacheKey`/`promptCacheOptions` (the transport maps camel→snake
+  during serialization). OpenCode **may pre-populate `prompt_cache_key`** (derived
+  from the session) on its own, so its presence **alone** does not demonstrate
+  adapter injection.
+  - **Discriminating control (required):** run the same case **adapter-off vs
+    adapter-on** (with and without the shim), recording field presence only. The
+    proposed discriminating observation is `prompt_cache_options` appearing
+    **only** in the adapter-on run, **subject to confirming the two runs are
+    otherwise equivalent** (`prompt_cache_key` may appear in both). Keep the
+    hook-level mutation (adapter telemetry) distinct from the mock-observed
+    outbound serialization.
 - `model.request`: provider id exactly `openrouter` + a GLM/MiMo model →
-  mock-observed request **headers** contain `x-session-id`.
-- **Passivity:** a neutral family shows no injection.
+  mock-observed request **headers** contain the adapter's `x-session-id`.
+  **Caveat:** the tested OpenCode 2.0.26 binary itself constructs `X-Session-Id`
+  (and `x-session-affinity`) on the request, and the adapter checks
+  `x-session-id` **case-insensitively**; when a pre-existing header matches, the
+  adapter **declines to attach** (by design). Observing the header at the mock is
+  therefore **insufficient** when OpenCode has already supplied it.
+  - **Discriminating control (required):** run **adapter-off vs adapter-on** and
+    record **case-sensitive** presence of the lowercase `x-session-id` key
+    **separately** from `X-Session-Id`, never recording values. The adapter's own
+    attachment can only be shown if the lowercase key appears **only** with the
+    adapter (its existing-header guard does not otherwise engage); do not imply
+    attachment is proven when the pre-existing-header guard prevents it.
+- **Passivity:** a neutral family shows no adapter injection.
+- **Auxiliary vs primary:** use the `model.request` hook's `kind`
+  (`primary|compaction|title|generate`, per `RF-OC-018`) as the value-free
+  discriminator between primary and auxiliary invocations, **provided the field
+  is present** in the tested payload. The purpose of any `gpt-6-luna`-style
+  auxiliary request stays **unconfirmed** until `kind` establishes it.
+- **Evidence hygiene (mandatory):** record only the **presence/absence** of the
+  expected fields and the minimum provider/request metadata needed to identify
+  the case (for example `providerID`, model id, request `kind`). Never capture or
+  retain full prompt bodies, response bodies, credentials, authorization headers,
+  or wholesale request headers. For `prompt_cache_key`, `prompt_cache_options`,
+  and the `x-session-id`/`X-Session-Id` keys, record only whether the expected
+  field is present and whether the relevant assertion passed — **do not print the
+  values**.
+- This gate stays **separate** from Gate 3 (basic hook dispatch). If the mock
+  cannot produce the required `providerID`s, record the gate as
+  **limited/unverified** rather than claiming success.
 - Reported as its own PASS/PARTIAL/FAIL; **not** proven by Gate 3.
+- **Result (2026-10-12): INCONCLUSIVE (limited/unverified)** — see `RF-OC-026`.
+  The first Gate 4 run observed hook-level activity but not attributable
+  mock-observed transformations, owing to (a) a mock that checked camelCase body
+  fields instead of the wire names and (b) OpenCode pre-supplying `X-Session-Id`.
+  **No adapter defect was confirmed.**
 
 ### 2D.8 Gate 5 — event subscription + usage-accounting smoke test
 - **Proof:** after a deterministic mock turn, `CACHE_ENGINE_METRICS_FILE` holds a
