@@ -1244,11 +1244,40 @@ wholesale headers.
   cannot produce the required `providerID`s, record the gate as
   **limited/unverified** rather than claiming success.
 - Reported as its own PASS/PARTIAL/FAIL; **not** proven by Gate 3.
-- **Result (2026-10-12): INCONCLUSIVE (limited/unverified)** — see `RF-OC-026`.
-  The first Gate 4 run observed hook-level activity but not attributable
-  mock-observed transformations, owing to (a) a mock that checked camelCase body
-  fields instead of the wire names and (b) OpenCode pre-supplying `X-Session-Id`.
-  **No adapter defect was confirmed.**
+- **Result (2026-10-12, corrected control run): NOT PASS** — per-case outcomes:
+  - **GPT cache options — NOT PASS (attribution unresolved):**
+    (i) the `@ai-sdk/openai-compatible` route strips cache fields via
+    provider-options schema `A` (`RF-OC-030`) — a transport/schema limitation, not
+    an adapter defect; (ii) the `@ai-sdk/openai` route's provider-options schema
+    **accepts `promptCacheKey`** (camel → wire `prompt_cache_key`), but OpenCode
+    **independently populates a session-derived `prompt_cache_key`** on the
+    request, so the prior isolated run showed the field present with the adapter
+    **off and on** and the agreed **presence-only comparison cannot attribute it**
+    to the adapter. `promptCacheOptions` was **not** established in any inspected
+    schema and is **removed** as a required discriminator. The final Phase 1
+    attempt **stopped before launching a new runtime**. See `RF-OC-030` /
+    `RF-OC-031`.
+  - **OpenRouter session affinity — INCONCLUSIVE:** lowercase `x-session-id`
+    appeared in **both** OFF and ON runs; the ON adapter reported
+    `headerPresent=true, headerAttached=false, headerSource="preexisting"`. The
+    HTTP client lowercases wire header names, so wire **casing is
+    non-discriminating** and adapter-attributed attachment was **not
+    demonstrated**. Do not treat the case as a pass because the header is present.
+  - **Neutral passivity — PASS (body scope only):** no GPT cache fields and no
+    adapter-attributed new session header were observed; the pre-existing
+    (OpenCode-supplied) session header limits the header conclusion.
+  - **Request-kind observation — PASS:** the ON run recorded `title` and
+    `primary` kinds, establishing the auxiliary-title vs primary distinction
+    without inferring purpose from model names.
+  - **Overall Gate 4 — NOT PASS:** both required positive transformations remain
+    unverified. No adapter defect was confirmed.
+  - The finalized test design (required `@ai-sdk/openai`/Azure route, controls, and
+    the affinity split into an integration check plus the existing unit-level
+    fallback) is recorded in `RF-OC-028`; the corrected run-3 route observations
+    and the OpenRouter fallback unit-test confirmation are in `RF-OC-029`; the
+    provider-options schema `A` limitation and the corrected GPT criterion
+    (drop `promptCacheOptions`) are in `RF-OC-030`. None of these change the
+    overall verdict below.
 
 ### 2D.8 Gate 5 — event subscription + usage-accounting smoke test
 - **Proof:** after a deterministic mock turn, `CACHE_ENGINE_METRICS_FILE` holds a
