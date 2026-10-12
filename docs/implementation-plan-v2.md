@@ -1156,6 +1156,10 @@ Only if Gate 1 fails: a disposable project plugin
   metrics dir/file is created and, with `CACHE_ENGINE_DEBUG=1`, the
   `opencode-cache-engine V2 adapter ready` line appears in the server log.
 - **Not proof:** `opencode plugin list`; configuration inspection.
+- **Result (2026-10-12): PASS** — the project-local shim loaded, `setup(ctx)`
+  executed, the `opencode-cache-engine V2 adapter ready` log appeared (with
+  `CACHE_ENGINE_DEBUG=1`), and the isolated metrics dir/file were created. See
+  `RF-OC-024` / `RF-OC-025`.
 
 ### 2D.6 Gate 3 — hook installation + basic invocation (policy-independent)
 - **Installation:** a counting wrapper that imports the resolved specifier reports
