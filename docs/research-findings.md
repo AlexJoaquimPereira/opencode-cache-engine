@@ -1387,6 +1387,51 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   `config.provider`/`providerOptionsName` for a custom provider (moot for the
   openai-compatible route). **Gate 4 remains NOT PASS.** Gate 5 / Gate 6 not run.
 
+### RF-OC-031 — Gate 4 closure: on the OpenAI/Azure route OpenCode pre-populates a session-derived `prompt_cache_key`, so the presence-only adapter-off/on comparison cannot attribute the field to the adapter
+
+- Status: current
+- Verified: 2026-10-12
+- Area: opencode-runtime
+- Fact:
+  - The OpenAI/Azure SDK provider-options schema accepts `promptCacheKey`
+    (camel), which the SDK serializes to the wire field `prompt_cache_key`.
+    Separately, `SessionModelRequest.prepare` sets a **session-derived
+    `promptCacheKey` on the request** for every request
+    (`promptCacheKey: /^ses_[0-9a-f]{64}$/.test(fH) ? fH.slice(4) : fH`).
+  - Prior isolated evidence (adapter **off**, `openai`/`gpt-5.6`, Responses route)
+    already showed `prompt_cache_key` present in the outbound body, so an
+    adapter-off/on **presence-only** comparison cannot attribute the field to the
+    adapter. `promptCacheOptions` was not established in any inspected
+    provider-options schema.
+  - The final Phase 1 attempt (identify a discriminating OpenAI/Azure route)
+    **stopped before launching a new runtime**; no new test was run. Building a
+    Responses-capable mock or re-running would reproduce the non-discriminating
+    result.
+- Evidence: [O] (source: request-build `promptCacheKey`; OpenAI schema accepting
+  `promptCacheKey`; prior run's OFF body containing the field) / [U] (attribution
+  of the wire value to the adapter).
+- Sources: embedded OpenCode 2.0.26 binary (`SessionModelRequest.prepare`
+  `promptCacheKey`; OpenAI provider-options schema; wire serialization
+  `prompt_cache_key`); prior isolated run evidence; `RF-OC-030`. Read-only
+  inspection/analysis 2026-10-12.
+- Justifies: `docs/implementation-plan-v2.md` §2D.7 result and §2D.13
+  (Gate 4 closure / next phase).
+- Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
+  adapter checkpoint `d5bd3ab`.
+- Re-verify when: a supported route is found where OpenCode does not pre-populate
+  `promptCacheKey`, or a privacy-safe value-free attribution mechanism becomes
+  available.
+- Superseded by: null
+- Notes: **Consequence:** the GPT positive criterion is **NOT PASS — attribution
+  unresolved**; no adapter defect is claimed. **Close the investigation** (no
+  further namespace or presence-only cache-key tests under the current
+  acceptance criteria); reopen only with a genuinely discriminating, privacy-safe
+  measurement. `promptCacheOptions` remains **[U]** and is not a required
+  criterion. Preserve Gate 2/Gate 3 (loading/setup/hook-execution) evidence and
+  the OpenRouter header findings as preservation/fallback evidence; keep the
+  best-effort accounting limitations (no exactly-once claim). Gates 5/6 remain
+  unrun and unauthorized.
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
