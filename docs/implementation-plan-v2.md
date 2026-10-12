@@ -1180,33 +1180,52 @@ Only if Gate 1 fails: a disposable project plugin
 Runtime, behavioral, from mock-observed requests. Record only field **presence**
 plus the minimum case metadata; never values, prompts, responses, credentials, or
 wholesale headers.
-- `context`: GPT-5.6+ (`providerID` `openai`, model `gpt-5.6`) → the
-  **serialized wire** fields `prompt_cache_key` and `prompt_cache_options` appear
-  in the mock-observed request **body**. Check the **wire names**, not the
-  camelCase `promptCacheKey`/`promptCacheOptions` (the transport maps camel→snake
-  during serialization). OpenCode **may pre-populate `prompt_cache_key`** (derived
-  from the session) on its own, so its presence **alone** does not demonstrate
-  adapter injection.
-  - **Discriminating control (required):** run the same case **adapter-off vs
-    adapter-on** (with and without the shim), recording field presence only. The
-    proposed discriminating observation is `prompt_cache_options` appearing
-    **only** in the adapter-on run, **subject to confirming the two runs are
-    otherwise equivalent** (`prompt_cache_key` may appear in both). Keep the
-    hook-level mutation (adapter telemetry) distinct from the mock-observed
-    outbound serialization.
+- `context`: GPT-5.6+ (`providerID` `openai`, model `gpt-5.6`) → the cache key
+  must be shown at the **wire level** on a route whose provider-options schema
+  accepts it.
+  - **Provider-schema constraint (source-verified; `RF-OC-030`):** the
+    `@opencode/ai/providers/openai-compatible` provider decodes provider options
+    through schema `A = { user, reasoningEffort, textVerbosity, strictJsonSchema }`
+    and accepts **no** cache fields; `prompt_cache_key`/`prompt_cache_options`
+    (and synthetic markers) are stripped on that route, which **cannot** satisfy
+    this criterion.
+  - **Required route:** use an **OpenAI/Azure SDK** route whose provider-options
+    schema **includes `promptCacheKey`** (camel) — the OpenAI/Responses-style
+    schema does. Configure a custom provider with `npm: "@ai-sdk/openai"`,
+    `providerID=openai`, model `gpt-5.6`, loopback mock base URL; **verify** the
+    route OpenCode actually selects (`openaiApiType`, default `chat`; a corrected
+    run observed `POST /v1/responses`) and implement that route in the mock.
+  - **Discriminating control (required):** adapter-off vs adapter-on, otherwise
+    identical, with **wire-level** inspection (serialized-body presence) to
+    distinguish an adapter-added key from OpenCode's pre-existing session-derived
+    key. Telemetry `keyInjected=true` alone is **not** proof of a wire-level
+    effect, and `prompt_cache_key` present in both runs is **not** discriminating.
+  - **`promptCacheOptions` is NOT a required positive discriminator** (support
+    **unverified**): no located provider-options schema in this runtime accepts
+    `promptCacheOptions`/`prompt_cache_options`. Re-add it only if a supported
+    provider schema is demonstrated by source.
+  - Keep the hook-level mutation (adapter telemetry) distinct from the
+    mock-observed outbound serialization.
 - `model.request`: provider id exactly `openrouter` + a GLM/MiMo model →
-  mock-observed request **headers** contain the adapter's `x-session-id`.
-  **Caveat:** the tested OpenCode 2.0.26 binary itself constructs `X-Session-Id`
-  (and `x-session-affinity`) on the request, and the adapter checks
-  `x-session-id` **case-insensitively**; when a pre-existing header matches, the
-  adapter **declines to attach** (by design). Observing the header at the mock is
-  therefore **insufficient** when OpenCode has already supplied it.
-  - **Discriminating control (required):** run **adapter-off vs adapter-on** and
-    record **case-sensitive** presence of the lowercase `x-session-id` key
-    **separately** from `X-Session-Id`, never recording values. The adapter's own
-    attachment can only be shown if the lowercase key appears **only** with the
-    adapter (its existing-header guard does not otherwise engage); do not imply
-    attachment is proven when the pre-existing-header guard prevents it.
+  session affinity, as **two separate assertions**. Adapter-attributed attachment
+  is **not** required to be observable at the mock.
+  - **Integration (preservation + reach):** run `openrouter` + a GLM/MiMo model
+    adapter-off vs adapter-on, recording **presence only** (lowercase
+    `x-session-id`; `X-Session-Id` separately; no values). **PASS:** the
+    pre-existing session header (OpenCode supplies it; the HTTP client lowercases
+    wire header names) reaches the mock in **both** runs and the adapter does
+    **not** duplicate it (ON telemetry: `headerPresent=true, headerAttached=false,
+    headerSource="preexisting"`). Header presence alone is **not** adapter
+    attribution.
+  - **Adapter fallback (unit-level):** the existing unit test in
+    `test/cache-engine.test.mjs` — "v2 adapter: model.request adds x-session-id
+    only for OpenRouter GLM/MiMo" — directly invokes the handler with **no
+    pre-existing header** and asserts that an eligible OpenRouter GLM/MiMo request
+    gains the lowercase `x-session-id` (and that a pre-existing header is
+    preserved). **PASS:** addition occurs exactly when eligible and is absent
+    otherwise.
+  - Do **not** require adapter-attributed header injection in the integration
+    test; the pre-existing-header guard prevents it by design.
 - **Passivity:** a neutral family shows no adapter injection.
 - **Auxiliary vs primary:** use the `model.request` hook's `kind`
   (`primary|compaction|title|generate`, per `RF-OC-018`) as the value-free
