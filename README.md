@@ -24,10 +24,24 @@ plugin under `~/.config/opencode/plugins/`. For released installs where
 reproducibility matters, pin an exact package version rather than relying on
 `@latest` resolution or a moving cache entry; see [Installation](#installation).
 
-Quick Installation (TUI): 
+Quick Installation:
+
+**OpenCode V1 (1.x):**
+
 ``` text
 opencode plugin opencode-cache-engine
 ```
+
+**OpenCode V2 (2.x, preview):**
+
+``` text
+opencode plugin add opencode-cache-engine
+```
+
+Both install the package **by name**, and each runtime selects the interface it
+supports from the package's `./server` export (V1 → `server`, V2 → `setup`). Do
+**not** pass `opencode-cache-engine/v2` as the package specifier; use the bare
+name. See [Installation](#installation).
 
 `CacheEngine` is an OpenCode plugin designed for long-running agent sessions where prompt-cache efficiency affects both latency and cost. It keeps the harness conservative for providers whose cache behavior is already automatic, while applying provider-specific optimizations where the provider exposes useful cache controls or where prompt structure can be safely improved.
 
@@ -2178,7 +2192,7 @@ and fails to install. Use the bare package name; the `./server` entry provides t
 V2 `setup` automatically.
 
 **Verification status.** Verified in isolated OpenCode **1.18.35** and **2.0.26**
-environments using the packed package (`opencode-cache-engine@0.7.1`) installed
+environments using the packed package (`opencode-cache-engine@1.0.0`) installed
 **by name** against a **disposable local npm registry** (no public registry):
 V1's `opencode plugin -g opencode-cache-engine` installed the package and a
 `plugin` config entry then loaded it (V1 hooks ran, no V2 initialization); V2's
@@ -2205,7 +2219,7 @@ name, load the package from a project-local file:
   `export { default } from "opencode-cache-engine/v2"`
 
 Prerequisite for any route: the package must resolve from the project's
-`node_modules` (e.g. `npm install opencode-cache-engine@0.7.1`, or a local
+`node_modules` (e.g. `npm install opencode-cache-engine@1.0.0`, or a local
 `file:`/tarball install).
 
 Both routes are **additive** and do not modify OpenCode's shared or managed
@@ -2228,7 +2242,7 @@ release, use:
 ```json
 {
   "plugin": [
-    "opencode-cache-engine@0.7.1"
+    "opencode-cache-engine@1.0.0"
   ]
 }
 ```
