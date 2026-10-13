@@ -1517,6 +1517,33 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   motivation — is unestablished). Cache-read improvement and savings remain
   **unverified**.
 
+### RF-OC-034 — The `<env>` relocation is content- and line-multiset-preserving but not always byte-for-byte (one separator newline may be inserted); the V2 hook relocates only the single eligible system part
+
+- Status: current
+- Verified: 2026-10-13
+- Area: opencode-runtime
+- Fact:
+  - `relocateVolatileEnvBlock` / `relocateRange` preserve the moved block's bytes
+    and the **non-empty line multiset**, and are deterministic and idempotent.
+    They are **not** always a byte-for-byte permutation: when the surviving text
+    does not already end in a newline, exactly **one separator `\n`** is inserted
+    before the moved block, so the output may be one byte longer than the input.
+  - The V2 `context` hook relocates within the **single eligible** system text
+    part only; null/non-text and other parts are left byte-for-byte unchanged.
+- Evidence: [O] (code + regression test)
+- Sources: `src/cache-engine-core.mjs` (`relocateVolatileEnvBlock`,
+  `relocateRange`); `src/cache-engine-v2.mjs` (`onContext`); `test/cache-engine.test.mjs`
+  (`core: relocateVolatileEnvBlock inserts exactly one separator newline …`).
+- Justifies: the corrected relocation comments; the C1 regression test; the plan's
+  shared-transform description (`docs/implementation-plan-v2.md`).
+- Version context: OpenCode 2.0.26; adapter checkpoint `af154f0`.
+- Re-verify when: the relocation helper's newline/separator handling changes.
+- Superseded by: null
+- Notes: Cosmetic — a single normalized separator; the block content and the
+  non-empty line multiset are unchanged, and the reorder is deterministic and
+  idempotent. Not a cache-affecting change and does not affect provider cache
+  benefit (still unverified).
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins

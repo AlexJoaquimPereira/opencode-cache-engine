@@ -826,7 +826,10 @@ capabilities.
 `canonicalStringify`; the prefix/tool diagnostics (`commonPrefixLength`,
 `systemShapeHashes`, `normalizeTool`, `toolFingerprint`, `toolWireFingerprint`,
 `shapeDiff`, `shapeFieldDiffs`, `prefixChangeReasons`, `digestDecision`);
-`relocateVolatileEnvBlock` (returns a new string; content-preserving); and the GPT
+`relocateVolatileEnvBlock` (returns a new string; content-preserving — the
+non-empty **line multiset** is preserved, and a single separator newline may be
+inserted when the surviving text lacks a trailing newline, so it is not always a
+byte-for-byte permutation; see `RF-OC-034`); and the GPT
 option deltas (`gptCacheOptionFieldNames`, `gptCacheOptionsDelta`) which compute a
 *delta* the adapter applies. Identity: `stableSessionIdFor` (`oc-ses-<sha256>`),
 `mimoSessionIdFor` (`mimo-ses-<16hex>`), `gptCacheKeyFor` / `resolveCacheRootSync`
