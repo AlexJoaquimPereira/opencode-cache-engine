@@ -5101,6 +5101,43 @@ test("v1 adapter: entry point has no V2-only dependency", () => {
   assert.ok(!importSpecifiers(src).some((s) => /cache-engine-v2\.mjs$/.test(s)), "v1 adapter must not import the V2 adapter")
 })
 
+test("v1 adapter: entry point imports independently and exposes the named Plugin function", () => {
+  const entry = join(process.cwd(), "src", "cache-engine.ts")
+  const script = `const m = await import(${JSON.stringify(entry)}); process.stdout.write(JSON.stringify({ keys: Object.keys(m).sort(), cacheEngineType: typeof m.CacheEngine, hasV2Exports: ("CacheEngineV2" in m) || ("setup" in m) || ("default" in m) }));`
+  const out = JSON.parse(
+    execFileSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], { cwd: process.cwd(), encoding: "utf8" }).trim(),
+  )
+  assert.equal(out.cacheEngineType, "function", "v1 entry must export the named CacheEngine Plugin function")
+  assert.equal(out.hasV2Exports, false, "v1 entry must not expose V2-only exports (CacheEngineV2/setup/default)")
+})
+
+test("v2 adapter: entry point imports independently and does not re-export the V1 entry", async () => {
+  const mod = await import("../src/cache-engine-v2.mjs")
+  assert.equal(mod.default.id, "opencode-cache-engine")
+  assert.equal(typeof mod.default.setup, "function")
+  assert.ok(!("CacheEngine" in mod), "v2 entry must not re-export the V1 entry point")
+  const src = readFileSync(join(SRC_DIR, "cache-engine-v2.mjs"), "utf8")
+  assert.ok(!importSpecifiers(src).some((s) => /cache-engine\.ts$/.test(s)), "v2 must not import the V1 entry")
+})
+
+test("cross-version: package export map resolves to existing files and pins both entries", () => {
+  const pkg = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8"))
+  assert.deepEqual(pkg.exports, { "./server": "./src/cache-engine.ts", "./tui": "./src/tui.mjs", "./v2": "./src/cache-engine-v2.mjs" })
+  for (const [key, target] of Object.entries(pkg.exports)) {
+    let exists = true
+    try { readFileSync(join(process.cwd(), target)) } catch { exists = false }
+    assert.ok(exists, `export ${key} -> ${target} must exist in the package`)
+  }
+})
+
+test("v2 adapter: cleanup is idempotent (safe to call repeatedly)", async () => {
+  const mod = await import("../src/cache-engine-v2.mjs")
+  const { ctx } = makeV2Ctx()
+  const cleanup = await mod.default.setup(ctx)
+  await cleanup()
+  await cleanup() // a second call must not throw
+})
+
 test("v2 adapter: context hook relocates the <env> block for MiMo/GLM and is passive for DeepSeek", async () => {
   const mod = await import("../src/cache-engine-v2.mjs")
   const { ctx, handlers } = makeV2Ctx()
