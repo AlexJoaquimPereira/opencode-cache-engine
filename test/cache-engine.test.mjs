@@ -5616,15 +5616,110 @@ test("v2 adapter: GPT transform safely skips missing/malformed options", async (
   })
 })
 
-test("v2 adapter: <env> relocation safely skips multi-part system content", async () => {
+// 2.0.26 OpenCode environment block: no "You are powered by the model named"
+// marker; the interior's first field is "Working directory:".
+const ENV_26 = [
+  "<env>",
+  "  Working directory: /tmp/proj",
+  "  Workspace root folder: /tmp/proj",
+  "  Is directory a git repo: no",
+  "  Platform: linux",
+  "  Prefer /tmp/opencode over generic system temporary directories such as /tmp; it is pre-created and approved for external access.",
+  "</env>",
+].join("\n")
+const lineMultiset = (t) => t.split("\n").filter((l) => l.trim().length > 0).sort().join("\n")
+
+test("v2 adapter: <env> relocation targets the eligible part in a multi-part 2.0.26 system and preserves the other parts", async () => {
+  const mod = await import("../src/cache-engine-v2.mjs")
+  const { ctx, handlers } = makeV2Ctx()
+  const cleanup = await mod.default.setup(ctx)
+  const part2 = "You are an AI agent running in OpenCode, a coding agent harness.\nHere is some useful information about the environment you are running in.\n" + ENV_26 + "\nSome trailing instruction."
+  const ev = { sessionID: "ses_mp26", model: { id: "mimo-v2.6-flash", providerID: "opencode-go" }, system: [{ type: "text", text: "HEAD-PART" }, { type: "text", text: "middle 80" }, { type: "text", text: part2 }, { type: "text", text: "TAIL-PART" }], options: {} }
+  await handlers["context"](ev)
+  assert.equal(ev.system[0].text, "HEAD-PART", "unrelated part 0 byte-identical")
+  assert.equal(ev.system[1].text, "middle 80", "unrelated part 1 byte-identical")
+  assert.equal(ev.system[3].text, "TAIL-PART", "unrelated part 3 byte-identical")
+  const moved = ev.system[2].text
+  assert.notEqual(moved, part2, "the eligible part must be relocated")
+  assert.ok(moved.endsWith("</env>"), "the relocated env block must end its part")
+  assert.equal(lineMultiset(moved), lineMultiset(part2), "line multiset preserved")
+  assert.ok(moved.includes("Working directory: /tmp/proj"), "env content (incl. fields) preserved")
+  await cleanup()
+})
+
+test("v2 adapter: <env> relocation still works on the legacy marker shape (V1 contract)", async () => {
   const mod = await import("../src/cache-engine-v2.mjs")
   const { ctx, handlers } = makeV2Ctx()
   const cleanup = await mod.default.setup(ctx)
   const env = "A\nYou are powered by the model named X\n<env>\nToday: 2026-01-01\n</env>\nZ\nTAIL"
-  const ev = { sessionID: "ses_mp", model: { id: "mimo-v2.6-flash", providerID: "opencode-go" }, system: [{ type: "text", text: env }, { type: "text", text: "extra" }], options: {} }
+  const ev = { sessionID: "ses_legacy2", model: { id: "mimo-v2.6-flash", providerID: "opencode-go" }, system: [{ type: "text", text: env }], options: {} }
   await handlers["context"](ev)
-  assert.equal(ev.system[0].text, env, "multi-part system content is left unchanged")
-  assert.equal(ev.system[1].text, "extra")
+  assert.notEqual(ev.system[0].text, env)
+  assert.ok(ev.system[0].text.endsWith("</env>"))
+  assert.equal(lineMultiset(ev.system[0].text), lineMultiset(env))
+  await cleanup()
+})
+
+test("v2 adapter: <env> relocation is a no-op for a non-OpenCode env-like block (no marker)", async () => {
+  const mod = await import("../src/cache-engine-v2.mjs")
+  const { ctx, handlers } = makeV2Ctx()
+  const cleanup = await mod.default.setup(ctx)
+  const text = "A\n<env>\nToday: 2026-01-01\n</env>\nZ"
+  const ev = { sessionID: "ses_shape26", model: { id: "mimo-v2.6-flash", providerID: "opencode-go" }, system: [{ type: "text", text }], options: {} }
+  await handlers["context"](ev)
+  assert.equal(ev.system[0].text, text, "an env-like block without the OpenCode field must not be relocated")
+  await cleanup()
+})
+
+test("v2 adapter: <env> relocation is a no-op for malformed or incomplete blocks", async () => {
+  const mod = await import("../src/cache-engine-v2.mjs")
+  const { ctx, handlers } = makeV2Ctx()
+  const cleanup = await mod.default.setup(ctx)
+  const cases = [
+    "A\n<env>\n  Working directory: /x\nZ", // missing </env>
+    "A\n</env>\n  Working directory: /x\n<env>\nZ", // reversed order
+  ]
+  for (const [i, text] of cases.entries()) {
+    const ev = { sessionID: "ses_bad" + i, model: { id: "mimo-v2.6-flash", providerID: "opencode-go" }, system: [{ type: "text", text }], options: {} }
+    await handlers["context"](ev)
+    assert.equal(ev.system[0].text, text, "malformed block must be left unchanged")
+  }
+  await cleanup()
+})
+
+test("v2 adapter: <env> relocation is a no-op when multiple candidate blocks/parts are eligible", async () => {
+  const mod = await import("../src/cache-engine-v2.mjs")
+  const { ctx, handlers } = makeV2Ctx()
+  const cleanup = await mod.default.setup(ctx)
+  const twoInOne = "A\n" + ENV_26 + "\nB\n" + ENV_26 + "\nZ"
+  const ev1 = { sessionID: "ses_two1", model: { id: "mimo-v2.6-flash", providerID: "opencode-go" }, system: [{ type: "text", text: twoInOne }], options: {} }
+  await handlers["context"](ev1)
+  assert.equal(ev1.system[0].text, twoInOne, "two env pairs in one part must be left unchanged")
+  const p0 = "A\n" + ENV_26 + "\nZ"
+  const p1 = "C\n" + ENV_26 + "\nD"
+  const ev2 = { sessionID: "ses_two2", model: { id: "mimo-v2.6-flash", providerID: "opencode-go" }, system: [{ type: "text", text: p0 }, { type: "text", text: p1 }], options: {} }
+  await handlers["context"](ev2)
+  assert.equal(ev2.system[0].text, p0, "two eligible parts: part 0 unchanged (ambiguous)")
+  assert.equal(ev2.system[1].text, p1, "two eligible parts: part 1 unchanged (ambiguous)")
+  await cleanup()
+})
+
+test("v2 adapter: <env> relocation keeps DeepSeek and neutral paths byte-identical (2.0.26 shape)", async () => {
+  const mod = await import("../src/cache-engine-v2.mjs")
+  const { ctx, handlers } = makeV2Ctx()
+  const cleanup = await mod.default.setup(ctx)
+  const text = "H\n" + ENV_26 + "\nT"
+  const cases = [
+    ["ses_ds26", { id: "deepseek-v4-pro", providerID: "deepseek" }],
+    ["ses_neu26", { id: "synthetic", providerID: "mock" }],
+  ]
+  for (const [sid, model] of cases) {
+    const ev = { sessionID: sid, model, system: [{ type: "text", text }, { type: "text", text: "keep" }], options: {} }
+    await handlers["context"](ev)
+    assert.equal(ev.system[0].text, text, "passive family system must be byte-identical")
+    assert.equal(ev.system[1].text, "keep")
+    assert.deepEqual(ev.options, {})
+  }
   await cleanup()
 })
 

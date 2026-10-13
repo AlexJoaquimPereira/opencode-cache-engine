@@ -210,18 +210,24 @@ export const CacheEngineV2 = {
         const providerID = String(model?.providerID ?? "").trim().toLowerCase()
         const modelID = String(model?.id ?? "")
 
-        // GLM-5.3 / MiMo-V2.6 <env> relocation, exactly as V1: only when the
-        // policy opts in and there is a single system text part (the verified
-        // V1 runtime shape); content-preserving, position-only. Multi-part
-        // system content is left untouched (safe skip).
+        // GLM-5.3 / MiMo-V2.6 <env> relocation: content-preserving,
+        // position-only. The V2 runtime delivers the system as MULTIPLE text
+        // parts (OpenCode 2.0.26: four parts), so relocate only the single part
+        // that contains the eligible OpenCode environment block and leave every
+        // other part byte-for-byte unchanged. If zero or more than one part is
+        // eligible, the shape is ambiguous and nothing is changed.
         const envVariant = caps.envRelocation ?? null
         const stabilize =
           envVariant !== null && policyEnabled(cfg, caps.policy) && cfg.policies?.[caps.policy]?.stabilizeSystem === true
         const system = Array.isArray(event?.system) ? event.system : null
-        if (stabilize && system && system.length === 1 && system[0] && system[0].type === "text" && typeof system[0].text === "string") {
-          const rel = relocateVolatileEnvBlock(system[0].text)
-          if (rel.changed) {
-            system[0].text = rel.text
+        if (stabilize && system) {
+          const relocs = system.map((p) =>
+            p && p.type === "text" && typeof p.text === "string" ? relocateVolatileEnvBlock(p.text) : { text: p?.text, changed: false },
+          )
+          const changedIdx = relocs.map((r, i) => (r.changed ? i : -1)).filter((i) => i >= 0)
+          if (changedIdx.length === 1) {
+            const i = changedIdx[0]
+            system[i].text = relocs[i].text
             log("debug", `${envVariant} system env block relocated`, { sid })
           }
         }
