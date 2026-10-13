@@ -991,6 +991,18 @@ Implemented hooks and behavior:
   bounded per-session state (LRU + tombstones + evicted marks), async
   cancellation, and stale-session guards (RF-OC-020).
 
+**Compatibility note (captured OpenCode 2.0.26 prompt shape):** the GLM-5.3 /
+MiMo-V2.6 `<env>` relocation currently does **not** fire on the captured 2.0.26
+system prompt — the helper requires the V1-era `"You are powered by the model
+named "` marker, which the captured 2.0.26 prompt lacks, so adapter-off and
+adapter-on outgoing system content were byte-identical (no mutation reached the
+request). The policy is **enabled**; the helper **precondition** is unmet. This is
+a **compatibility finding for the captured runtime/prompt shape** (not universal),
+and the provider **cache benefit remains unverified**. The marker's safety
+rationale is preserved (it scopes relocation to OpenCode's own `<env>` preamble);
+removing it or adding a broad `<env>`-only trigger is **not currently justified**.
+See `RF-OC-033`. No implementation behavior is changed by this note.
+
 **Status: preview.** The adapter imports and passes offline contract tests
 (including a declaration-level `SessionContext` contract check and a V1-adapter
 isolation test), but OpenCode V2 **plugin registration and hook installation are
