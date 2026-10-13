@@ -2148,6 +2148,45 @@ not duplicate server logic.
 
 # Installation
 
+### Compatibility (OpenCode V1 and V2)
+
+| OpenCode | Verified version | Entry point | Verified loading route |
+| --- | --- | --- | --- |
+| V1 | 1.18.35 | `./server` (`src/cache-engine.ts`) | project-local plugin file re-exporting the factory as **default** |
+| V2 | 2.0.26 | `./v2` (`src/cache-engine-v2.mjs`) | project-local shim re-exporting the **default** (preview) |
+
+**V1 (1.18.35) — verified route.** OpenCode loads a project-local plugin file and
+expects a **plugin factory function** as its default export; a named export alone
+does not satisfy the loader. Create `project/.opencode/plugins/opencode-cache-engine.ts`:
+
+``` ts
+export { CacheEngine as default } from "opencode-cache-engine/server"
+```
+
+Prerequisite: the package must resolve from that project's `node_modules`
+(e.g. `npm install opencode-cache-engine@0.7.1`, or a local `file:`/tarball
+install). Verified in an isolated 1.18.35 runtime: the file was imported, the
+factory was accepted, and the adapter's hooks ran. **Unverified:** registering the
+package by name directly in config (`plugin: ["opencode-cache-engine@0.7.1"]`)
+through V1's own installer — do not assume it works.
+
+**V2 (2.0.26) — verified route (preview).** Create `project/.opencode/plugins/v2-entry.ts`:
+
+``` ts
+export { default } from "opencode-cache-engine/v2"
+```
+
+Prerequisite: the package must resolve from the project's `node_modules`.
+Verified in an isolated 2.0.26 runtime: the shim was discovered, `setup(ctx)` ran,
+and `context`/`model.request` were registered and dispatched. **Unverified /
+failed:** a direct `plugins: ["opencode-cache-engine/v2"]` config entry did **not**
+resolve in the tested offline 2.0.26 configuration, and managed-config discovery
+remains unverified.
+
+Both routes are **additive** and do not modify OpenCode's shared or managed
+configuration. Rollback: remove the project-local plugin file (and any preview
+config entry); the V1 `./server` target is unaffected.
+
 ### Local development
 
 Develop against this repository/package checkout using the project's OpenCode
