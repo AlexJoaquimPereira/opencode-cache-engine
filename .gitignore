@@ -21,3 +21,6 @@ session-*.md
 
 # Project audits
 audit-report-*.md
+
+# Research inputs (kept local; referenced by the post-1.0.0 plan)
+docs/competitor-prompt-cache-plugins-research-report.md
