@@ -357,8 +357,11 @@ export function gptCacheOptionsDelta(
 // only per-day volatile byte is the date line. For GLM-5.3 and MiMo-V2.6 we
 // relocate that whole identifiable env block to the END of the system string so
 // a daily date change only invalidates the tail of the prompt, leaving the long
-// stable prefix intact. Content is preserved byte-for-byte (only position
-// changes).
+// stable prefix intact. The block's content is preserved and the non-empty line
+// multiset is unchanged; the reorder is deterministic and idempotent. It is NOT
+// always a byte-for-byte permutation: when the surviving text does not already
+// end in a newline, exactly one separator "\n" is inserted before the moved
+// block, so the output may be one byte longer than the input.
 //
 // Returns { text, changed }. When the block cannot be identified unambiguously,
 // returns the input unchanged (changed:false). This is a content-preserving
@@ -377,9 +380,12 @@ function countOccurrences(haystack, needle) {
 }
 
 // Relocate a single identifiable volatile environment block to the end of the
-// string, preserving every byte of content (position-only reorder). Two shapes
-// are recognized; both require exactly one `<env>`/`</env>` pair, and anything
-// ambiguous or unrecognized is returned unchanged.
+// string. The block's content is preserved and the non-empty line multiset is
+// unchanged; the reorder is deterministic and idempotent, and is NOT always a
+// byte-for-byte permutation (a single separator "\n" may be inserted before the
+// moved block when the surviving text does not already end in a newline). Two
+// shapes are recognized; both require exactly one `<env>`/`</env>` pair, and
+// anything ambiguous or unrecognized is returned unchanged.
 //   1. Legacy (V1) shape: a single "You are powered by the model named " marker
 //      immediately preceding the block; the marker..`</env>` span is moved.
 //   2. Structural (OpenCode 2.0.26+) shape: no model-name marker; the block is
@@ -412,8 +418,12 @@ export function relocateVolatileEnvBlock(text) {
   return { text, changed: false }
 }
 
-// Move text[startIdx,endIdx) to the end. Content is preserved exactly; only
-// position changes. Returns unchanged when the remaining text is empty.
+// Move text[startIdx,endIdx) to the end. The moved block's bytes are preserved
+// and the non-empty line multiset is unchanged; the reorder is deterministic and
+// idempotent. When the remaining text does not already end in a newline, a
+// single separator "\n" is inserted before the moved block, so the result may be
+// one byte longer than the input. Returns unchanged when the remaining text is
+// empty.
 function relocateRange(text, startIdx, endIdx) {
   const block = text.slice(startIdx, endIdx)
   const rest = text.slice(0, startIdx) + text.slice(endIdx)

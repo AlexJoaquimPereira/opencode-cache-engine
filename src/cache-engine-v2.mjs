@@ -210,8 +210,10 @@ export const CacheEngineV2 = {
         const providerID = String(model?.providerID ?? "").trim().toLowerCase()
         const modelID = String(model?.id ?? "")
 
-        // GLM-5.3 / MiMo-V2.6 <env> relocation: content-preserving,
-        // position-only. The V2 runtime delivers the system as MULTIPLE text
+        // GLM-5.3 / MiMo-V2.6 <env> relocation: content-preserving (a single
+        // separator newline may be inserted when the surviving text lacks a
+        // trailing newline; the block's content and the non-empty line multiset
+        // are preserved). The V2 runtime delivers the system as MULTIPLE text
         // parts (OpenCode 2.0.26: four parts), so relocate only the single part
         // that contains the eligible OpenCode environment block and leave every
         // other part byte-for-byte unchanged. If zero or more than one part is
