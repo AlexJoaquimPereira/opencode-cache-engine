@@ -2150,42 +2150,67 @@ not duplicate server logic.
 
 ### Compatibility (OpenCode V1 and V2)
 
-| OpenCode | Verified version | Entry point | Verified loading route |
+One package loads by name on both runtimes. The `./server` entry
+(`src/cache-engine.ts`) exposes a **single default object** carrying both
+interfaces, and each runtime selects the one it supports:
+
+| OpenCode | Verified version | Entry point | Runtime selects |
 | --- | --- | --- | --- |
-| V1 | 1.18.35 | `./server` (`src/cache-engine.ts`) | project-local plugin file re-exporting the factory as **default** |
-| V2 | 2.0.26 | `./v2` (`src/cache-engine-v2.mjs`) | project-local shim re-exporting the **default** (preview) |
+| V1 | 1.18.35 | `./server` | `server(input, options)` → V1 hooks |
+| V2 | 2.0.26 | `./server` | `setup(ctx)` → V2 adapter (preview) |
 
-**V1 (1.18.35) — verified route.** OpenCode loads a project-local plugin file and
-expects a **plugin factory function** as its default export; a named export alone
-does not satisfy the loader. Create `project/.opencode/plugins/opencode-cache-engine.ts`:
+**Package-name loading (intended).** Install the package and register it **by
+name**:
 
-``` ts
-export { CacheEngine as default } from "opencode-cache-engine/server"
-```
+- **V1:** `plugin: ["opencode-cache-engine"]` in the project
+  `.opencode/opencode.json` (or `~/.config/opencode/opencode.json`), or
+  `opencode plugin opencode-cache-engine`.
+- **V2:** `plugins: ["opencode-cache-engine"]` in `.opencode/opencode.json`, or
+  `opencode plugin add opencode-cache-engine`.
 
-Prerequisite: the package must resolve from that project's `node_modules`
-(e.g. `npm install opencode-cache-engine@0.7.1`, or a local `file:`/tarball
-install). Verified in an isolated 1.18.35 runtime: the file was imported, the
-factory was accepted, and the adapter's hooks ran. **Unverified:** registering the
-package by name directly in config (`plugin: ["opencode-cache-engine@0.7.1"]`)
-through V1's own installer — do not assume it works.
+OpenCode V1 resolves the package's `./server` export and calls its `server`
+factory; OpenCode V2 resolves the same `./server` export and calls `setup`. The V2
+adapter is imported **lazily**, so running under V1 never initializes V2 code.
 
-**V2 (2.0.26) — verified route (preview).** Create `project/.opencode/plugins/v2-entry.ts`:
+**Do not pass a subpath as the package specification.** `opencode-cache-engine/v2`
+is interpreted by OpenCode as an npm/Git package specifier (not a module subpath)
+and fails to install. Use the bare package name; the `./server` entry provides the
+V2 `setup` automatically.
 
-``` ts
-export { default } from "opencode-cache-engine/v2"
-```
+**Verification status.** Verified in isolated OpenCode **1.18.35** and **2.0.26**
+environments using the packed package (`opencode-cache-engine@0.7.1`) installed
+**by name** against a **disposable local npm registry** (no public registry):
+V1's `opencode plugin -g opencode-cache-engine` installed the package and a
+`plugin` config entry then loaded it (V1 hooks ran, no V2 initialization); V2's
+`opencode plugin add opencode-cache-engine` and a `plugins` entry installed and
+loaded it (the V2 `setup` initialized; no V1 factory invocation). The installed
+bytes matched the packed tarball. **Caveat:** this used an isolated local registry
+pointed at via `npm_config_registry`; a public-registry install was not run here,
+and V1 may log a non-fatal background peer-dependency install warning
+(`@opencode-ai/plugin`) if the registry does not serve it.
 
-Prerequisite: the package must resolve from the project's `node_modules`.
-Verified in an isolated 2.0.26 runtime: the shim was discovered, `setup(ctx)` ran,
-and `context`/`model.request` were registered and dispatched. **Unverified /
-failed:** a direct `plugins: ["opencode-cache-engine/v2"]` config entry did **not**
-resolve in the tested offline 2.0.26 configuration, and managed-config discovery
-remains unverified.
+**Version-specific assumptions.** The single-default-object contract is verified
+for OpenCode **V1 1.18.35** (prefers the default object's `server` and does not
+double-invoke the named `CacheEngine` export) and **V2 2.0.26** (accepts the extra
+`server` property while selecting `setup`). Other versions are **not** asserted;
+do not add unrelated function-valued named exports to the V1 entry without
+re-checking loader behavior on the target version.
+
+**Alternative: project-local files (verified offline).** If you cannot install by
+name, load the package from a project-local file:
+
+- **V1:** `project/.opencode/plugins/opencode-cache-engine.ts` =
+  `export { CacheEngine as default } from "opencode-cache-engine/server"`
+- **V2:** `project/.opencode/plugins/v2-entry.ts` =
+  `export { default } from "opencode-cache-engine/v2"`
+
+Prerequisite for any route: the package must resolve from the project's
+`node_modules` (e.g. `npm install opencode-cache-engine@0.7.1`, or a local
+`file:`/tarball install).
 
 Both routes are **additive** and do not modify OpenCode's shared or managed
-configuration. Rollback: remove the project-local plugin file (and any preview
-config entry); the V1 `./server` target is unaffected.
+configuration. Rollback: remove the plugin entry (name-based) or the
+project-local plugin file; the V1 `./server` target is unaffected.
 
 ### Local development
 
