@@ -5743,6 +5743,28 @@ test("v2 adapter: <env> relocation leaves a legacy marker positioned after <env>
   await cleanup()
 })
 
+test("v2 adapter: <env> relocation requires the Platform field (L2)", async () => {
+  const mod = await import("../src/cache-engine-v2.mjs")
+  const { ctx, handlers } = makeV2Ctx()
+  const cleanup = await mod.default.setup(ctx)
+  // Begins with "Working directory:" but is NOT OpenCode's environment block.
+  const text = "A\n<env>\n  Working directory: /x\n  Some other field\n</env>\nZ"
+  const ev = { sessionID: "ses_l2", model: { id: "mimo-v2.6-flash", providerID: "opencode-go" }, system: [{ type: "text", text }], options: {} }
+  await handlers["context"](ev)
+  assert.equal(ev.system[0].text, text, "Working directory without Platform must not be relocated")
+  await cleanup()
+})
+
+test("core: relocateVolatileEnvBlock accepts the structural block and stays safe without a trailing newline (L2/L3)", () => {
+  const withPlatform = "AB\n<env>\n  Working directory: /x\n  Platform: linux\n</env>\nC"
+  const r = relocateVolatileEnvBlock(withPlatform)
+  assert.equal(r.changed, true)
+  assert.ok(r.text.endsWith("</env>"))
+  assert.equal(lineMultiset(r.text), lineMultiset(withPlatform), "content preserved (trailing text lacks a newline)")
+  const noPlatform = "AB\n<env>\n  Working directory: /x\n  Other\n</env>\nC"
+  assert.equal(relocateVolatileEnvBlock(noPlatform).changed, false)
+})
+
 test("v2 adapter: <env> relocation is a no-op when multiple candidate blocks/parts are eligible", async () => {
   const mod = await import("../src/cache-engine-v2.mjs")
   const { ctx, handlers } = makeV2Ctx()

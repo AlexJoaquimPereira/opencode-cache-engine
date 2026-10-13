@@ -384,8 +384,9 @@ function countOccurrences(haystack, needle) {
 //      immediately preceding the block; the marker..`</env>` span is moved.
 //   2. Structural (OpenCode 2.0.26+) shape: no model-name marker; the block is
 //      eligible only when its first non-empty interior line is the OpenCode
-//      environment field "Working directory:" — this scopes relocation to
-//      OpenCode's own environment preamble and never to arbitrary text.
+//      environment field "Working directory:" AND it also carries a "Platform:"
+//      field — this scopes relocation to OpenCode's own environment preamble and
+//      never to arbitrary text.
 export function relocateVolatileEnvBlock(text) {
   if (typeof text !== "string") return { text, changed: false }
   const OPEN = "<env>"
@@ -422,14 +423,19 @@ function relocateRange(text, startIdx, endIdx) {
   return { text: out, changed: out !== text }
 }
 
-// Narrow structural eligibility: the block's first non-empty interior line must
-// be OpenCode's "Working directory:" environment field (see RF-OC-033 note).
+// Narrow structural eligibility for OpenCode's own environment block (see
+// RF-OC-033). The block must start with the "Working directory:" field AND carry
+// the "Platform:" field; requiring both scopes relocation to OpenCode's
+// environment preamble and rejects arbitrary text that merely begins with
+// "Working directory:".
 function isOpenCodeEnvInterior(interior) {
-  const first = interior
+  const lines = interior
     .split("\n")
     .map((l) => l.trim())
-    .find((l) => l.length > 0)
-  return typeof first === "string" && first.startsWith("Working directory:")
+    .filter((l) => l.length > 0)
+  if (lines.length === 0) return false
+  if (!lines[0].startsWith("Working directory:")) return false
+  return lines.some((l) => l.startsWith("Platform:"))
 }
 
 // ---------------------------------------------------------------------------
