@@ -376,29 +376,56 @@ function countOccurrences(haystack, needle) {
   return count
 }
 
+// Relocate a single identifiable volatile environment block to the end of the
+// string, preserving every byte of content (position-only reorder). Two shapes
+// are recognized; both require exactly one `<env>`/`</env>` pair, and anything
+// ambiguous or unrecognized is returned unchanged.
+//   1. Legacy (V1) shape: a single "You are powered by the model named " marker
+//      immediately preceding the block; the marker..`</env>` span is moved.
+//   2. Structural (OpenCode 2.0.26+) shape: no model-name marker; the block is
+//      eligible only when its first non-empty interior line is the OpenCode
+//      environment field "Working directory:" — this scopes relocation to
+//      OpenCode's own environment preamble and never to arbitrary text.
 export function relocateVolatileEnvBlock(text) {
   if (typeof text !== "string") return { text, changed: false }
-  const START = "You are powered by the model named "
   const OPEN = "<env>"
   const CLOSE = "</env>"
-  // Require exactly one of each marker, in order, so an ambiguous or
-  // multiple-block system prompt is never partially reordered. This enforces
-  // the documented contract ("when the block cannot be identified
-  // unambiguously, return unchanged").
-  if (countOccurrences(text, START) !== 1) return { text, changed: false }
+  const START = "You are powered by the model named "
   if (countOccurrences(text, OPEN) !== 1) return { text, changed: false }
   if (countOccurrences(text, CLOSE) !== 1) return { text, changed: false }
-  const startIdx = text.indexOf(START)
   const openIdx = text.indexOf(OPEN)
   const closeIdx = text.indexOf(CLOSE)
-  if (!(startIdx < openIdx && openIdx < closeIdx)) return { text, changed: false }
-  const blockEnd = closeIdx + CLOSE.length
-  const block = text.slice(startIdx, blockEnd)
-  const rest = text.slice(0, startIdx) + text.slice(blockEnd)
+  if (!(openIdx < closeIdx)) return { text, changed: false }
+  // Legacy marker span takes precedence when present (preserves the V1 contract).
+  if (countOccurrences(text, START) === 1) {
+    const startIdx = text.indexOf(START)
+    if (startIdx < openIdx) return relocateRange(text, startIdx, closeIdx + CLOSE.length)
+  }
+  // Structural shape: the single env block must look like OpenCode's own.
+  const interior = text.slice(openIdx + OPEN.length, closeIdx)
+  if (isOpenCodeEnvInterior(interior)) return relocateRange(text, openIdx, closeIdx + CLOSE.length)
+  return { text, changed: false }
+}
+
+// Move text[startIdx,endIdx) to the end. Content is preserved exactly; only
+// position changes. Returns unchanged when the remaining text is empty.
+function relocateRange(text, startIdx, endIdx) {
+  const block = text.slice(startIdx, endIdx)
+  const rest = text.slice(0, startIdx) + text.slice(endIdx)
   if (rest.trim().length === 0) return { text, changed: false }
   const sep = rest.endsWith("\n") ? "" : "\n"
   const out = rest + sep + block
   return { text: out, changed: out !== text }
+}
+
+// Narrow structural eligibility: the block's first non-empty interior line must
+// be OpenCode's "Working directory:" environment field (see RF-OC-033 note).
+function isOpenCodeEnvInterior(interior) {
+  const first = interior
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l.length > 0)
+  return typeof first === "string" && first.startsWith("Working directory:")
 }
 
 // ---------------------------------------------------------------------------
