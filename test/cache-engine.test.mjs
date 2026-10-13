@@ -318,8 +318,31 @@ test("recorder writes valid JSONL to a real file", () => {
 test("TUI target exports the expected plugin module", async () => {
   const mod = await import("../src/tui.mjs")
   assert.equal(mod.default.id, "opencode-cache-engine")
+  assert.equal(typeof mod.default.setup, "function")
   assert.equal(typeof mod.default.tui, "function")
   assert.equal("server" in mod.default, false)
+})
+
+// OpenCode 2.0.26 rejects a package TUI entry whose default export lacks a
+// `setup` function ("Invalid V2 TUI plugin module"). This mirrors the runtime
+// validator exactly so the regression cannot silently return.
+const isValidV2TuiModule = (t) =>
+  typeof t === "object" &&
+  t !== null &&
+  "id" in t &&
+  typeof t.id === "string" &&
+  t.id.length > 0 &&
+  "setup" in t &&
+  typeof t.setup === "function"
+
+test("TUI target satisfies the OpenCode 2.0.26 V2 module contract", async () => {
+  const mod = await import("../src/tui.mjs")
+  assert.equal(isValidV2TuiModule(mod.default), true)
+  // A module with `id` + `tui` but no `setup` (the pre-fix shape) must fail.
+  assert.equal(
+    isValidV2TuiModule({ id: "opencode-cache-engine", tui: async () => {} }),
+    false
+  )
 })
 
 // --- 15. Package manifest test with TUI --------------------------------------
