@@ -5731,6 +5731,18 @@ test("v2 adapter: <env> relocation is a no-op for malformed or incomplete blocks
   await cleanup()
 })
 
+test("v2 adapter: <env> relocation leaves a legacy marker positioned after <env> unchanged (L1)", async () => {
+  const mod = await import("../src/cache-engine-v2.mjs")
+  const { ctx, handlers } = makeV2Ctx()
+  const cleanup = await mod.default.setup(ctx)
+  // A structural-eligible block, but a stray model-name marker appears AFTER it.
+  const text = ["INSTR", ENV_26, "You are powered by the model named X", "TAIL"].join("\n")
+  const ev = { sessionID: "ses_l1", model: { id: "mimo-v2.6-flash", providerID: "opencode-go" }, system: [{ type: "text", text }], options: {} }
+  await handlers["context"](ev)
+  assert.equal(ev.system[0].text, text, "a marker after <env> is ambiguous and must be left unchanged")
+  await cleanup()
+})
+
 test("v2 adapter: <env> relocation is a no-op when multiple candidate blocks/parts are eligible", async () => {
   const mod = await import("../src/cache-engine-v2.mjs")
   const { ctx, handlers } = makeV2Ctx()

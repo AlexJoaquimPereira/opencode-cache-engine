@@ -400,6 +400,10 @@ export function relocateVolatileEnvBlock(text) {
   if (countOccurrences(text, START) === 1) {
     const startIdx = text.indexOf(START)
     if (startIdx < openIdx) return relocateRange(text, startIdx, closeIdx + CLOSE.length)
+    // The model-name marker exists but does not precede the block: an ambiguous
+    // legacy shape. Leave it unchanged (prior V1 behavior) rather than falling
+    // through to the structural path.
+    return { text, changed: false }
   }
   // Structural shape: the single env block must look like OpenCode's own.
   const interior = text.slice(openIdx + OPEN.length, closeIdx)
