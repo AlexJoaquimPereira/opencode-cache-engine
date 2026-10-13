@@ -1245,3 +1245,39 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
     },
   }
 }
+
+// ---------------------------------------------------------------------------
+// Dual-runtime default export (OpenCode V1 + V2 package-name loading)
+//
+// OpenCode V1 resolves a package-name plugin to the package's `exports["./server"]`
+// (falling back to `package.json.main`, then the package root) and prefers a
+// default object exposing `server(input, options)`; OpenCode V2 resolves the same
+// `./server` entry (then the package root) and requires a default object with
+// `{ id, effect }` or `{ id, setup }`. Exposing one default object that carries
+// both the V1 `server` factory and the V2 `setup` lets a single package load by
+// name on both runtimes: V1 calls `server`, V2 calls `setup`.
+//
+// The V2 adapter is imported lazily inside `setup`, so importing this module (or
+// running the V1 factory) never initializes V2 code.
+//
+// Compatibility assumptions — verified only for the specific versions named
+// here; NOT asserted for every OpenCode version:
+//   * OpenCode V1 1.18.35 resolves `exports["./server"]` and prefers the default
+//     object's `server` factory over legacy function-valued exports, so the
+//     also-present named `CacheEngine` export is not invoked a second time.
+//   * OpenCode V2 2.0.26 validates the default object as `{ id, setup }` and
+//     ignores the extra `server` property.
+//
+// NOTE: do not add other function-valued named exports here — the V1 loader can
+// invoke legacy function-valued exports, which would cause duplicate
+// initialization; re-check V1's legacy export-selection behavior on the target
+// version first.
+export default {
+  id: "opencode-cache-engine",
+  server: CacheEngine,
+  async setup(ctx: unknown) {
+    const mod: any = await import("./cache-engine-v2.mjs")
+    const adapter = mod?.default ?? mod?.CacheEngineV2
+    return adapter.setup(ctx)
+  },
+}

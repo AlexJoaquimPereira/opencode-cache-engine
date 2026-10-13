@@ -5090,25 +5090,32 @@ test("v2 adapter: export shape and runtime isolation (no OpenCode/V1 imports)", 
   assert.ok(!importSpecifiers(src).some((s) => /@opencode/.test(s)), "v2 adapter must not import OpenCode packages")
 })
 
-test("v1 adapter: entry point has no V2-only dependency", () => {
+test("v1 adapter: entry point statically depends only on the shared core; the V2 adapter is a lazy dynamic import inside setup", () => {
   const src = readFileSync(join(SRC_DIR, "cache-engine.ts"), "utf8")
+  assert.ok(!/from\s+["']\.\/cache-engine-v2\.mjs["']/.test(src), "v1 adapter must not STATICALLY import the V2 adapter")
+  assert.ok(!importSpecifiers(src).some((s) => /@opencode\/plugin/.test(s)), "v1 adapter must not import the V2 API package")
   const sibling = /^\.\/(cache-policy-core|cache-engine-core|cache-usage-core)\.mjs$/
   for (const spec of importSpecifiers(src)) {
-    const ok = spec.startsWith("node:") || spec.startsWith("@opencode-ai/") || sibling.test(spec)
+    const ok = spec.startsWith("node:") || spec.startsWith("@opencode-ai/") || sibling.test(spec) || spec === "./cache-engine-v2.mjs"
     assert.ok(ok, `v1 adapter: unexpected import "${spec}"`)
   }
-  assert.ok(!importSpecifiers(src).some((s) => /@opencode\/plugin/.test(s)), "v1 adapter must not import the V2 API package")
-  assert.ok(!importSpecifiers(src).some((s) => /cache-engine-v2\.mjs$/.test(s)), "v1 adapter must not import the V2 adapter")
+  // The only V2 reference must be a dynamic import() (lazy), never a static `from "..."`.
+  const staticFroms = src.match(/from\s+["'][^"']+["']/g) || []
+  assert.ok(!staticFroms.some((m) => m.includes("cache-engine-v2")), "V2 adapter reference must be dynamic import() only")
+  assert.ok(/await import\(\s*["']\.\/cache-engine-v2\.mjs["']\s*\)/.test(src), "V2 adapter must be imported lazily via dynamic import()")
 })
 
-test("v1 adapter: entry point imports independently and exposes the named Plugin function", () => {
+test("v1 adapter: entry point imports independently, exposes the named CacheEngine, and the dual default object", () => {
   const entry = join(process.cwd(), "src", "cache-engine.ts")
-  const script = `const m = await import(${JSON.stringify(entry)}); process.stdout.write(JSON.stringify({ keys: Object.keys(m).sort(), cacheEngineType: typeof m.CacheEngine, hasV2Exports: ("CacheEngineV2" in m) || ("setup" in m) || ("default" in m) }));`
+  const script = `const m = await import(${JSON.stringify(entry)}); process.stdout.write(JSON.stringify({ cacheEngineType: typeof m.CacheEngine, hasV2AdapterReexport: ("CacheEngineV2" in m), defaultId: m.default && m.default.id, serverType: typeof (m.default && m.default.server), setupType: typeof (m.default && m.default.setup) }));`
   const out = JSON.parse(
     execFileSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], { cwd: process.cwd(), encoding: "utf8" }).trim(),
   )
   assert.equal(out.cacheEngineType, "function", "v1 entry must export the named CacheEngine Plugin function")
-  assert.equal(out.hasV2Exports, false, "v1 entry must not expose V2-only exports (CacheEngineV2/setup/default)")
+  assert.equal(out.hasV2AdapterReexport, false, "v1 entry must not re-export the V2 adapter module")
+  assert.equal(out.defaultId, "opencode-cache-engine", "v1 entry default object carries the shared id")
+  assert.equal(out.serverType, "function", "v1 entry default object exposes the V1 server factory")
+  assert.equal(out.setupType, "function", "v1 entry default object exposes the V2 setup function")
 })
 
 test("v2 adapter: entry point imports independently and does not re-export the V1 entry", async () => {
@@ -6156,4 +6163,69 @@ test("v2 adapter: a hook-registration failure is isolated and setup still comple
   assert.equal(typeof cleanup, "function", "setup still returns cleanup after a registration failure")
   assert.equal(typeof handlers["model.request"], "function", "the second hook still registers after the first fails")
   await cleanup()
+})
+
+// ===========================================================================
+// Dual-runtime package entry: the ./server default export
+//
+// OpenCode V1 resolves a package-name plugin to exports["./server"] and prefers a
+// default object exposing server(input, options); OpenCode V2 resolves the same
+// entry and requires a default object with { id, setup }. src/cache-engine.ts
+// therefore default-exports one object carrying both, with the V2 adapter
+// imported lazily inside setup. These tests pin that contract.
+// ===========================================================================
+
+const runTsEntryProbe = (script) =>
+  execFileSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], {
+    cwd: process.cwd(),
+    env: { ...process.env, CE_URL: new URL("../src/cache-engine.ts", import.meta.url).href },
+    encoding: "utf8",
+  }).trim()
+
+test("dual entry: ./server default exposes { id, server, setup } and preserves the named CacheEngine", () => {
+  const out = JSON.parse(
+    runTsEntryProbe(`
+      const m = await import(process.env.CE_URL)
+      const d = m.default
+      const client = { app: { log: async () => ({}) }, session: { get: async () => ({ data: null }), messages: async () => ({ data: [] }) }, tool: { list: async () => ({ data: [] }) } }
+      const hooks = await d.server({ client, directory: process.env.HOME }, {})
+      process.stdout.write(JSON.stringify({ id: d.id, serverType: typeof d.server, setupType: typeof d.setup, cacheEngineType: typeof m.CacheEngine, hasV2Named: ("CacheEngineV2" in m), hookKeys: Object.keys(hooks).sort() }))
+    `),
+  )
+  assert.equal(out.id, "opencode-cache-engine", "default export carries the shared plugin id")
+  assert.equal(out.serverType, "function", "default export exposes the V1 server factory")
+  assert.equal(out.setupType, "function", "default export exposes the V2 setup function")
+  assert.equal(out.cacheEngineType, "function", "the named CacheEngine export is preserved")
+  assert.equal(out.hasV2Named, false, "./server must not re-export the V2 adapter (isolation)")
+  assert.ok(out.hookKeys.includes("chat.params"), "V1 object-form server() returns the V1 hooks object")
+  assert.ok(out.hookKeys.includes("chat.headers"), "V1 object-form server() returns the V1 hooks object")
+  assert.ok(!out.hookKeys.includes("context") && !out.hookKeys.includes("model.request"), "V1 server() must not return V2 hooks (V2 not initialized)")
+})
+
+test("dual entry: ./server default setup() initializes the V2 adapter and registers its hooks", () => {
+  const out = JSON.parse(
+    runTsEntryProbe(`
+      const m = await import(process.env.CE_URL)
+      const handlers = {}
+      const queue = []
+      const waiters = []
+      const ctx = { session: { hook: async (n, cb) => { handlers[n] = cb; return { dispose: async () => {} } }, context: async () => ({ data: [] }) }, event: { subscribe: () => ({ [Symbol.asyncIterator]: async function* () { while (true) { if (queue.length === 0) await new Promise((r) => waiters.push(r)); while (queue.length) yield queue.shift() } } }) } }
+      const cleanup = await m.default.setup(ctx)
+      process.stdout.write(JSON.stringify({ id: m.default.id, hasServer: ("server" in m.default), hasSetup: ("setup" in m.default), handlers: Object.keys(handlers).sort(), cleanup: typeof cleanup }))
+    `),
+  )
+  assert.equal(out.id, "opencode-cache-engine")
+  assert.equal(out.hasServer, true, "the V2 default object also carries the V1 `server` key")
+  assert.equal(out.hasSetup, true)
+  assert.deepEqual(out.handlers, ["context", "model.request"], "setup() delegates to the V2 adapter and registers its hooks")
+  assert.equal(out.cleanup, "function", "setup() returns the V2 adapter cleanup")
+})
+
+test("dual entry: ./v2 remains a standalone entry and ./tui is unchanged", async () => {
+  const v2 = await import("../src/cache-engine-v2.mjs")
+  assert.equal(v2.default.id, "opencode-cache-engine")
+  assert.equal(typeof v2.default.setup, "function")
+  assert.ok(!("CacheEngine" in v2), "./v2 must not re-export the V1 entry")
+  const tui = await import("../src/tui.mjs")
+  assert.equal(tui.default.id, "opencode-cache-engine")
 })
