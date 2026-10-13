@@ -1,6 +1,6 @@
 {
   "name": "opencode-cache-engine",
-  "version": "0.7.1",
+  "version": "1.0.0",
   "private": false,
   "description": "Provider-aware prompt-cache optimization and telemetry for OpenCode",
   "keywords": [
