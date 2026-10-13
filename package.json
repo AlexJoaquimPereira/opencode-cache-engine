@@ -34,7 +34,8 @@
   ],
   "exports": {
     "./server": "./src/cache-engine.ts",
-    "./tui": "./src/tui.mjs"
+    "./tui": "./src/tui.mjs",
+    "./v2": "./src/cache-engine-v2.mjs"
   },
   "scripts": {
     "test": "node --test test/cache-engine.test.mjs",

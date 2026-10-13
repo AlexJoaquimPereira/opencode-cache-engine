@@ -357,8 +357,11 @@ export function gptCacheOptionsDelta(
 // only per-day volatile byte is the date line. For GLM-5.3 and MiMo-V2.6 we
 // relocate that whole identifiable env block to the END of the system string so
 // a daily date change only invalidates the tail of the prompt, leaving the long
-// stable prefix intact. Content is preserved byte-for-byte (only position
-// changes).
+// stable prefix intact. The block's content is preserved and the non-empty line
+// multiset is unchanged; the reorder is deterministic and idempotent. It is NOT
+// always a byte-for-byte permutation: when the surviving text does not already
+// end in a newline, exactly one separator "\n" is inserted before the moved
+// block, so the output may be one byte longer than the input.
 //
 // Returns { text, changed }. When the block cannot be identified unambiguously,
 // returns the input unchanged (changed:false). This is a content-preserving
@@ -376,29 +379,73 @@ function countOccurrences(haystack, needle) {
   return count
 }
 
+// Relocate a single identifiable volatile environment block to the end of the
+// string. The block's content is preserved and the non-empty line multiset is
+// unchanged; the reorder is deterministic and idempotent, and is NOT always a
+// byte-for-byte permutation (a single separator "\n" may be inserted before the
+// moved block when the surviving text does not already end in a newline). Two
+// shapes are recognized; both require exactly one `<env>`/`</env>` pair, and
+// anything ambiguous or unrecognized is returned unchanged.
+//   1. Legacy (V1) shape: a single "You are powered by the model named " marker
+//      immediately preceding the block; the marker..`</env>` span is moved.
+//   2. Structural (OpenCode 2.0.26+) shape: no model-name marker; the block is
+//      eligible only when its first non-empty interior line is the OpenCode
+//      environment field "Working directory:" AND it also carries a "Platform:"
+//      field — this scopes relocation to OpenCode's own environment preamble and
+//      never to arbitrary text.
 export function relocateVolatileEnvBlock(text) {
   if (typeof text !== "string") return { text, changed: false }
-  const START = "You are powered by the model named "
   const OPEN = "<env>"
   const CLOSE = "</env>"
-  // Require exactly one of each marker, in order, so an ambiguous or
-  // multiple-block system prompt is never partially reordered. This enforces
-  // the documented contract ("when the block cannot be identified
-  // unambiguously, return unchanged").
-  if (countOccurrences(text, START) !== 1) return { text, changed: false }
+  const START = "You are powered by the model named "
   if (countOccurrences(text, OPEN) !== 1) return { text, changed: false }
   if (countOccurrences(text, CLOSE) !== 1) return { text, changed: false }
-  const startIdx = text.indexOf(START)
   const openIdx = text.indexOf(OPEN)
   const closeIdx = text.indexOf(CLOSE)
-  if (!(startIdx < openIdx && openIdx < closeIdx)) return { text, changed: false }
-  const blockEnd = closeIdx + CLOSE.length
-  const block = text.slice(startIdx, blockEnd)
-  const rest = text.slice(0, startIdx) + text.slice(blockEnd)
+  if (!(openIdx < closeIdx)) return { text, changed: false }
+  // Legacy marker span takes precedence when present (preserves the V1 contract).
+  if (countOccurrences(text, START) === 1) {
+    const startIdx = text.indexOf(START)
+    if (startIdx < openIdx) return relocateRange(text, startIdx, closeIdx + CLOSE.length)
+    // The model-name marker exists but does not precede the block: an ambiguous
+    // legacy shape. Leave it unchanged (prior V1 behavior) rather than falling
+    // through to the structural path.
+    return { text, changed: false }
+  }
+  // Structural shape: the single env block must look like OpenCode's own.
+  const interior = text.slice(openIdx + OPEN.length, closeIdx)
+  if (isOpenCodeEnvInterior(interior)) return relocateRange(text, openIdx, closeIdx + CLOSE.length)
+  return { text, changed: false }
+}
+
+// Move text[startIdx,endIdx) to the end. The moved block's bytes are preserved
+// and the non-empty line multiset is unchanged; the reorder is deterministic and
+// idempotent. When the remaining text does not already end in a newline, a
+// single separator "\n" is inserted before the moved block, so the result may be
+// one byte longer than the input. Returns unchanged when the remaining text is
+// empty.
+function relocateRange(text, startIdx, endIdx) {
+  const block = text.slice(startIdx, endIdx)
+  const rest = text.slice(0, startIdx) + text.slice(endIdx)
   if (rest.trim().length === 0) return { text, changed: false }
   const sep = rest.endsWith("\n") ? "" : "\n"
   const out = rest + sep + block
   return { text: out, changed: out !== text }
+}
+
+// Narrow structural eligibility for OpenCode's own environment block (see
+// RF-OC-033). The block must start with the "Working directory:" field AND carry
+// the "Platform:" field; requiring both scopes relocation to OpenCode's
+// environment preamble and rejects arbitrary text that merely begins with
+// "Working directory:".
+function isOpenCodeEnvInterior(interior) {
+  const lines = interior
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0)
+  if (lines.length === 0) return false
+  if (!lines[0].startsWith("Working directory:")) return false
+  return lines.some((l) => l.startsWith("Platform:"))
 }
 
 // ---------------------------------------------------------------------------

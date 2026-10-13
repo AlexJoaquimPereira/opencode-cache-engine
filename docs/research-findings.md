@@ -631,6 +631,919 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   `auth.json` available — both edit shared state and require explicit
   authorization.
 
+### RF-OC-017 — OpenCode V2 (2.0.26) is a plain `{ id, setup }` plugin model with a `./v2` package entry
+
+- Status: current
+- Verified: 2026-10-10
+- Area: opencode-runtime
+- Fact: The running OpenCode is **v2.0.26** and its V2 plugin API package is
+  **`@opencode/plugin@2.0.25`** (observed at
+  `~/.cache/opencode/packages/opencode-mem@latest/node_modules/@opencode/plugin`).
+  A V2 plugin is a plain object `{ id, setup(ctx) }`; `define()` from
+  `@opencode/plugin` (and `@opencode/plugin/effect`) is the **identity function**
+  (`export function define(plugin){ return plugin }`), so a plugin requires no
+  runtime import. `setup` may return a cleanup callback. Package discovery: an
+  npm plugin declares its V2 entry via the **`"./v2"` export** while V1 uses
+  `"./server"` (working example `opencode-mem` maps `"."`/`"./server"` → V1 and
+  `"./v2"` → V2, and declares `"opencode": { "type": "plugin", "hooks": [...] }`).
+  The V2 user-config key is **`"plugins"`** (renamed from V1 `"plugin"`;
+  `providers`, model `settings` are likewise renamed). The on-disk
+  `@opencode-ai/plugin@1.18.35` exposes a *partial*, older `v2` surface
+  (`./v2/promise`, `./v2/effect`) whose `PluginContext` omits `session`/`event`;
+  the runtime's real context is richer — do **not** target the 1.18.35 types for V2.
+- Evidence: [O]
+- Sources: local — `opencode --version` (`2.0.26`);
+  `.../opencode-mem@latest/node_modules/@opencode/plugin/package.json` (2.0.25) and
+  `dist/promise/plugin.js` (`define` identity); `opencode-mem/package.json`
+  (`exports`, `opencode` field); `~/.config/opencode/opencode.jsonc` (`plugins`).
+  Accessed 2026-10-10.
+- Justifies: the `src/cache-engine-v2.mjs` registration shape and the
+  `package.json` `./v2` export + `opencode` field.
+- Version context: OpenCode 2.0.26; `@opencode/plugin` 2.0.25.
+- Re-verify when: OpenCode changes plugin registration, entry resolution, or the
+  config key.
+- Superseded by: null
+- Notes: `@opencode-ai/plugin` remains the V1 authoring package. The
+  `"opencode"` metadata field (seen on `opencode-mem`/`harness-memory`) is **not
+  required** for discovery: `@slkiser/opencode-quota` and
+  `@tarquinen/opencode-dcp` are configured in the V2 `plugins` list with no
+  `opencode` field and no `"./v2"` export. The `"./v2"` export is the V2 entry
+  convention observed on the V2-capable reference (`opencode-mem`); whether the
+  loader prefers `"./v2"` over `"."`/`"./server"` was not verified in a live
+  session (deferred). `opencode plugin list` reads configuration only and does
+  **not** execute a plugin; local plugins in `~/.opencode/plugins/*.ts` are listed
+  as `local`. Plugin discovery/service binding is **not** fully env-isolatable:
+  with `HOME`/`XDG_*` redirected to a temp tree the runtime still resolved the
+  user's plugin set, and a private `opencode serve` neither accepts `--standalone`
+  nor loaded a local plugin probe — so a package cannot be load-tested without
+  editing shared configuration. The 2.0.26 CLI honors neither `OPENCODE_CONFIG`
+  nor `OPENCODE_CONFIG_DIR` for `opencode plugin list`, which queries the running
+  **managed** service (registered in `<XDG_STATE_HOME>/opencode/service.json`) that
+  owns plugin discovery; a competing `serve --service` risks deregistering it.
+
+### RF-OC-018 — OpenCode V2 hook, event, message and usage shapes
+
+- Status: current
+- Verified: 2026-10-10
+- Area: opencode-runtime
+- Fact: V2 `PluginContext` domains (from `@opencode/plugin@2.0.25`
+  `dist/promise/plugin.d.ts`): `app, location, options, agent, aisdk, command,
+  event, experimental, integration, mcp, model, generate, permission, plugin,
+  provider, reference, rpc, session, shell, skill, storage, tool, vcs, websearch,
+  worktree`. Relevant contracts:
+  - `session.hook(name, cb, options?)` (ModelHooks; `options.providerID` scopes a
+    hook to one provider). Session events: `prompt`, `context`, `compaction`,
+    `generate`, `title`, `model.request`, `http.request`, `http.response`,
+    `retry`, plus experimental `experimental.ws.*`. Inputs are mutable.
+    - `context` input `SessionContext`: `{ sessionID, agent, model: { id,
+      providerID }, system: SystemPart[], messages, options, tools }`.
+      `SystemPart = { type: "text", text }`. `options` (SessionRequestOptions) =
+      typed generation settings plus arbitrary provider options.
+    - `model.request` input `SessionModelRequest`: `{ sessionID, agent, model,
+      kind: "primary"|"compaction"|"title"|"generate", baseURL?, headers:
+      Record<string,string> }`.
+  - `event.subscribe()` → `AsyncIterable<V2Event>`; `session.idle` is
+    `{ type: "session.idle", data: { sessionID } }` and `session.deleted` is
+    `{ type: "session.deleted", durable: {…}, data: { sessionID } }` (session-scoped;
+    use it to drop per-session state).
+  - `session.context({ sessionID })` → `Promise<SessionMessageInfo[]>`; an
+    assistant message is `{ id, type: "assistant", time: { created }, model: {
+    id, providerID }, tokens?: TokenUsageInfo }`; `TokenUsageInfo = { input,
+    output, reasoning, cache: { read, write } }` (matches CacheEngine's
+    normalized usage).
+  - `session.usage.updated` event carries `data.tokens: TokenUsageInfo`.
+- Evidence: [O]
+- Sources: local — `.../@opencode/plugin/dist/promise/{plugin,session,event,aisdk,registration}.d.ts`;
+  `.../@opencode/client/dist/promise/client.d.ts` and
+  `.../generated/types.d.ts` (`SessionMessageAssistant`, `TokenUsageInfo`,
+  `MessageListInput`, `V2Event`). Accessed 2026-10-10.
+- Justifies: `src/cache-engine-v2.mjs` — `<env>`/GPT transforms at `context`,
+  OpenRouter affinity at `model.request`, and usage aggregation from
+  `session.context` on `session.idle`.
+- Version context: `@opencode/plugin` 2.0.25 / OpenCode 2.0.26.
+- Re-verify when: OpenCode changes the session hook names/shapes, the event
+  stream, or the usage/message schema.
+- Superseded by: null
+- Notes: `session.usage.updated` delta-vs-cumulative semantics and
+  `session.context` array ordering are **unverified**; the adapter sorts by
+  `info.time.created` (ties keep input order) and reuses the shared
+  cursor/watermark. `SessionContext` (the `context` hook input) exposes
+  `sessionID`, `model`, `system`, `messages`, `options`, `tools` but **no
+  `kind`**; only `model.request` (`SessionModelRequest`) carries
+  `kind ∈ {primary, compaction, title, generate}` — so the `context` hook cannot
+  filter by request kind. Re-verified 2026-10-11 against the currently installed
+  **`@opencode/plugin@2.0.16`** (same `SessionContext`/`SessionModelRequest`
+  shape as the earlier 2.0.25 observation). **Related test:**
+  `test/cache-engine.test.mjs` → "v2 contract: installed SessionContext has no
+  request-kind field (declaration-level)" pins the declared shape (it does **not**
+  assert which request kinds invoke the `context` hook at runtime). **Implementation
+  inspection (2026-10-11, installed `@opencode/plugin@2.0.16`, resolved at
+  `~/.cache/opencode/packages/@slkiser/opencode-quota@latest/node_modules/@opencode/plugin`):**
+  `dist/promise/adapter.js` is only a promise→Effect forwarder —
+  `session.hook: (name, callback, options) => register(host.session.hook(name, (event) => Effect.promise(() => Promise.resolve(callback(event))), options))`
+  (~L418), where `register` resolves the registration to `{ dispose }` (~L177) and
+  `host` is the runtime-provided plugin host. The package ships **no** local hook
+  registry or dispatch: `dist/promise/session.js`, `dist/promise/registration.js`,
+  `dist/effect/session.js`, and `dist/effect/registration.js` are **0 bytes**, and
+  `dist/host.js` contains no session/hook/kind logic. Dispatch and any request-kind
+  gating are therefore entirely **server-side (the OpenCode runtime)** and are not
+  present in this package. Observed: the adapter neither adds nor strips a `kind`
+  discriminator and forwards the `{ providerID }` scoping option verbatim.
+  **Consequence:** whether auxiliary request kinds (`compaction`/`title`/`generate`)
+  invoke `context` cannot be established from the installed package source and
+  remains **unverified** (it requires the server implementation or a live runtime
+  test). No code change is justified. **Server-side dispatch (observed in the
+  embedded OpenCode 2.0.26 implementation, `@opencode/SessionModelRequest`
+  service):** each session request kind maps to exactly one hook name —
+  `primary → trigger("session","context", …)`, `compaction →
+  trigger("session","compaction", …)`, `generate → trigger("session","generate", …)`,
+  `title → trigger("session","title", …)` — through the trigger helper
+  `r = (name, agent) => (payload, tools) => H.trigger("session", name, { ...payload, agent, tools })`
+  and the per-kind entries
+  `primary: f("primary", i, r("context", i.agent)); compaction: f("compaction", i, r("compaction", i.agent)); generate: f("generate", i, r("generate", i.agent)); title: f("title", i, (u) => H.trigger("session","title", u))`.
+  The payload `p = { sessionID, agent, model, kind }` is assembled in
+  `SessionModelRequest.prepare` (the same structure whose `kind` is exposed on
+  `model.request`). **Consequence:** the `context` hook is invoked only for the
+  `primary` kind; the auxiliary kinds (`compaction`, `generate`, `title`) invoke
+  their own hook names and do **not** invoke `context`. So `onContext` needs no
+  request-kind guard — it is simply not called for auxiliary kinds by this
+  dispatcher. Evidence class: **observed server implementation** (embedded code
+  in the 2.0.26 binary), not a live runtime registration test; actual plugin
+  registration/loading in 2.0.26 remains unverified.
+
+### RF-OC-019 — In an isolated 2.0.26 `run --standalone` flow the runtime delivered `session.usage.updated` but no `session.idle`/`session.deleted`, so the V2 adapter's usage consumer never ran
+
+- Status: current
+- Verified: 2026-10-11
+- Area: opencode-runtime
+- Fact: In a single isolated OpenCode 2.0.26 `opencode run --standalone`
+  session driven by a local mock OpenAI-compatible provider, the plugin runtime
+  delivered 24 event notifications to the adapter's `event.subscribe()` iterator,
+  including `session.usage.updated` (×2), `session.execution.started` /
+  `session.execution.succeeded`, `session.step.started` / `session.step.streamed`
+  / `session.step.ended`, `session.text.started` / `session.text.delta` /
+  `session.text.ended`, `session.inbox.enqueued` / `session.inbox.delivered`,
+  `session.renamed`, `session.instructions.updated`, and `location.shutdown` —
+  but **neither `session.idle` nor `session.deleted`**. In the same session the
+  `context` hook was invoked **once** (the primary request) and `model.request`
+  **twice**; the mock provider received exactly two `POST /v1/chat/completions`
+  requests and returned responses.
+- Evidence: [O]
+- Sources: local isolated test 2026-10-11 — disposable `bubblewrap --unshare-net`
+  project; OpenCode 2.0.26 (`/home/alex/.opencode/bin/opencode`); checkpoint
+  adapter `feature/v2-adapter-checkpoint` @ `1091084`
+  (`src/cache-engine-v2.mjs` sha256 `9dc623a8…`); a plugin probe wrapped
+  `session.hook` and `event.subscribe` and wrote a marker file; the mock provider
+  request log recorded two `/v1/chat/completions` posts and no rejected paths; no
+  usage metrics file was produced.
+- Justifies: `src/cache-engine-v2.mjs` `consumeEvents` filters
+  `ev.type === "session.idle"` (usage) and `ev.type === "session.deleted"`
+  (cleanup). This observation shows neither type fired on this runtime path, so
+  the adapter's usage consumer stayed inert. Contrasts with `RF-OC-018`, which
+  lists `session.idle` as the usage trigger.
+- Version context: OpenCode 2.0.26; `@opencode/plugin` 2.0.16; adapter
+  checkpoint `1091084`.
+- Re-verify when: the adapter's event filters change, OpenCode changes the V2
+  event stream, or a flow that is expected to idle (e.g. an interactive/TUI
+  session) is tested.
+- Superseded by: null
+- Notes: **Directly observed:** the 24 event notifications above and the hook
+  invocation counts. **Adapter behavior established by this test:** its usage
+  consumer did not run and no usage metrics file was written, so usage accounting
+  for this runtime path is **unverified**, not failed universally.
+  **Hypotheses still needing investigation:** `session.idle` / `session.deleted`
+  may be emitted only in other flows (e.g. an interactive/TUI idle, or session
+  deletion), or the runtime may name the usage notification
+  `session.usage.updated` (which carries `data.tokens`) rather than `session.idle`
+  on the `run` path. A single `opencode run --standalone` flow does **not** prove
+  `session.idle` / `session.deleted` are never emitted elsewhere. **Evidence
+  limits:** one flow, mock OpenAI-compatible provider, no real provider traffic,
+  network-isolated; no credentials, prompts, or request bodies were recorded. No
+  adapter code was changed.
+
+### RF-OC-020 — OpenCode 2.0.26 emits `session.usage.updated` per turn with cumulative totals and delivers `session.deleted` to an active subscriber; the V2 adapter can drive its shared history scan from `session.usage.updated`
+
+- Status: current
+- Verified: 2026-10-11
+- Area: opencode-runtime
+- Fact:
+  - `session.usage.updated` payload: `{ id, created, type: "session.usage.updated",
+    data: { sessionID, cost, tokens: { input, output, reasoning, cache: { read,
+    write } } } }`, with **no `durable` block** (volatile). It is emitted by the
+    server `SessionProjector.publishUsage`, which SELECTs the session row's stored
+    totals and publishes them; the row is incremented (`UPDATE … = ${existing} +
+    ${added}`) before publishing, and the client reducer **replaces** the stored
+    session cost/tokens — so the totals are **cumulative session snapshots, not
+    deltas**.
+  - It fires per usage change (observed ~1–2 per turn: the primary request plus an
+    auxiliary/title request), carries a usable `data.sessionID`, and its totals can
+    exceed the sum of `session.context` assistant tokens when auxiliary usage is
+    absent from history.
+  - `session.deleted` is durable (`durable: { aggregateID, seq, version: 2 }`,
+    published by `Session.remove`) and WAS delivered to an **already-active** plugin
+    subscriber when deletion targeted that same long-lived server.
+  - The `event.subscribe` stream is documented **volatile by contract** ("a slow
+    consumer overflows and fails the stream, and events during disconnection are
+    missed") — no replay or ordering guarantee.
+  - In a persistent server process, `usage.updated` arrives with the just-completed
+    assistant already visible in `session.context`; running the shared
+    `scanPage`/`nextProcessedCursor` with one persistent cursor/watermark counts
+    each assistant exactly once, is idempotent across repeated events over unchanged
+    history, and advances only on newly visible messages. Validated with the actual
+    checkpoint adapter: two turns produced exactly two `usage` records (cumulative
+    read 5 → 10; the auxiliary usage event produced none).
+  - `session.idle` is defined and subscribable, but no publisher was found in the
+    readable bundle and it was not emitted in the headless server flows →
+    emission conditions remain **unverified**.
+- Evidence: [O] (server publisher selection/replace + client reducer; isolated
+  long-lived `serve` runtime), [I] (cumulative semantics inferred from both)
+- Sources: installed `@opencode/client@2.0.16`
+  `dist/promise/generated/types.d.ts` (`SessionUsageUpdated`, `SessionDeleted`,
+  `SessionIdle`, `TokenUsageInfo`) and `dist/chunks/*` reducer; embedded OpenCode
+  2.0.26 binary (`SessionProjector.publishUsage`, `Session.remove`, the
+  `event.subscribe` volatile-contract description); isolated `serve` test
+  2026-10-11 (`bubblewrap --unshare-net`, local mock OpenAI-compatible provider)
+  loading the real checkpoint adapter.
+- Justifies: `src/cache-engine-v2.mjs` `consumeEvents` triggering `collectUsage` on
+  `session.usage.updated` (primary) while retaining `session.idle` (secondary); its
+  regression tests in `test/cache-engine.test.mjs`.
+- Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
+  adapter checkpoint `1091084`.
+- Re-verify when: OpenCode changes the V2 event names/payloads or the usage
+  projector, the `event.subscribe` volatility contract, or the deletion emission
+  path.
+- Superseded by: null
+- Notes: **Evidence bounds:** a single mock OpenAI-compatible model, two turns, one
+  deletion path, no real provider traffic. `session.usage.updated` is volatile, so
+  a trigger on it is best-effort (undercount possible, never double-count by design;
+  the event's cumulative totals are intentionally not used for accounting).
+  `session.deleted` delivery was observed once with an active subscriber; other
+  deletion paths (child/subagent removal) are not established. The `session.idle`
+  publisher remains unidentified (likely bytecode/interactive). See `RF-OC-019` for
+  the original observation and `RF-OC-018` for the event/type shapes.
+
+### RF-OC-021 — `ctx.session.context({ sessionID })` returns the complete active history (all messages after the last compaction) and is distinct from the paginated `/message` list
+
+- Status: current
+- Verified: 2026-10-12
+- Area: opencode-runtime
+- Fact: The V2 client `SessionApi.context` op (exposed to plugins as
+  `SessionDomain.context`) maps to the route
+  `/api/session/:sessionID/context`, whose **only** input is `{ sessionID }`
+  (no `limit`/`cursor`/`order`; `SessionContextInput`), returning
+  `SessionMessageInfo[]` (`{ data: [...] }`). The embedded 2.0.26 route
+  description is "Retrieve the active context messages for a session (all
+  messages after the last compaction)". This is **distinct** from the paginated
+  list route `/api/session/:sessionID/message` (`message.list`), which applies
+  `limit: r.query.limit ?? 50` (default), `order` default `"desc"`, and returns
+  `{ data, cursor }`. In an isolated 2.0.26 runtime a 78-message session returned
+  **78** messages from `/context` and **50** (+ `cursor`) from `/message` — so
+  `session.context` is **not** truncated to the 50-message page.
+- Evidence: [O] (route definition in the 2.0.26 binary; client types/impl) and
+  [O] (isolated runtime measurement).
+- Sources: embedded OpenCode 2.0.26 binary (`session.context` route definition,
+  `/api/session/:sessionID/context`); `@opencode/client@2.0.16`
+  `dist/promise/generated/{client,types}.d.ts` (`SessionContextInput` /
+  `SessionContextOutput`) and `dist/chunks/*` (`context` path vs `message` list);
+  isolated `serve` runtime test 2026-10-12 (`bubblewrap --unshare-net`, local mock
+  provider).
+- Justifies: `src/cache-engine-v2.mjs` `collectUsage` scanning the full
+  `session.context` result (the adapter's `Array.isArray(res) ? res : res.data`
+  handling matches the `{ data: [...] }` shape); it resolves the earlier
+  pagination-undercount concern.
+- Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16.
+- Re-verify when: OpenCode changes the `context` route, its message limit, the
+  `/message` default, or the compaction boundary.
+- Superseded by: null
+- Notes: **Accepted accounting limitations** (complementary to `RF-OC-020`): the
+  `context` route returns only "messages after the last compaction", so compaction
+  is the sole truncation boundary — history removed/summarized before a scan is a
+  best-effort **undercount**. The adapter's cursor/watermark are in-memory
+  (restart re-counts), capacity/mark eviction undercounts (mark expiry can
+  recount), `session.usage.updated` is volatile, and same-millisecond watermark
+  ties undercount; exactly-once accounting is not claimed. `RF-OC-018` previously
+  marked the `session.context` array ordering unverified; the adapter sorts by
+  `time.created` regardless, so ordering is handled regardless of the route's
+  default order.
+
+### RF-OC-022 — OpenCode 2.0.26 V2 plugin-management CLI: `plugin add/remove/update` mutate the global configuration; `run` has no `--plugin` flag
+
+- Status: current
+- Verified: 2026-10-12
+- Area: opencode-runtime
+- Fact:
+  - `opencode plugin` subcommands are `list`, `add`, `check`, `update`, `remove`.
+    `add` = "Install a plugin and add it to the global configuration"; `remove` =
+    "Remove a plugin from global configuration"; `check`/`update` operate on
+    installed package plugins. So `add`/`remove`/`update` **mutate the user's
+    global configuration** and must not be used for an isolated test; `list` and
+    `check` are read-only.
+  - `opencode run` has **no `--plugin` flag**. Verified `run` flags:
+    `--standalone`, `--server <url>`, `--continue/-c`, `--session/-s <id>`,
+    `--model/-m`, `--agent`, `--format <choice>`, `--file/-f`, `--title`,
+    `--thinking`, `--auto`.
+  - Top-level flags: `--standalone`, `--server <url>`, `--auto`, `--continue/-c`,
+    `--session/-s <id>`, `--prompt`; globals `--log-level <choice>`,
+    `--print-logs`, `--help/-h`, `--version/-v`, `--wizard`,
+    `--completions <shell>`.
+  - `opencode serve` flags: `--hostname <str>`, `--port <int>`, `--cors <str>`,
+    `--service`, `--stdio`.
+  - Config/plugin env vars present: `OPENCODE_CONFIG`, `OPENCODE_CONFIG_CONTENT`,
+    `OPENCODE_CONFIG_DIR`, `OPENCODE_CONFIG_PROJECT_DISABLE`,
+    `OPENCODE_SERVER_PASSWORD`, `OPENCODE_CLIENT`.
+  - Installed `@opencode/plugin` / `@opencode/client` = **2.0.16** (reconfirmed
+    2026-10-12; `RF-OC-017`/`RF-OC-018` cited 2.0.25 earlier).
+- Evidence: [O]
+- Sources: local — `opencode --version`, `opencode --help`, `opencode plugin
+  --help`, `opencode run --help`, `opencode serve --help` on the installed
+  v2.0.26 binary; env-var names grepped from the binary; installed
+  `@opencode/plugin`/`@opencode/client` `package.json` (2.0.16). Accessed
+  2026-10-12.
+- Justifies: `docs/implementation-plan-v2.md` §2D.0 (verified command surface)
+  and §2D.2 (Gate 0 isolation); the prohibition on `plugin add/remove/update`
+  during an isolated V2 loader test.
+- Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16.
+- Re-verify when: the CLI help/subcommands change, plugin management moves out
+  of the global configuration, or the `run`/`serve` flags change.
+- Superseded by: null
+- Notes: Partially supersedes the **operational** conclusion in `RF-OC-017`'s
+  Notes ("a private `opencode serve` … loaded a local plugin probe … so a package
+  cannot be load-tested without editing shared configuration"). Later isolated
+  runs (2026-10-11/12; `RF-OC-019`–`RF-OC-021`) showed a private `opencode serve
+  --hostname 127.0.0.1 --port <p>` inside a `bubblewrap` namespace with a private
+  `HOME` **did** discover and load project-local `.opencode/plugins/*.ts` and run
+  `setup`, and `OPENCODE_SERVER_PASSWORD` lets clients attach to that private
+  server. `RF-OC-017`'s remaining true point stands: package discovery is not
+  fully env-isolatable via `HOME`/`XDG_*` alone, and a competing `serve --service`
+  could deregister the user's managed service — so isolated runs must avoid
+  `--service` and the managed port. Gate 1 (2026-10-12) tested whether the loader
+  resolves a package **subpath** (`<pkg>/v2`) from a project-local install: the
+  direct `opencode-cache-engine/v2` config entry failed under the offline setup
+  (see `RF-OC-023`). That result does **not** establish universal impossibility of
+  direct subpath resolution; online-install behavior and alternative loader
+  configurations remain untested.
+
+### RF-OC-023 — OpenCode 2.0.26 treats a config `plugins` entry as an npm package spec: the direct subpath `opencode-cache-engine/v2` does not resolve via the package `exports` map (Gate 1 FAIL, offline)
+
+- Status: current
+- Verified: 2026-10-12
+- Area: opencode-runtime
+- Fact:
+  - With the package offline-installed into the disposable project's
+    `node_modules` and registered directly in config as
+    `plugins: ["opencode-cache-engine/v2"]` (project `.opencode/opencode.json`
+    **and** the private global config; **no shim**), the OpenCode 2.0.26 loader
+    **read** the entry but used its **npm-install path** instead of resolving the
+    subpath from the project or the `exports` map. Server log (sanitized):
+    `WARN "failed to load plugin" target=opencode-cache-engine/v2
+    cause="NpmInstallFailedError (cause: Error: An unknown git error occurred)"`
+    (twice) and `WARN "failed to check plugin update"
+    target=opencode-cache-engine/v2 cause="NpmInstallFailedError
+    (cause: Package is not installed: opencode-cache-engine/v2)"`.
+  - No plugin identity and no adapter initialization side effect were observed
+    (the isolated `CACHE_ENGINE_METRICS_FILE` directory was not created) — the
+    plugin never loaded.
+  - A client `GET /api/config` returned both config documents including
+    `"plugins":["opencode-cache-engine/v2"]`; OpenCode's own `models.dev` fetch
+    failed with `getaddrinfo ETIMEOUT` (expected under the isolated network
+    namespace).
+- Evidence: [O]
+- Sources: isolated Gate 1 run 2026-10-12 — `bubblewrap --unshare-net`, private
+  HOME/XDG, OpenCode 2.0.26 `serve`; tarball `opencode-cache-engine-0.7.1.tgz`
+  from the checkpoint worktree; offline `npm install`; direct config entry; no
+  shim; server-log lines; no adapter side effect.
+- Justifies: `docs/implementation-plan-v2.md` §2D.3 (Gate 1 result) and the §2D.4
+  (Gate 1b) fallback.
+- Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
+  adapter checkpoint `bc01c6b`.
+- Re-verify when: OpenCode changes plugin resolution to honor local
+  package/subpath resolution, the `plugins` config-entry semantics change, or an
+  online-install variant is tested.
+- Superseded by: null
+- Notes: **Observed:** the loader used its npm-install path for the config entry;
+  `NpmInstallFailedError`; no identity/side effect. **Gate verdict:** FAIL under
+  §2D.3 for the tested **offline** setup. **Qualification:** the offline install
+  failure does **not** establish universal impossibility of direct subpath loading
+  under every configuration (online-install behavior and alternate loader
+  configurations remain untested); this is neither PASS nor PARTIAL, and no
+  successful `exports`-map resolution is claimed. **Not executed:** Gate 1b and
+  Gates 2–6. **Isolation/cleanup:** Gate 0 invariants re-verified (distinct
+  network namespace; `/proc/net/dev` = `lo` only; no default route; host
+  `127.0.0.1:49374` listening with the sandbox connection refused); disposable
+  artifacts removed; no test process remained; host managed service unchanged;
+  branch/HEAD/status and `package-lock.json` unchanged.
+
+### RF-OC-024 — OpenCode 2.0.26 loads a project-local shim that re-exports `opencode-cache-engine/v2`, resolving the subpath via the project `node_modules` exports map (Gate 1b PASS, shim route only)
+
+- Status: current
+- Verified: 2026-10-12
+- Area: opencode-runtime
+- Fact:
+  - In an isolated OpenCode 2.0.26 runtime with the package offline-installed
+    into the disposable project's `node_modules`, a **single** project-local
+    plugin file `.opencode/plugins/v2-entry.ts` containing
+    `export { default } from "opencode-cache-engine/v2"` was **discovered and
+    loaded** by the loader — server log: `INFO msg="loading plugin"
+    id=…/project/.opencode/plugins/v2-entry.ts
+    entrypoint=file:///…/v2-entry.ts`. No direct `plugins` config entry and no
+    other shim were present.
+  - The adapter's initialization side effect was observed: the isolated
+    `CACHE_ENGINE_METRICS_FILE` directory was created (adapter `setup` ran),
+    demonstrating the subpath import resolved from the shim.
+  - No shim-related load/import error occurred; the only server error was
+    OpenCode's own `models.dev` fetch failing with `getaddrinfo ETIMEOUT`
+    (expected under the isolated network namespace).
+- Evidence: [O]
+- Sources: isolated Gate 1b run 2026-10-12 — `bubblewrap --unshare-net`, private
+  HOME/XDG, OpenCode 2.0.26 `serve`; tarball `opencode-cache-engine-0.7.1.tgz`
+  from the checkpoint worktree; offline `npm install`; one local shim file;
+  loader log line; adapter metrics-dir side effect.
+- Justifies: `docs/implementation-plan-v2.md` §2D.4 (Gate 1b) result and its
+  PARTIAL classification of the shim route.
+- Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
+  adapter checkpoint `bc01c6b`.
+- Re-verify when: OpenCode changes local plugin discovery/loading or module
+  resolution, or the package `exports` map changes.
+- Superseded by: null
+- Notes: **Gate 1b verdict: PASS** for the narrow shim test only.
+  **Qualification:** this is **partial evidence for V2 integration** and does
+  **not** overturn Gate 1's direct-entry FAIL (`RF-OC-023`), nor show the loader
+  accepts a subpath **config entry**. It does **not** establish hook invocation,
+  provider-policy transformations, usage accounting, or preview readiness (none
+  were exercised). **Isolation/cleanup:** Gate 0 invariants re-verified (distinct
+  network namespace; `/proc/net/dev` = `lo` only; no default route; host
+  `127.0.0.1:49374` listening with the sandbox connection refused); disposable
+  artifacts removed; no test process remained; host managed service unchanged;
+  branch/HEAD/status and `package-lock.json` unchanged. **Not executed:** Gates
+  2–6.
+
+### RF-OC-025 — Isolated Gate 2/Gate 3 run: the local shim loads, `setup(ctx)` runs, and `context`/`model.request` are actually dispatched (shim route; neutral family)
+
+- Status: current
+- Verified: 2026-10-12
+- Area: opencode-runtime
+- Fact:
+  - **Gate 2 (discovery + `setup(ctx)`) — PASS:** in an isolated OpenCode 2.0.26
+    runtime (`opencode run --standalone`, `bubblewrap --unshare-net`, private
+    HOME/XDG) with the package offline-installed and the single local plugin file
+    `.opencode/plugins/v2-entry.ts` (no direct `plugins` config entry), the loader
+    logged `loading plugin … v2-entry.ts`, `setup(ctx)` executed (adapter-ready
+    log `[cache-engine-v2] opencode-cache-engine V2 adapter ready` with
+    `CACHE_ENGINE_DEBUG=1`), and the isolated `CACHE_ENGINE_METRICS_FILE`
+    directory/file were created.
+  - **Gate 3 (hook installation + invocation) — PASS:** a counting wrapper that
+    imports the resolved specifier reported registration
+    `hooks=["context","model.request"]`, `subscribeCalls=1`; on one neutral turn
+    (`mock/synthetic`) the server **actually dispatched** the hooks — `context`
+    invoked once and `model.request` invoked twice — and the loopback mock
+    received two `POST /v1/chat/completions` (primary + auxiliary); the turn
+    completed with exit code 0.
+  - No plugin/loader error; no transform is expected for a neutral family
+    (provider-policy transform behavior is Gate 4, not tested).
+- Evidence: [O]
+- Sources: isolated Gate 2/Gate 3 run 2026-10-12 — `bubblewrap --unshare-net`,
+  private HOME/XDG, OpenCode 2.0.26; tarball `opencode-cache-engine-0.7.1.tgz`
+  from the checkpoint worktree; offline `npm install`; one local
+  shim/counting-wrapper file; loader log; wrapper marker; mock request log.
+- Justifies: `docs/implementation-plan-v2.md` §2D.5/§2D.6 results and the plan's
+  Gate 2/Gate 3 verdicts on the shim route.
+- Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
+  adapter checkpoint `bc01c6b`.
+- Re-verify when: OpenCode changes plugin discovery/loading, the session hook
+  names/dispatch, or the event subscription mechanism.
+- Superseded by: null
+- Notes: **Scope:** demonstrates **shim-based initialization** and
+  **policy-independent hook dispatch** only. It does **not** establish direct
+  package-entry (`plugins: ["opencode-cache-engine/v2"]`) support
+  (Gate 1 = FAIL; `RF-OC-023`), provider-policy transformation (Gate 4),
+  usage-accounting correctness (Gate 5), or production readiness. The metrics
+  record's accounting content was not evaluated. **Isolation/cleanup:** Gate 0
+  invariants re-verified (distinct network namespace; `/proc/net/dev` = `lo`
+  only; no default route; host `127.0.0.1:49374` listening with the sandbox
+  connection refused); disposable artifacts removed; no test process remained;
+  host managed service unchanged; branch/HEAD/status and `package-lock.json`
+  unchanged. **Not executed:** Gates 4–6.
+
+### RF-OC-026 — Source-level trace of Gate 4: the OpenAI wire fields are `prompt_cache_key`/`prompt_cache_options`, and OpenCode 2.0.26 pre-sets `X-Session-Id`/`promptCacheKey`, confounding the Gate 4 observables
+
+- Status: current
+- Verified: 2026-10-12
+- Area: opencode-runtime
+- Fact:
+  - Adapter mutation path: `src/cache-engine-v2.mjs` `onContext` (GPT block)
+    mutates the `context`-hook `event.options` (`SessionRequestOptions =
+    DeepMutable<GenerationOptionsFields> & Record<string, unknown>`,
+    `@opencode/plugin@2.0.16` `dist/promise/session.d.ts:21`) via the
+    `gptCacheOptionFieldNames` / `gptCacheOptionsDelta` helpers in
+    `src/cache-engine-core.mjs`.
+  - Embedded OpenCode 2.0.26 request construction builds the model request with a
+    session-derived `promptCacheKey` (`promptCacheKey: /^ses_[0-9a-f]{64}$/.test(fH)
+    ? fH.slice(4) : fH`) and HTTP headers including `"x-session-affinity": fH` and
+    `"X-Session-Id": fH` (plus `x-opencode-session-id`, `x-opencode-project`,
+    `x-opencode-session`). The literal lowercase `x-session-id` does **not**
+    appear in the binary; OpenCode emits `X-Session-Id`.
+  - Wire serialization maps camel→snake: `prompt_cache_key: … i.promptCacheKey ??
+    e.promptCacheKey` and `prompt_cache_options: … { mode, ttl }`. The on-wire GPT
+    fields are therefore **`prompt_cache_key` / `prompt_cache_options`**, not
+    camelCase.
+  - Adapter `onModelRequest` checks a pre-existing session header
+    **case-insensitively** (`name.toLowerCase() === "x-session-id"`), which
+    matches OpenCode's `X-Session-Id`, so it **declines to attach** — matching the
+    Gate 4 boundary telemetry (`headerPresent:true, headerAttached:false,
+    headerSource:"preexisting"`).
+- Evidence: [O]
+- Sources: repository `src/cache-engine-v2.mjs` / `src/cache-engine-core.mjs`;
+  installed `@opencode/plugin@2.0.16` `dist/promise/session.d.ts`; embedded
+  OpenCode 2.0.26 binary strings (request-header build, `promptCacheKey` from the
+  session, `prompt_cache_key`/`prompt_cache_options` serialization, model catalog
+  `duo-chat-gpt-6-luna`). Read-only source inspection 2026-10-12; **no runtime
+  executed**.
+- Justifies: `docs/implementation-plan-v2.md` §2D.7 Gate 4 criteria (corrected
+  wire fields + adapter-off/on controls) and the Gate 4 INCONCLUSIVE verdict.
+- Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
+  adapter checkpoint `bc01c6b`.
+- Re-verify when: OpenCode changes request construction/serialization or the
+  session headers it pre-sets, or the transport packages change.
+- Superseded by: null
+- Notes: **Consequence for Gate 4:** the first run's mock recorded camelCase body
+  fields (`promptCacheKey`/`promptCacheOptions`), so their absence is a **harness
+  detection mismatch**, not evidence of non-propagation; and because OpenCode
+  pre-sets `promptCacheKey`/`X-Session-Id`, presence alone is **not attributable**
+  to the adapter. **No adapter defect was confirmed;** Gate 4 remains
+  **INCONCLUSIVE (limited/unverified)**. Proposed controls: adapter-off vs
+  adapter-on, checking wire fields `prompt_cache_key`/`prompt_cache_options`
+  (discriminator: `prompt_cache_options` only in the adapter-on run) and
+  case-sensitive lowercase `x-session-id` separately from `X-Session-Id`; the
+  `model.request` `kind` (per `RF-OC-018`) discriminates primary vs auxiliary,
+  leaving the `gpt-6-luna` purpose **unconfirmed**. Limitations: the binary is the
+  embedded, opaque/minified implementation, so the trace is observed behavior, not
+  a formal spec.
+
+### RF-OC-027 — Corrected Gate 4 control run: GPT wire fields and adapter-attributed session header remain unverified; the wire session header is lowercase in both controls
+
+- Status: current
+- Verified: 2026-10-12
+- Area: opencode-runtime
+- Fact:
+  - Corrected control run (fresh disposable project; `bubblewrap --unshare-net`,
+    private HOME/XDG; offline tarball install; loopback mock; **OFF** = empty
+    `.opencode/plugins/`, **ON** = the adapter via the tested project-local shim;
+    identical providers/models/mock/sandbox). Presence-only evidence.
+  - **GPT (`openai` / `gpt-5.6`):** the mock body had **neither
+    `prompt_cache_key` nor `prompt_cache_options` in either the OFF or ON run**,
+    while the ON adapter telemetry reported `cache-options`
+    (`policy=gpt56, transport=promptCacheKey, keyInjected=true`). The required
+    discriminator (`prompt_cache_options` only ON) was **not** met.
+  - **OpenRouter (`openrouter` / `z-ai/glm-5.3`):** case-sensitive raw headers
+    showed lowercase `x-session-id` present in **both** OFF and ON, and
+    `X-Session-Id` absent in both; the ON adapter reported `headerPresent=true,
+    headerAttached=false, headerSource="preexisting"`.
+  - **Neutral (`mock` / `synthetic`):** no GPT cache fields; lowercase
+    `x-session-id` present in both (OpenCode-supplied).
+  - **Request kind (ON):** the marker recorded `model.request kind=title` and
+    `kind=primary` per turn (3 each) — the `gpt-6-luna` requests are auxiliary
+    **title** requests (established via `kind`, not model-name inference).
+- Evidence: [O]
+- Sources: isolated corrected Gate 4 run 2026-10-12 (`bubblewrap --unshare-net`;
+  OpenCode 2.0.26; offline tarball; mock recording presence-only snake_case body
+  fields and case-sensitive raw header names; ON adapter telemetry to
+  `CACHE_ENGINE_METRICS_FILE`). No runtime in this documentation task.
+- Justifies: `docs/implementation-plan-v2.md` §2D.7 corrected Gate 4 outcomes;
+  corrects `RF-OC-026`'s header interpretation.
+- Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
+  adapter checkpoint `d5bd3ab`.
+- Re-verify when: the provider route/serialization changes, OpenCode changes the
+  session headers it pre-sets, or the transport packages change.
+- Superseded by: null
+- Notes: **Correction to `RF-OC-026`:** on the wire the session header is observed
+  **lowercase** (`x-session-id`) in **both** controls — the HTTP client normalizes
+  header-name case — so casing **cannot** establish whether OpenCode or the
+  adapter supplied it. **No adapter defect was confirmed.** **Hypotheses
+  (unconfirmed):** (1) the GPT fields do not serialize on the
+  `@ai-sdk/openai-compatible` route and would require the `@ai-sdk/openai`/Azure
+  SDK path; (2) OpenCode's pre-set session header engages the adapter's
+  existing-header guard, making adapter-added affinity unobservable in this route.
+  **Proposed follow-ups:** validate the GPT fields on the OpenAI/Azure SDK path;
+  determine a safe way to demonstrate adapter-added OpenRouter affinity, or
+  document the guard limitation instead of forcing a positive result. **Verdicts:**
+  GPT INCONCLUSIVE, affinity INCONCLUSIVE, neutral passivity PASS (body scope),
+  kind PASS, **overall Gate 4 NOT PASS**. Gate 5 / Gate 6 not run.
+
+### RF-OC-028 — Finalized Gate 4 test design: the GPT cache fields require the `@ai-sdk/openai` (or Azure) SDK route; OpenRouter affinity splits into an integration check and an existing unit-level fallback
+
+- Status: current
+- Verified: 2026-10-12
+- Area: opencode-runtime
+- Fact:
+  - OpenCode 2.0.26 selects the provider SDK from the provider's `npm` (a mapping
+    table routes `@ai-sdk/openai` to a bundled `@opencode/ai/providers/…`; the
+    provider SDKs are bundled in the binary), and selects the API type via
+    `Im(modelID) => catalog[modelID]?.openaiApiType ?? "chat"` (default `chat`).
+    The OpenAI/Azure SDK serializes camel→snake cache options
+    (`prompt_cache_key`, `prompt_cache_options`); the `@ai-sdk/openai-compatible`
+    route does **not** emit them.
+  - The adapter mutation stays at `src/cache-engine-v2.mjs` `onContext` (mutates
+    `event.options`) via `gptCacheOptionFieldNames`/`gptCacheOptionsDelta` in
+    `src/cache-engine-core.mjs`.
+  - Adapter `onModelRequest` adds `x-session-id` for providerID `openrouter` +
+    GLM/MiMo **only when no session header is already present** (case-insensitive
+    check); OpenCode pre-sets a session header (lowercased on the wire by the HTTP
+    client), so the guard prevents attachment on the integration route.
+- Evidence: [O] (source tracing), [U] (runtime behavior of the corrected route)
+- Sources: repository `src/cache-engine-v2.mjs` / `src/cache-engine-core.mjs`;
+  embedded OpenCode 2.0.26 binary (`openaiApiType` selector, npm→SDK mapping,
+  `prompt_cache_key`/`prompt_cache_options` serialization);
+  `test/cache-engine.test.mjs` existing affinity unit test.
+- Justifies: `docs/implementation-plan-v2.md` §2D.7 finalized criteria; keeps
+  Gate 4 **NOT PASS**.
+- Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
+  adapter checkpoint `d5bd3ab`.
+- Re-verify when: OpenCode changes SDK/API-type selection or the OpenAI/Azure
+  serialization, or the session headers it pre-sets.
+- Superseded by: null
+- Notes: **Confirmed (source tracing):** the wire field names and the SDK/API-type
+  selection mechanism; the affinity guard behavior. **Still to verify (runtime):**
+  that the GPT fields serialize on the `@ai-sdk/openai` chat route, that V2
+  `context` `options` reach the SDK provider options, and the integration
+  preservation observation. **Test design:** GPT case uses a custom
+  `npm: "@ai-sdk/openai"` provider (`providerID=openai`, model `gpt-5.6`, loopback
+  mock `POST /v1/chat/completions`) with adapter-off/on; PASS requires
+  `prompt_cache_options` present **only** ON. Affinity splits into (1) integration
+  preservation/reach (mock; header presence is **not** attribution) and (2) the
+  existing unit-level fallback test. Gate 4 stays **NOT PASS** until the revised
+  positive criteria are satisfied. No runtime executed for this finding; no
+  adapter defect confirmed.
+
+### RF-OC-029 — Corrected Gate 4 run 3 (isolated): OpenCode selects the Responses API for `openai`/`gpt-5.6`, whose body carries `prompt_cache_key` but not `prompt_cache_options`; OpenRouter fallback unit test passes
+
+- Status: current
+- Verified: 2026-10-12
+- Area: opencode-runtime
+- Fact:
+  - Isolated run (fresh disposable; `bubblewrap --unshare-net`; private HOME/XDG;
+    offline tarball; loopback mock; OFF = empty `.opencode/plugins/`, ON = adapter
+    via the project-local shim; identical providers/models/mock/sandbox).
+  - **GPT route selection:** with a custom provider `npm: "@ai-sdk/openai"`
+    (`providerID=openai`, model `gpt-5.6`, loopback base URL), OpenCode sent
+    **`POST /v1/responses`** (the **Responses API**), not `/v1/chat/completions`.
+    The mock implemented chat-completions only, so the Responses turn did not
+    parse (`Error: Invalid openai/openai-responses stream event`); the **sent
+    request body was still captured**.
+  - **GPT body (presence only):** `prompt_cache_key` present in **both** OFF and
+    ON (OpenCode pre-set); `prompt_cache_options` present in **neither**. The
+    adapter's ON telemetry still reported `cache-options` (`policy=gpt56,
+    transport=promptCacheKey, keyInjected=true`). The required discriminator
+    (`prompt_cache_options` only ON) was **not** met; `prompt_cache_options`
+    appears in a chat-completions serialization (`prompt_cache_key:…,
+    prompt_cache_retention:…, prompt_cache_options:{mode,ttl}`) and was not emitted
+    on the Responses route.
+  - **OpenRouter integration (presence only):** lowercase `x-session-id` present in
+    **both** OFF and ON; ON telemetry `headerPresent=true, headerAttached=false,
+    headerSource="preexisting"` — the pre-existing (OpenCode) header is preserved
+    and delivered, and the adapter does not duplicate it.
+  - **OpenRouter adapter fallback (unit-level):** the existing test in
+    `test/cache-engine.test.mjs` — "v2 adapter: model.request adds x-session-id
+    only for OpenRouter GLM/MiMo" — **passes** (1/1): the handler adds the
+    lowercase `x-session-id` for an eligible OpenRouter GLM/MiMo request with no
+    pre-existing header, and preserves a pre-existing header.
+  - **Neutral passivity:** `mock/synthetic` body carried no cache fields in either
+    control; the lowercase session header was present in both (OpenCode-supplied).
+  - **`kind`:** the ON marker recorded `model.request kind=title` and
+    `kind=primary`, confirming the auxiliary-title vs primary distinction.
+- Evidence: [O]
+- Sources: isolated corrected Gate 4 run 2026-10-12 (`bubblewrap --unshare-net`;
+  OpenCode 2.0.26; offline tarball from checkpoint `d5bd3ab`; mock recording
+  request **path** + presence-only snake_case body fields + case-sensitive raw
+  header names; adapter telemetry to `CACHE_ENGINE_METRICS_FILE`);
+  `test/cache-engine.test.mjs`.
+- Justifies: `docs/implementation-plan-v2.md` §2D.7 route correction and Gate 4
+  outcomes; Gate 4 remains **NOT PASS**.
+- Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
+  adapter checkpoint `d5bd3ab`.
+- Re-verify when: OpenCode changes model→API-type selection (chat vs responses),
+  its OpenAI/Azure serialization, or the session headers it pre-sets; or when a
+  chat-route GPT-5.6 path or a Responses-capable mock is used.
+- Superseded by: null
+- Notes: **Confirmed:** OpenCode selects the **Responses API** for
+  `openai`/`gpt-5.6`; the Responses body carries `prompt_cache_key` (also pre-set
+  by OpenCode) but **not** `prompt_cache_options`; the OpenRouter integration
+  preserves OpenCode's header; the adapter fallback unit test passes. **Unresolved
+  boundary:** whether V2 `context` options reach the OpenAI SDK provider options on
+  the Responses route, and whether `prompt_cache_options` is a chat-only field —
+  not isolable here because the Responses stream was not implemented (turn
+  unparsed). **No adapter defect confirmed.** Open questions: can a GPT-5.6-policy
+  model be forced onto the **chat** route; and does a Responses-capable mock show
+  the adapter's options reaching the wire. Verdicts: GPT INCONCLUSIVE, OpenRouter
+  integration PASS (preservation; not attribution), adapter fallback PASS
+  (unit-level), neutral passivity PASS (body scope), kind PASS, **overall Gate 4
+  NOT PASS**. Gate 5 / Gate 6 not run.
+
+### RF-OC-030 — The OpenAI-compatible provider decodes provider options through schema `A = { user, reasoningEffort, textVerbosity, strictJsonSchema }`, stripping the GPT cache fields; the positive GPT criterion must use an OpenAI/Azure schema that accepts `promptCacheKey`
+
+- Status: current
+- Verified: 2026-10-12
+- Area: opencode-runtime
+- Fact:
+  - The `@opencode/ai/providers/openai-compatible` provider's `getArgs` decodes
+    provider options via `KI({provider, providerOptions, schema:A})`, merging
+    the `"openai-compatible"` (deprecated), `"openaiCompatible"`, and
+    `this.providerOptionsName` namespaces — **each decoded through schema `A`**:
+    `var A = Le({ user: ae().optional(), reasoningEffort: ae().optional(),
+    textVerbosity: ae().optional(), strictJsonSchema: Ry().optional() })`.
+  - `KI({provider:e, providerOptions:t, schema:r})` returns `undefined` when
+    `t?.[e]` is absent; otherwise it decodes `t[e]` through `r` and returns the
+    **decoded** value (or throws `invalid <e> provider options`). Schema `A`
+    accepts only the four keys above — **no** `prompt_cache_key`,
+    `prompt_cache_options`, `promptCacheKey`, or `promptCacheOptions`.
+    Consequently any cache field (and any synthetic marker) placed under those
+    namespaces on this route is not carried into the request body.
+  - A **different** (OpenAI/Responses-style) provider-options schema **does**
+    include `promptCacheKey` (camel, `ae().nullish()`); the OpenAI SDK serializes
+    it to the wire `prompt_cache_key`. No located schema includes
+    `promptCacheOptions`.
+- Evidence: [O] (embedded 2.0.26 source: schema `A`; `KI`; the openai-compatible
+  `getArgs` three-namespace merge) / [U] (`promptCacheOptions` support)
+- Sources: embedded OpenCode 2.0.26 binary — openai-compatible provider `getArgs`,
+  `function KI({provider,providerOptions,schema})`, and
+  `var A=Le({user,reasoningEffort,textVerbosity,strictJsonSchema})`. Read-only
+  inspection 2026-10-12; no runtime executed.
+- Justifies: `docs/implementation-plan-v2.md` §2D.7 corrected GPT criterion
+  (OpenAI/Azure route; drop `promptCacheOptions`; wire-level adapter-off/on).
+- Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
+  adapter checkpoint `d5bd3ab`.
+- Re-verify when: OpenCode changes the openai-compatible provider-options schema
+  (`A`) or the `KI` decode, or adds a schema that accepts the cache options.
+- Superseded by: null
+- Notes: **Verified:** the openai-compatible route **cannot** carry the GPT cache
+  fields (schema `A` strips them); OpenCode reads provider options only as
+  schema-decoded namespace slices, not verbatim objects. **Consequence:** the
+  plan's prior `prompt_cache_options` discriminator is **not** a supported
+  positive criterion and is **removed**; the positive GPT criterion must be
+  demonstrated on an OpenAI/Azure SDK route whose schema accepts `promptCacheKey`,
+  distinguished at the **wire level** from OpenCode's pre-existing
+  session-derived key (telemetry `keyInjected=true` is not wire-level proof).
+  **Unresolved:** whether any provider-options schema accepts
+  `promptCacheOptions`/`prompt_cache_options`; and the exact
+  `config.provider`/`providerOptionsName` for a custom provider (moot for the
+  openai-compatible route). **Gate 4 remains NOT PASS.** Gate 5 / Gate 6 not run.
+
+### RF-OC-031 — Gate 4 closure: on the OpenAI/Azure route OpenCode pre-populates a session-derived `prompt_cache_key`, so the presence-only adapter-off/on comparison cannot attribute the field to the adapter
+
+- Status: current
+- Verified: 2026-10-12
+- Area: opencode-runtime
+- Fact:
+  - The OpenAI/Azure SDK provider-options schema accepts `promptCacheKey`
+    (camel), which the SDK serializes to the wire field `prompt_cache_key`.
+    Separately, `SessionModelRequest.prepare` sets a **session-derived
+    `promptCacheKey` on the request** for every request
+    (`promptCacheKey: /^ses_[0-9a-f]{64}$/.test(fH) ? fH.slice(4) : fH`).
+  - Prior isolated evidence (adapter **off**, `openai`/`gpt-5.6`, Responses route)
+    already showed `prompt_cache_key` present in the outbound body, so an
+    adapter-off/on **presence-only** comparison cannot attribute the field to the
+    adapter. `promptCacheOptions` was not established in any inspected
+    provider-options schema.
+  - The final Phase 1 attempt (identify a discriminating OpenAI/Azure route)
+    **stopped before launching a new runtime**; no new test was run. Building a
+    Responses-capable mock or re-running would reproduce the non-discriminating
+    result.
+- Evidence: [O] (source: request-build `promptCacheKey`; OpenAI schema accepting
+  `promptCacheKey`; prior run's OFF body containing the field) / [U] (attribution
+  of the wire value to the adapter).
+- Sources: embedded OpenCode 2.0.26 binary (`SessionModelRequest.prepare`
+  `promptCacheKey`; OpenAI provider-options schema; wire serialization
+  `prompt_cache_key`); prior isolated run evidence; `RF-OC-030`. Read-only
+  inspection/analysis 2026-10-12.
+- Justifies: `docs/implementation-plan-v2.md` §2D.7 result and §2D.13
+  (Gate 4 closure / next phase).
+- Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
+  adapter checkpoint `d5bd3ab`.
+- Re-verify when: a supported route is found where OpenCode does not pre-populate
+  `promptCacheKey`, or a privacy-safe value-free attribution mechanism becomes
+  available.
+- Superseded by: null
+- Notes: **Consequence:** the GPT positive criterion is **NOT PASS — attribution
+  unresolved**; no adapter defect is claimed. **Close the investigation** (no
+  further namespace or presence-only cache-key tests under the current
+  acceptance criteria); reopen only with a genuinely discriminating, privacy-safe
+  measurement. `promptCacheOptions` remains **[U]** and is not a required
+  criterion. Preserve Gate 2/Gate 3 (loading/setup/hook-execution) evidence and
+  the OpenRouter header findings as preservation/fallback evidence; keep the
+  best-effort accounting limitations (no exactly-once claim). Gates 5/6 remain
+  unrun and unauthorized.
+
+### RF-OC-032 — OpenCode's `PluginHooks.trigger` returns the same payload object, so V2 `context`-hook mutations of `options` survive dispatch and become the request's generic `providerOptions`
+
+- Status: current
+- Verified: 2026-10-12
+- Area: opencode-runtime
+- Fact:
+  - `@opencode/PluginHooks` registers hooks under `<scope>.<name>` and
+    `trigger(scope, name, payload)` iterates the matching callbacks, invokes each
+    `callback(payload)` with **the same object**, and **returns that same
+    `payload`** — no copy, decode, reconstruct, or filter. In-place mutations
+    (e.g., of `options`) are therefore preserved.
+  - `SessionModelRequest.prepare` calls the producer
+    `l = (payload,tools) => H.trigger("session","context", {...payload, agent, tools})`
+    and receives `w`; it then splits `oH = Object.entries(w.options)` into `K`
+    (generation settings, keys in `_s`) and `$H` (all other keys = provider
+    options), and builds the request with `providerOptions: $H`.
+  - Therefore a V2 `context`-hook addition to `options` becomes the request's
+    generic (flat) `providerOptions`; it is then subject to **provider-side**
+    schema decoding (`KI`, `RF-OC-030`), which is where cache fields are dropped
+    on the openai-compatible route.
+- Evidence: [O]
+- Sources: embedded OpenCode 2.0.26 binary (`@opencode/PluginHooks`
+  `register`/`trigger`; `SessionModelRequest.prepare` `options` split). Read-only
+  inspection 2026-10-12; no runtime executed.
+- Justifies: `docs/implementation-plan-v2.md` §2D.7 (forwarding boundary) and
+  §2D.13.
+- Version context: OpenCode 2.0.26; adapter checkpoint `d5bd3ab`.
+- Re-verify when: OpenCode changes the plugin hook registry/dispatch or the
+  request-options split.
+- Superseded by: null
+- Notes: Confirms the loss on the openai-compatible route is **provider-side
+  schema processing** (`RF-OC-030`), not hook dispatch. Complements `RF-OC-031`
+  (OpenAI-route pre-population of `promptCacheKey`).
+
+### RF-OC-033 — GLM/MiMo `<env>` relocation is a no-op on the captured OpenCode 2.0.26 system-prompt shape (marker precondition unmet); cache benefit unverified
+
+- Status: current
+- Verified: 2026-10-13
+- Area: opencode-runtime
+- Fact:
+  - `relocateVolatileEnvBlock` (`src/cache-engine-core.mjs` L379–405) requires
+    exactly one `"You are powered by the model named "` START marker, exactly one
+    `<env>` and one `</env>` in order, and non-empty remaining content; otherwise
+    it returns `changed:false` unchanged. The START marker originates from the
+    OpenCode **1.18.34 / V1** system-prompt shape (helper rationale L355–367; the
+    tests' `GLM_SYSTEM` at `test/cache-engine.test.mjs` L688 and MiMo at L1136 use
+    that marker-bearing shape).
+  - In an isolated offline wire-level run (adapter-off vs adapter-on, loopback
+    mock, `bwrap --unshare-net`) for `opencode-go/glm-5.3-flash` and
+    `opencode-go/mimo-v2.6-flash`, the captured **OpenCode 2.0.26** outgoing
+    system prompt contained a `<env>` block (working directory / workspace root /
+    git-repo flag / platform / temp-dir preference) but **zero** occurrences of
+    the START marker and **no date line**. Adapter-disabled and adapter-enabled
+    system content were **byte-identical** for both models, and the top-level
+    request body keys were identical.
+  - `glm53.stabilizeSystem` / `mimo26.stabilizeSystem` default `true`
+    (`src/cache-engine-core.mjs` L87–94), so the policy was **enabled**; the
+    helper's precondition was the sole reason no relocation occurred.
+- Evidence: [O]
+- Sources: repository `src/cache-engine-core.mjs` (`relocateVolatileEnvBlock`,
+  rationale) and `src/cache-engine-v2.mjs` (`context` call site L217–227);
+  `test/cache-engine.test.mjs` (V1 marker-bearing fixtures L688/L1136, edge cases
+  L1195–1216); isolated offline wire capture 2026-10-13 (OpenCode 2.0.26, mock,
+  netns). No provider requests; no live runtime.
+- Justifies: `docs/implementation-plan-v2.md` §2C (V2 preview compatibility note)
+  and `docs/cache-policy-inventory.md` (GLM/MiMo relocation note).
+- Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
+  adapter checkpoint `2a00607`.
+- Re-verify when: OpenCode changes its system-prompt shape (adds/removes the
+  model-name preamble or the `<env>` block), or the relocation helper changes.
+- Superseded by: null
+- Notes: **Layers (keep distinct):** (1) policy **enabled** — yes for GLM/MiMo;
+  (2) helper **accepts the prompt shape** — **no** on the captured 2.0.26 shape
+  (marker absent); (3) mutation **reaching the outgoing request** — no (OFF==ON);
+  (4) **provider cache benefit** — **unverified** (no provider requests made).
+  This is a **compatibility finding for the captured runtime/prompt shape**, not
+  proof that every OpenCode 2.x configuration has the same shape (other
+  agents/configs are untested). **Safety rationale preserved:** the START marker
+  scopes relocation to OpenCode's own env preamble and prevents reordering
+  arbitrary user/agent `<env>` content; removing it or adding a broad
+  `<env>`-only trigger is **not currently justified**, especially because the
+  2.0.26 `<env>` block carried **no date line** (its volatility — the original
+  motivation — is unestablished). Cache-read improvement and savings remain
+  **unverified**.
+
+### RF-OC-034 — The `<env>` relocation is content- and line-multiset-preserving but not always byte-for-byte (one separator newline may be inserted); the V2 hook relocates only the single eligible system part
+
+- Status: current
+- Verified: 2026-10-13
+- Area: opencode-runtime
+- Fact:
+  - `relocateVolatileEnvBlock` / `relocateRange` preserve the moved block's bytes
+    and the **non-empty line multiset**, and are deterministic and idempotent.
+    They are **not** always a byte-for-byte permutation: when the surviving text
+    does not already end in a newline, exactly **one separator `\n`** is inserted
+    before the moved block, so the output may be one byte longer than the input.
+  - The V2 `context` hook relocates within the **single eligible** system text
+    part only; null/non-text and other parts are left byte-for-byte unchanged.
+- Evidence: [O] (code + regression test)
+- Sources: `src/cache-engine-core.mjs` (`relocateVolatileEnvBlock`,
+  `relocateRange`); `src/cache-engine-v2.mjs` (`onContext`); `test/cache-engine.test.mjs`
+  (`core: relocateVolatileEnvBlock inserts exactly one separator newline …`).
+- Justifies: the corrected relocation comments; the C1 regression test; the plan's
+  shared-transform description (`docs/implementation-plan-v2.md`).
+- Version context: OpenCode 2.0.26; adapter checkpoint `af154f0`.
+- Re-verify when: the relocation helper's newline/separator handling changes.
+- Superseded by: null
+- Notes: Cosmetic — a single normalized separator; the block content and the
+  non-empty line multiset are unchanged, and the reorder is deterministic and
+  idempotent. Not a cache-affecting change and does not affect provider cache
+  benefit (still unverified).
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins

@@ -837,6 +837,12 @@ a newer model inherits an older policy. They must not be resolved by guessing.
     `x-session-id`). No prompt rewrite.
   - **GLM-5.3 overlay**: the `<env>` relocation stays registered only on the
     GLM-5.3 family entry, so a later GLM does **not** inherit it.
+  - **V2 compatibility (captured OpenCode 2.0.26):** the GLM-5.3 / MiMo-V2.6
+    `<env>` relocation is a **no-op** on the captured 2.0.26 system-prompt shape —
+    the helper's V1-era `"You are powered by the model named "` marker is absent —
+    so no mutation reaches the outgoing request (adapter-off == adapter-on). This
+    is a compatibility finding for the captured shape (**not** universal), and the
+    provider cache benefit remains **unverified** (`RF-OC-033`).
 - GLM-5.2 and earlier remain neutral. No new GLM cache-control field is added,
   and GLM-5.3 behavior is unchanged.
 - Evidence caveat: because no later GLM generation is documented, the

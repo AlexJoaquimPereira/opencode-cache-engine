@@ -5,12 +5,18 @@ Provider-aware prompt-cache optimization and observability for
 
 `opencode-cache-engine` is distributed as an npm package. The Git repository is
 the development source of truth; the published package is a release artifact.
-The package exposes two separate targets required by OpenCode's installed
-plugin model:
+The package exposes three targets required by OpenCode's installed plugin model:
 
-- **`./server`** — the CacheEngine runtime, hooks, provider policies, and telemetry.
+- **`./server`** — the V1 CacheEngine runtime, hooks, provider policies, and telemetry (verified on OpenCode 1.x).
 - **`./tui`** — plugin-manager registration and enable/disable integration; it
   has no CacheEngine-specific UI.
+- **`./v2`** — the OpenCode V2 adapter (**preview**): implemented and
+  offline-tested; **isolated shim-based loading, `setup`, and hook
+  registration/dispatch are verified** in an isolated OpenCode 2.0.26 runtime,
+  but **managed-config discovery/registration remain unverified** (and the direct
+  `plugins: ["opencode-cache-engine/v2"]` entry did not resolve in the tested
+  offline configuration); see
+  [OpenCode V2 adapter (preview)](#opencode-v2-adapter-preview).
 
 For local development, use the package from this Git checkout through the
 repository's OpenCode/package development path. Do not maintain or edit a copied
@@ -1785,8 +1791,42 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
 ```
 
 `CacheEngine` is the exported plugin factory. The npm package name remains
-`opencode-cache-engine`; the server and TUI package exports are listed in
+`opencode-cache-engine`; the server, TUI, and V2 package exports are listed in
 [File layout](#file-layout).
+
+---
+
+## OpenCode V2 adapter (preview)
+
+The OpenCode V2 adapter is exported as `./v2` (`src/cache-engine-v2.mjs`). It is
+a plain `{ id, setup(ctx) }` plugin object that reuses the same policy resolver
+and usage/accounting core as the V1 adapter; no V2-only dependency enters the V1
+path.
+
+It currently:
+
+* registers `session.hook("context")` for the GPT-5.6+ missing-field cache
+  key/options and the GLM/MiMo `<env>` relocation (single system text part only);
+* registers `session.hook("model.request")` for the OpenRouter `x-session-id`
+  affinity (GLM/MiMo only), emitting the same affinity telemetry schema as V1;
+* aggregates usage from `session.usage.updated` (primary) and `session.idle`
+  (secondary) via `session.context({ sessionID })`, reusing the shared
+  cursor/watermark, with bounded per-session state and fail-safe handling
+  (RF-OC-020).
+
+**Status: preview.** The adapter imports and passes offline contract tests. In an
+**isolated** OpenCode 2.0.26 runtime it was loaded through a project-local
+**shim** that re-exports `opencode-cache-engine/v2`, its `setup(ctx)` ran, and
+`context`/`model.request` registration **and dispatch** were observed
+(RF-OC-024, RF-OC-025). Two things remain **unverified**: (a) **managed-config
+discovery and registration** of the `./v2` export by the loader, and (b) direct
+resolution of the `plugins: ["opencode-cache-engine/v2"]` entry — that entry
+failed in the tested offline configuration (RF-OC-023), so the shim route is the
+verified path. V2 compaction isolation, fork cache-root, and the secondary V1
+diagnostics are not ported. Treat V2 as preview, not production.
+
+See [Installation → OpenCode V2 (preview)](#opencode-v2-preview) for the preview
+enable/verify procedure and the accepted accounting limitations.
 
 ---
 
@@ -2075,6 +2115,7 @@ built from this tree and exposes the runtime entry points separately:
 opencode-cache-engine/
 ├── src/
 │   ├── cache-engine.ts
+│   ├── cache-engine-v2.mjs
 │   ├── cache-engine-core.mjs
 │   ├── cache-policy-core.mjs
 │   └── tui.mjs
@@ -2094,7 +2135,8 @@ The package exports in `package.json` are:
 ```json
 {
   "./server": "./src/cache-engine.ts",
-  "./tui": "./src/tui.mjs"
+  "./tui": "./src/tui.mjs",
+  "./v2": "./src/cache-engine-v2.mjs"
 }
 ```
 
@@ -2105,6 +2147,70 @@ not duplicate server logic.
 ---
 
 # Installation
+
+### Compatibility (OpenCode V1 and V2)
+
+One package loads by name on both runtimes. The `./server` entry
+(`src/cache-engine.ts`) exposes a **single default object** carrying both
+interfaces, and each runtime selects the one it supports:
+
+| OpenCode | Verified version | Entry point | Runtime selects |
+| --- | --- | --- | --- |
+| V1 | 1.18.35 | `./server` | `server(input, options)` → V1 hooks |
+| V2 | 2.0.26 | `./server` | `setup(ctx)` → V2 adapter (preview) |
+
+**Package-name loading (intended).** Install the package and register it **by
+name**:
+
+- **V1:** `plugin: ["opencode-cache-engine"]` in the project
+  `.opencode/opencode.json` (or `~/.config/opencode/opencode.json`), or
+  `opencode plugin opencode-cache-engine`.
+- **V2:** `plugins: ["opencode-cache-engine"]` in `.opencode/opencode.json`, or
+  `opencode plugin add opencode-cache-engine`.
+
+OpenCode V1 resolves the package's `./server` export and calls its `server`
+factory; OpenCode V2 resolves the same `./server` export and calls `setup`. The V2
+adapter is imported **lazily**, so running under V1 never initializes V2 code.
+
+**Do not pass a subpath as the package specification.** `opencode-cache-engine/v2`
+is interpreted by OpenCode as an npm/Git package specifier (not a module subpath)
+and fails to install. Use the bare package name; the `./server` entry provides the
+V2 `setup` automatically.
+
+**Verification status.** Verified in isolated OpenCode **1.18.35** and **2.0.26**
+environments using the packed package (`opencode-cache-engine@0.7.1`) installed
+**by name** against a **disposable local npm registry** (no public registry):
+V1's `opencode plugin -g opencode-cache-engine` installed the package and a
+`plugin` config entry then loaded it (V1 hooks ran, no V2 initialization); V2's
+`opencode plugin add opencode-cache-engine` and a `plugins` entry installed and
+loaded it (the V2 `setup` initialized; no V1 factory invocation). The installed
+bytes matched the packed tarball. **Caveat:** this used an isolated local registry
+pointed at via `npm_config_registry`; a public-registry install was not run here,
+and V1 may log a non-fatal background peer-dependency install warning
+(`@opencode-ai/plugin`) if the registry does not serve it.
+
+**Version-specific assumptions.** The single-default-object contract is verified
+for OpenCode **V1 1.18.35** (prefers the default object's `server` and does not
+double-invoke the named `CacheEngine` export) and **V2 2.0.26** (accepts the extra
+`server` property while selecting `setup`). Other versions are **not** asserted;
+do not add unrelated function-valued named exports to the V1 entry without
+re-checking loader behavior on the target version.
+
+**Alternative: project-local files (verified offline).** If you cannot install by
+name, load the package from a project-local file:
+
+- **V1:** `project/.opencode/plugins/opencode-cache-engine.ts` =
+  `export { CacheEngine as default } from "opencode-cache-engine/server"`
+- **V2:** `project/.opencode/plugins/v2-entry.ts` =
+  `export { default } from "opencode-cache-engine/v2"`
+
+Prerequisite for any route: the package must resolve from the project's
+`node_modules` (e.g. `npm install opencode-cache-engine@0.7.1`, or a local
+`file:`/tarball install).
+
+Both routes are **additive** and do not modify OpenCode's shared or managed
+configuration. Rollback: remove the plugin entry (name-based) or the
+project-local plugin file; the V1 `./server` target is unaffected.
 
 ### Local development
 
@@ -2132,6 +2238,99 @@ reproducibility matters. Update the pinned version deliberately when upgrading.
 
 After installation, verify that OpenCode loads the plugin successfully before
 benchmarking cache behavior.
+
+### OpenCode V2 (preview)
+
+The V2 adapter is exposed as the `./v2` export; the V1 `./server` and `./tui`
+exports are unchanged, so enabling V2 is **additive** and does not disturb a V1
+setup. Prefer pinning an exact version as in the released-package example above
+(RF-OC-017).
+
+**Verified enablement path (shim).** In the tested OpenCode 2.0.26 configuration,
+registering the subpath directly (`plugins: ["opencode-cache-engine/v2"]`) did
+**not** resolve — the loader treated it as an npm specifier and failed to install
+it (RF-OC-023). The verified route is a **project-local shim plugin** that
+re-exports the subpath, e.g. a file `project/.opencode/plugins/v2-entry.ts`:
+
+``` ts
+export { default } from "opencode-cache-engine/v2"
+```
+
+with the package installed in that project's `node_modules`. This is the only
+route verified in the isolated runtime (RF-OC-024). The direct-entry failure was
+observed in the tested offline configuration only; it does **not** prove direct
+resolution fails in every environment (e.g. an online install).
+
+The plugin-API surface was verified against OpenCode **2.0.26** with
+`@opencode/plugin` **2.x**: a V2 plugin is a plain `{ id, setup(ctx) }` object
+and `./v2` is the V2 entry convention (RF-OC-017, RF-OC-018).
+
+**Verification status (keep the layers separate):**
+
+* **Verified (isolated runtime, shim route):** the loader discovered and loaded
+  the local shim; `setup(ctx)` ran; `context` and `model.request` were registered
+  **and dispatched** (RF-OC-024, RF-OC-025); a `context`-hook option mutation is
+  forwarded into the request's generic `providerOptions` (RF-OC-032).
+* **Unverified:** **managed-config discovery and registration** of `./v2`, and
+  direct `plugins: ["opencode-cache-engine/v2"]` entry resolution (failed in the
+  tested offline config — RF-OC-023).
+* **Unit tests (316/316):** cover the pure logic and contract shapes only; they
+  do **not** prove loader registration or live accounting.
+
+**Known limitations (preview):**
+
+* The GPT cache-key effect is **not** demonstrated for V2: the OpenAI-compatible
+  route's provider schema strips unsupported cache fields, and OpenCode
+  independently supplies `prompt_cache_key` on the tested OpenAI/Azure route, so
+  adapter attribution is unresolved — Gate 4 **NOT PASS** (RF-OC-030, RF-OC-031).
+* OpenRouter `x-session-id`: the evidence demonstrates **preservation/fallback**,
+  not that the adapter attached the header in the tested integration (RF-OC-027).
+* `promptCacheOptions` support was not established in any inspected provider
+  schema (RF-OC-030).
+
+To evaluate the preview:
+
+1. Install the package in the preview project and add the project-local shim
+   (`project/.opencode/plugins/v2-entry.ts`, above); confirm the loader logs
+   `loading plugin` for that file. `opencode plugin list` reads configuration
+   only and does not execute the plugin, so it is a discovery check, not a load
+   test (RF-OC-017, RF-OC-024).
+2. Confirm hook dispatch in a session: `context` runs for the primary request
+   and `model.request` runs for the same request; auxiliary request kinds do not
+   invoke `context` (RF-OC-018, RF-OC-019).
+3. Confirm usage accounting: `session.usage.updated` drives the shared history
+   scan and appends `kind:"usage"` records to the configured metrics file. The
+   event's cumulative totals are intentionally not used for accounting
+   (RF-OC-020, RF-OC-021).
+
+Accepted accounting limitations (best-effort; exactly-once is **not** claimed;
+RF-OC-020, RF-OC-021):
+
+* the usage trigger is a volatile event stream, so a missed event undercounts;
+* the cursor/watermark are in-memory, so a restart re-counts;
+* `session.context` returns only messages after the last compaction, so history
+  removed by compaction is a best-effort undercount;
+* same-millisecond watermark ties undercount;
+* bounded per-session state (LRU cap, tombstones, evicted marks) keeps memory
+  bounded but can undercount, and an expired mark can recount;
+* a telemetry write failure after the cursor advances undercounts.
+
+### Rollback (preview project only)
+
+V2 is additive: the `./server` (V1) target is unchanged. To return a **preview
+project** to its previous V1 configuration:
+
+1. Remove the V2 shim file (e.g. `project/.opencode/plugins/v2-entry.ts`) and, if
+   you added one for the preview, the V2 `plugins` entry from that **project's
+   own** configuration.
+2. Ensure the project loads the V1 `./server` target as before (the V1 entry is
+   unaffected by enabling V2).
+3. Restart your own OpenCode instance if your workflow does so.
+
+Do **not** modify shared or managed OpenCode configuration, or the managed
+service. This rollback was **not** separately executed in the isolated tests; it
+follows from V2 being an additive, separate export and should be validated in
+your own preview project.
 
 ---
 
@@ -2170,6 +2369,14 @@ Kimi / Claude / Gemini / Qwen / Grok / Meta Muse / MiniMax (passive families):
     classification and cache-read usage recorded when the provider reports them
     no fabricated cache-write tokens
 ```
+
+The checklist above describes the V1 adapter (`./server`). For the V2 adapter
+(`./v2`), follow the preview procedure under
+[Installation → OpenCode V2 (preview)](#opencode-v2-preview). Isolated
+shim-based loading, `setup`, and hook registration/dispatch are **verified**
+(RF-OC-024, RF-OC-025); **managed-config discovery/registration remain
+unverified**, and whether the loader prefers the `./v2` export over `"."` /
+`./server` remains unverified (RF-OC-017, RF-OC-023).
 
 ---
 
@@ -2302,6 +2509,7 @@ MiMo V2.6+  -> family baseline; V2.6 Flash/Pro only: preserve-content <env> relo
 Kimi        -> passive; Moonshot caching is automatic (V2.6/K2.7-code/K3); request unchanged
 Claude      -> passive; OpenCode applies Anthropic cache_control breakpoints; request unchanged
 Gemini      -> passive; Google implicit caching (2.5+); request unchanged, no CachedContent created
+OpenCode V2 -> adapter (./v2) preview: offline-tested; runtime registration/hooks unverified
 ```
 
 That separation is the core design of the project.
