@@ -6040,3 +6040,83 @@ test("v2 adapter: pruneMarks honors its explicit TTL and capacity", async () => 
   pruneMarks(m4, 3, 1, now)
   assert.deepEqual([...m4.keys()], ["x"])
 })
+
+// ===========================================================================
+// V2 surface-level contract & fault-injection
+// ===========================================================================
+
+test("v2 adapter: telemetry write failures never break hooks or the usage path", async () => {
+  const base = mkdtempSync(join(tmpdir(), "ce-v2-fault-"))
+  const blocker = join(base, "not-a-dir")
+  writeFileSync(blocker, "x") // a FILE, so a path below it is un-creatable/unwritable
+  const unwritable = join(blocker, "m.jsonl") // mkdir/append fail with ENOTDIR
+  const prev = process.env.CACHE_ENGINE_METRICS_FILE
+  process.env.CACHE_ENGINE_METRICS_FILE = unwritable
+  try {
+    const mod = await import("../src/cache-engine-v2.mjs")
+    const msgs = { ses_fault: [{ id: "a1", type: "assistant", time: { created: 1 }, tokens: { input: 1, output: 0, reasoning: 0, cache: { read: 5, write: 0 } } }] }
+    const { ctx, handlers, pushEvent } = makeV2Ctx(msgs)
+    const cleanup = await mod.default.setup(ctx) // must not throw despite the unwritable metrics path
+    const gpt = { sessionID: "ses_fault", model: { id: "gpt-5.6", providerID: "openai" }, system: [], options: {} }
+    await handlers["context"](gpt)
+    assert.equal(typeof gpt.options.promptCacheKey, "string", "context transform still runs when telemetry fails")
+    const or = { sessionID: "ses_fault", model: { id: "z-ai/glm-5.3", providerID: "openrouter" }, headers: {} }
+    await handlers["model.request"](or)
+    assert.equal(typeof or.headers["x-session-id"], "string", "affinity still attached when telemetry fails")
+    pushEvent({ type: "session.usage.updated", data: { sessionID: "ses_fault" } })
+    await new Promise((r) => setTimeout(r, 30))
+    await cleanup()
+  } finally {
+    if (prev === undefined) delete process.env.CACHE_ENGINE_METRICS_FILE
+    else process.env.CACHE_ENGINE_METRICS_FILE = prev
+  }
+})
+
+test("v2 adapter: unknown/neutral provider is passive and emits no transform telemetry", async () => {
+  await withTempMetrics(async (metrics) => {
+    const mod = await import("../src/cache-engine-v2.mjs")
+    const { ctx, handlers } = makeV2Ctx()
+    const cleanup = await mod.default.setup(ctx)
+    const ev = { sessionID: "ses_neutral", model: { id: "some-unknown-model", providerID: "somegateway" }, system: [{ type: "text", text: "S" }], options: {}, headers: {} }
+    await handlers["context"](ev)
+    await handlers["model.request"](ev)
+    assert.deepEqual(ev.options, {}, "neutral: context must not inject options")
+    assert.equal(ev.system[0].text, "S", "neutral: system must be unchanged")
+    assert.equal(ev.headers["x-session-id"], undefined, "neutral: no affinity header")
+    let recs = []
+    try { recs = readRecords(metrics) } catch { recs = [] }
+    assert.equal(recs.filter((r) => r.kind === "cache-options" || r.kind === "boundary").length, 0, "neutral: no transform telemetry")
+    await cleanup()
+  })
+})
+
+test("v2 adapter: a hook-registration failure is isolated and setup still completes", async () => {
+  const handlers = {}
+  const queue = []
+  const waiters = []
+  const ctx = {
+    session: {
+      hook: async (name, cb) => {
+        handlers[name] = cb
+        if (name === "context") throw new Error("boom-reg")
+        return { dispose: async () => {} }
+      },
+      context: async () => ({ data: [] }),
+    },
+    event: {
+      subscribe: () => ({
+        [Symbol.asyncIterator]: async function* () {
+          while (true) {
+            if (queue.length === 0) await new Promise((r) => waiters.push(r))
+            while (queue.length) yield queue.shift()
+          }
+        },
+      }),
+    },
+  }
+  const mod = await import("../src/cache-engine-v2.mjs")
+  const cleanup = await mod.default.setup(ctx) // must not throw
+  assert.equal(typeof cleanup, "function", "setup still returns cleanup after a registration failure")
+  assert.equal(typeof handlers["model.request"], "function", "the second hook still registers after the first fails")
+  await cleanup()
+})
