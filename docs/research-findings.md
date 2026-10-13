@@ -1466,6 +1466,57 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   schema processing** (`RF-OC-030`), not hook dispatch. Complements `RF-OC-031`
   (OpenAI-route pre-population of `promptCacheKey`).
 
+### RF-OC-033 — GLM/MiMo `<env>` relocation is a no-op on the captured OpenCode 2.0.26 system-prompt shape (marker precondition unmet); cache benefit unverified
+
+- Status: current
+- Verified: 2026-10-13
+- Area: opencode-runtime
+- Fact:
+  - `relocateVolatileEnvBlock` (`src/cache-engine-core.mjs` L379–405) requires
+    exactly one `"You are powered by the model named "` START marker, exactly one
+    `<env>` and one `</env>` in order, and non-empty remaining content; otherwise
+    it returns `changed:false` unchanged. The START marker originates from the
+    OpenCode **1.18.34 / V1** system-prompt shape (helper rationale L355–367; the
+    tests' `GLM_SYSTEM` at `test/cache-engine.test.mjs` L688 and MiMo at L1136 use
+    that marker-bearing shape).
+  - In an isolated offline wire-level run (adapter-off vs adapter-on, loopback
+    mock, `bwrap --unshare-net`) for `opencode-go/glm-5.3-flash` and
+    `opencode-go/mimo-v2.6-flash`, the captured **OpenCode 2.0.26** outgoing
+    system prompt contained a `<env>` block (working directory / workspace root /
+    git-repo flag / platform / temp-dir preference) but **zero** occurrences of
+    the START marker and **no date line**. Adapter-disabled and adapter-enabled
+    system content were **byte-identical** for both models, and the top-level
+    request body keys were identical.
+  - `glm53.stabilizeSystem` / `mimo26.stabilizeSystem` default `true`
+    (`src/cache-engine-core.mjs` L87–94), so the policy was **enabled**; the
+    helper's precondition was the sole reason no relocation occurred.
+- Evidence: [O]
+- Sources: repository `src/cache-engine-core.mjs` (`relocateVolatileEnvBlock`,
+  rationale) and `src/cache-engine-v2.mjs` (`context` call site L217–227);
+  `test/cache-engine.test.mjs` (V1 marker-bearing fixtures L688/L1136, edge cases
+  L1195–1216); isolated offline wire capture 2026-10-13 (OpenCode 2.0.26, mock,
+  netns). No provider requests; no live runtime.
+- Justifies: `docs/implementation-plan-v2.md` §2C (V2 preview compatibility note)
+  and `docs/cache-policy-inventory.md` (GLM/MiMo relocation note).
+- Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
+  adapter checkpoint `2a00607`.
+- Re-verify when: OpenCode changes its system-prompt shape (adds/removes the
+  model-name preamble or the `<env>` block), or the relocation helper changes.
+- Superseded by: null
+- Notes: **Layers (keep distinct):** (1) policy **enabled** — yes for GLM/MiMo;
+  (2) helper **accepts the prompt shape** — **no** on the captured 2.0.26 shape
+  (marker absent); (3) mutation **reaching the outgoing request** — no (OFF==ON);
+  (4) **provider cache benefit** — **unverified** (no provider requests made).
+  This is a **compatibility finding for the captured runtime/prompt shape**, not
+  proof that every OpenCode 2.x configuration has the same shape (other
+  agents/configs are untested). **Safety rationale preserved:** the START marker
+  scopes relocation to OpenCode's own env preamble and prevents reordering
+  arbitrary user/agent `<env>` content; removing it or adding a broad
+  `<env>`-only trigger is **not currently justified**, especially because the
+  2.0.26 `<env>` block carried **no date line** (its volatility — the original
+  motivation — is unestablished). Cache-read improvement and savings remain
+  **unverified**.
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
