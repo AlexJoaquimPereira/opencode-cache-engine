@@ -5,15 +5,24 @@ request structure only for verified provider behavior, and keep each mutation
 narrow, deterministic, and tested; otherwise preserve the request and observe
 provider-reported usage.
 
-**Current state:** the v0.5.x provider line (DeepSeek, GPT‑5.6+, GLM‑5.3,
-MiMo‑V2.6, Kimi, Claude, Gemini, Qwen, xAI/Grok, Meta Muse, MiniMax) and the
-v0.6.0 shared-core consolidation have shipped; v0.7.0 (core/adapter contract) and
-v0.7.1 (session-state lifecycle) are tagged. The V2 adapter
-(`src/cache-engine-v2.mjs`, exported as `./v2`) is implemented and offline-tested,
-but **V2 runtime registration and hook installation are UNVERIFIED** — never
-claim them without real runtime evidence. `docs/implementation-plan-v2.md` is the
-single authoritative roadmap (Phases A–D, capability matrix, release gates,
-deferred work); read it before starting work. Per-model evidence lives in
+**Current state:** v1.0.0 has shipped — one package loads on OpenCode V1
+(`./server`) and V2 (`./v2`), with `./tui` for registration, atop the v0.5.x
+provider line (DeepSeek, GPT‑5.6+, GLM‑5.3, MiMo‑V2.6, Kimi, Claude, Gemini,
+Qwen, xAI/Grok, Meta Muse, MiniMax) and the v0.6.0 shared-core consolidation.
+`docs/implementation-plan-v2.md` is the **shipped record** of the V2 milestone
+(Phases A–D below; capability matrix; release gates). The **current, post-1.0.0
+phase** is planned in `docs/opencode-cache-engine-v1.x.x-implementation-plan.md`
+(see the phase section at the end of this file), derived from
+`docs/competitor-prompt-cache-plugins-research-report.md`; read the new plan
+before starting work — it is **proposed** and requires explicit authorization.
+Keep runtime claims narrow: V2 discovery, `setup(ctx)`, and
+`context`/`model.request` dispatch are verified for the tested project-local shim
+route (`RF-OC-024`/`RF-OC-025`); the direct
+`plugins: ["opencode-cache-engine/v2"]` subpath entry **FAILs** (`RF-OC-023`);
+GPT cache-field wire carriage is **not attributed** to the adapter (Gate 4
+**NOT PASS**, `RF-OC-030`/`RF-OC-031`); usage accounting is best-effort, never
+exactly-once (`RF-OC-017`–`RF-OC-021`). Never claim a route or provider effect
+without runtime evidence. Per-model evidence lives in
 `docs/cache-policy-inventory.md`; harness/transport/API evidence in
 `docs/research-findings.md`.
 
@@ -167,9 +176,14 @@ stores:
 - `docs/research-findings.md` — cross-model findings about the harness and
   transports: OpenCode runtime/SDK/plugin API, OpenRouter routing, AI-SDK and
   provider-package serialization, and provider API mechanics.
+- `docs/competitor-prompt-cache-plugins-research-report.md` — competitor/ecosystem
+  landscape and the input to the post-1.0.0 plan. Its third-party claims are
+  **author-reported, not verified**; never promote one to `[D]`/`[O]` without our
+  own reproduction.
 
-Both use the same evidence tags: `[D]` documented, `[O]` observed, `[I]` inferred,
-`[U]` unknown. Cite a finding ID (`RF-OC-001`) instead of restating the fact.
+The two tracked stores use the same evidence tags: `[D]` documented, `[O]`
+observed, `[I]` inferred, `[U]` unknown. Cite a finding ID (`RF-OC-001`) instead
+of restating the fact.
 
 - Never re-search a fact already recorded with `Status: current` whose
   `Version context` still matches the installed toolchain.
@@ -248,19 +262,23 @@ OpenCode is the harness. Use `policy-resolution` telemetry
 (`matchCategory`, `matchReason`, `overlaySkippedReason`) to see how a model
 actually resolved before assuming anything about it.
 
-## Roadmap (v0.5.x → 1.0): planned future work
+## Roadmap and current phase
 
-`docs/implementation-plan-v2.md` is the authoritative plan for everything after
-v0.4.x. Read it before starting roadmap work, and treat it as a milestone
-checklist rather than as authorization to implement.
+`docs/opencode-cache-engine-v1.x.x-implementation-plan.md` is the authoritative
+plan for the **post-1.0.0** phase (diagnostics-first; details in the phase
+section at the end of this file). `docs/implementation-plan-v2.md` is retained as
+the **shipped record** of the V1→V2 milestone (Phases A–D below); its gates are
+closed per §2D.13 (Gate 4 **NOT PASS**; accounting best-effort). Read the current
+plan before starting work, and treat every plan as a milestone checklist rather
+than as authorization to implement.
 
 Milestones (authoritative detail in the consolidated plan, §4–§9):
 
-1. **Phase A — 0.7.x stabilization (current).** Preserve V1 and the shared core;
-   keep the V2 adapter and its regression coverage; finish the locally-answerable
-   telemetry/lifecycle/accounting investigations; keep V2 runtime registration
-   explicitly unverified. Document bounded session-state eviction and its
-   accounting tradeoffs.
+1. **Phase A — 0.7.x stabilization (shipped).** Preserved V1 and the shared
+   core; kept the V2 adapter and its regression coverage; completed the
+   locally-answerable telemetry/lifecycle/accounting investigations; kept V2
+   runtime registration unverified *at that stage*. Documented bounded
+   session-state eviction and its accounting tradeoffs.
 2. **Phase B — 0.8.x V2 runtime integration.** Establish a supported, safe
    runtime validation procedure; verify `./v2` entry resolution, `setup(ctx)`
    execution, and hook installation against the installed API; confirm
@@ -280,10 +298,10 @@ Mistral remains the only deferred provider candidate, pending an audit-first
 evidence note. Read the consolidated plan for the capability matrix, work
 packages, acceptance criteria, testing strategy, release policy, and rollback.
 
-Branches: `master`/`main` carries the V1 shared core, policies, and releases.
-`feature/v2-adapter` is branched off the `v0.4.13` tag and continues
-independently; it merges *from* `master`, and no V2 code lands in `master` until
-the integration phase. `feature/provider-<name>` is optional per provider.
+Branches: `master`/`main` carries the shipped dual-runtime line and all releases;
+the V2 adapter is merged (1.0.0). Use a short-lived `feature/<task>` branch per
+change (e.g. `feature/provider-<name>` per provider) and merge to `master` only
+through the release gates above.
 
 Binding constraints on roadmap work — these override the plan:
 
@@ -320,3 +338,67 @@ Binding constraints on roadmap work — these override the plan:
 - Pricing, cost thresholds, and context/output limits stay out of scope.
 - The plan's CI/packaging automation is optional future work; do not add a
   bundler, `tsc`, or runtime dependencies just to satisfy it.
+
+## Post-1.0.0 phase — diagnostics-first cache-stability program
+
+`docs/opencode-cache-engine-v1.x.x-implementation-plan.md` is the authoritative
+post-1.0.0 plan; `docs/competitor-prompt-cache-plugins-research-report.md` is its
+input (competitor/ecosystem research — its third-party claims are
+**author-reported, not verified**). The plan is **proposed**: nothing in it is
+authorization to implement. Use its §17 task-result template for phase reports.
+
+- **Diagnose before mutating.** Observe the rendered request, identify a specific
+  avoidable instability, verify the hook can safely observe/change it, then make
+  the smallest justified transformation and verify the serialized request. Prefer
+  diagnostics over rewrites; a no-op is a valid outcome.
+- **Wire, not hook.** Wire verification reads the **serialized** provider request
+  after OpenCode's schema decoding (`RF-OC-030`); a hook payload is not the wire
+  and would false-positive. Capture with the isolated procedure and only supported
+  loading paths (`RF-OC-023`–`RF-OC-025`).
+- **Use the plan's scaffold.** Work from the plan's harness/capture contract (§3),
+  current-implementation mapping (§3A — extend the shipped primitives, do not
+  re-implement them), phase map (§3B, each phase tagged *research* vs
+  *implementation*), quantitative thresholds (§3C), and risk register (§17A). The
+  silent-invalidator linter is advisory and allowlist-aware (`VOL-*` rule IDs;
+  `VOL-DATE`/`VOL-CWD-PATH` are `info`).
+- **Governing decision rule.** Do not ship a cache intervention because it looks
+  reasonable, because a competitor uses it, or because the adapter executed it.
+  Ship only when the instability is *observed*, the transformation *safe*, the
+  wire effect *verified*, and the benefit *supported by evidence*. Negative or
+  inconclusive results are valid outcomes.
+- **Evidence labels** for task reports: *Observed*, *Structurally verified*,
+  *Wire verified*, *Provider measured*, *Inferred*, *Author reported*,
+  *Inconclusive*. They refine the stores' `[D]`/`[O]`/`[I]`/`[U]` tags: `[D]` is
+  a documented first-party/upstream source (the report's `(official)` /
+  `(upstream-spec)`); `[O]` is observed/structurally/wire/provider-measured;
+  `[I]` inferred; `[U]` unknown. A third-party claim is *Author reported*, never
+  `[D]` or measured.
+- **Testing ladder A–E:** A unit → B integration (hook shape, policy selection,
+  V1/V2 isolation) → C offline wire (local mock proves the serialized request and
+  unrelated-field preservation) → D provider experiment (only with explicit
+  authorization) → E release qualification. Passing one level never implies the
+  next; unit/wire tests cannot prove provider cache benefit.
+- **Release gates G0–G6:** baseline, observation, safety, wire, outcome,
+  operations, publication. A failed gate means narrow, revise, or reject — never
+  "ship and hope". Completion is not a promotion criterion.
+- **Safety (binding):** never commit/push/amend/rebase/tag/publish/bump without
+  explicit authorization; never modify managed OpenCode config, installed plugins,
+  user cache/state, or running services; do not use `opencode plugin
+  add/remove/update` or `opencode run --plugin` for testing; no real provider
+  requests or paid calls without authorization; never log credentials; the user
+  verifies and commits. Preserve an untracked `package-lock.json` byte-for-byte.
+- **Do not loosen the `<env>` marker guard**, extend a prompt transform, or add a
+  new policy without a separate safety case and its own evidence (see the
+  Provider invariants above).
+- **Priority order (§16):** baseline/regression protection; offline capture +
+  first-difference diagnostics + fingerprints + silent-invalidator linter;
+  date-relocation hook-shape/wire verification; date relocation only if
+  structurally safe (offline first); authorized provider rollover A/B before any
+  benefit claim; route-specific GPT-option and OpenRouter-affinity verification;
+  ranked volatility investigation (tool order, startup/MCP, dynamic instructions,
+  reasoning boundaries); telemetry definitions + best-effort accounting docs;
+  compaction economics research; minimal observability + reproducible benchmark.
+- **Deferred (do not start without a demonstrated, route-specific need):**
+  keepalive/warming, broad system-block reordering, automatic tool sorting,
+  blocking on MCP readiness, frozen date/memory, general-purpose pruning,
+  automatic policy learning, and a large TUI/dashboard.
