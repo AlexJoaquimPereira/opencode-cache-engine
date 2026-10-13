@@ -5765,6 +5765,31 @@ test("core: relocateVolatileEnvBlock accepts the structural block and stays safe
   assert.equal(relocateVolatileEnvBlock(noPlatform).changed, false)
 })
 
+test("core: relocateVolatileEnvBlock inserts exactly one separator newline when the surviving text lacks a trailing newline (C1)", () => {
+  // Structural <env> block; the content AFTER the block ends in "C" (no trailing newline).
+  const fixture = "AB\n<env>\n  Working directory: /x\n  Platform: linux\n</env>\nC"
+  const block = "<env>\n  Working directory: /x\n  Platform: linux\n</env>"
+  const expected = "AB\n\nC\n" + block
+  const r = relocateVolatileEnvBlock(fixture)
+  // 1. expected relocation occurs
+  assert.equal(r.changed, true, "a valid structural block must be relocated")
+  // 2. the separator newline is present, and the exact output is deterministic
+  assert.equal(r.text, expected, "exact output: one separator newline inserted before the moved block")
+  // 3. the byte delta is exactly +1 (visible, not hidden behind a line-multiset check)
+  assert.equal(r.text.length, fixture.length + 1, "the separator adds exactly one byte")
+  assert.ok(r.text.endsWith("</env>"), "the relocated block ends the string")
+  // 4. content otherwise preserved (non-empty line multiset + env fields intact)
+  assert.equal(lineMultiset(r.text), lineMultiset(fixture), "non-empty line multiset preserved")
+  assert.ok(r.text.includes("Working directory: /x") && r.text.includes("Platform: linux"))
+  // 5. second pass is a no-op (idempotent)
+  const r2 = relocateVolatileEnvBlock(r.text)
+  assert.equal(r2.changed, false, "already relocated -> no-op")
+  assert.equal(r2.text, r.text, "second pass returns the input unchanged")
+  // 6. malformed/ambiguous block behavior unchanged
+  const reversed = "A\n</env>\n  Working directory: /x\n  Platform: linux\n<env>\nZ"
+  assert.equal(relocateVolatileEnvBlock(reversed).changed, false, "reversed markers remain unchanged")
+})
+
 test("v2 adapter: <env> relocation is a no-op when multiple candidate blocks/parts are eligible", async () => {
   const mod = await import("../src/cache-engine-v2.mjs")
   const { ctx, handlers } = makeV2Ctx()
