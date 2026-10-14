@@ -15,6 +15,8 @@
 #   OC_CAPTURE_ENGINE_CONFIG=<json> (optional inline CacheEngine config written to
 #                                    the sandbox ~/.config/opencode/cache-engine.json)
 #   OC_CAPTURE_TURN_TIMEOUT=120     (per-turn seconds; validated in inner.sh)
+#   OC_CAPTURE_TURNS=2              (equivalent turns; integer >=2)
+#   OC_CAPTURE_CONTINUE=1           (append one session-continue turn; 0/1)
 #   OC_CAPTURE_MODEL=mock/synthetic (model id for `-m` and the config; the
 #                                    provider part must be `mock`)
 #   OC_CAPTURE_RETENTION_MIN=1440   (prune capture.* roots older than N minutes;
@@ -146,6 +148,8 @@ bwrap --unshare-net --unshare-pid --unshare-uts --unshare-ipc \
   --setenv XDG_STATE_HOME "$TMP/home/.local/state" \
   --setenv XDG_CACHE_HOME "$TMP/home/.cache" \
   --setenv OC_CAPTURE_TURN_TIMEOUT "${OC_CAPTURE_TURN_TIMEOUT:-120}" \
+  --setenv OC_CAPTURE_TURNS "${OC_CAPTURE_TURNS:-2}" \
+  --setenv OC_CAPTURE_CONTINUE "${OC_CAPTURE_CONTINUE:-0}" \
   --setenv OC_CAPTURE_MODEL "$CAPTURE_MODEL" \
   --setenv MOCK_PORT "$MOCK_PORT" \
   /bin/bash "$REPO/test/harness/capture/inner.sh"

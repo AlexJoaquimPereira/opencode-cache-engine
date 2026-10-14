@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Runs INSIDE the bubblewrap sandbox (invoked by run.sh). Starts the loopback
-# mock provider, drives two equivalent OpenCode turns against it (each bounded by
-# a per-turn timeout), and stops. A failed or timed-out turn is recorded in
-# $CE/status as `turn_failed=1` so the orchestrator refuses to compare.
+# mock provider, drives N equivalent OpenCode turns (default 2; see
+# OC_CAPTURE_TURNS) plus an optional session-continue turn (OC_CAPTURE_CONTINUE),
+# each bounded by a per-turn timeout), and stops. A failed or timed-out turn is
+# recorded in $CE/status as `turn_failed=1` so the orchestrator refuses to compare.
 set -uo pipefail
 
 : "${CE:?CE (disposable root) required}"
@@ -22,6 +23,18 @@ esac
 if [ "$TURN_TIMEOUT" -le 0 ]; then echo "BLOCKER: OC_CAPTURE_TURN_TIMEOUT must be > 0" >&2; exit 2; fi
 command -v timeout >/dev/null 2>&1 || { echo "BLOCKER: 'timeout' not found" >&2; exit 2; }
 
+# Turn plan (P3-T1 session-pair capture). Validated fail-closed BEFORE any I/O (so
+# invalid input is exit 2, never masked by a later cd/exit 3). Defaults preserve the
+# original two equivalent turns exactly:
+#   OC_CAPTURE_TURNS   number of equivalent turns (integer >=2; default 2)
+#   OC_CAPTURE_CONTINUE=1  append one session-continue turn (`--continue`), which
+#                          produces a "subsequent" request in the last session.
+TURNS="${OC_CAPTURE_TURNS:-2}"
+case "$TURNS" in ''|*[!0-9]*) echo "BLOCKER: invalid OC_CAPTURE_TURNS='$TURNS'" >&2; exit 2 ;; esac
+if [ "$TURNS" -lt 2 ]; then echo "BLOCKER: OC_CAPTURE_TURNS must be >= 2" >&2; exit 2; fi
+CONTINUE="${OC_CAPTURE_CONTINUE:-0}"
+case "$CONTINUE" in 0|1) : ;; *) echo "BLOCKER: invalid OC_CAPTURE_CONTINUE='$CONTINUE' (want 0 or 1)" >&2; exit 2 ;; esac
+
 mkdir -p "$CAPTURE_DIR"
 : >"$CE/status"
 
@@ -33,9 +46,10 @@ cd "$CE/proj" || exit 3
 
 # Run one bounded turn. Records its rc; a nonzero rc (timeout=124, kill=137, or
 # any failure) marks the capture as failed so the orchestrator never compares.
+# Extra args (e.g. --continue) precede the message.
 run_turn() {
-  local n="$1"
-  timeout --kill-after=5 "$TURN_TIMEOUT" "$OC_BIN" run --standalone --print-logs --log-level info -m "$CAPTURE_MODEL" "say hi" >"$CE/run${n}.log" 2>&1
+  local n="$1"; shift
+  timeout --kill-after=5 "$TURN_TIMEOUT" "$OC_BIN" run --standalone --print-logs --log-level info -m "$CAPTURE_MODEL" "$@" "say hi" >"$CE/run${n}.log" 2>&1
   local rc=$?
   echo "run${n}_rc=$rc" >>"$CE/status"
   if [ "$rc" -ne 0 ]; then
@@ -47,8 +61,11 @@ run_turn() {
 }
 
 failed=0
-run_turn 1 || failed=1
-run_turn 2 || failed=1
+for i in $(seq 1 "$TURNS"); do run_turn "$i" || failed=1; done
+if [ "$CONTINUE" = "1" ]; then
+  n=$((TURNS + 1))
+  run_turn "$n" --continue || failed=1
+fi
 
 kill "$MOCK" 2>/dev/null
 wait "$MOCK" 2>/dev/null
