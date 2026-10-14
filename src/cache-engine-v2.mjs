@@ -37,6 +37,7 @@ import {
   glmHitRatio,
   hitRatePct,
   isOpenRouterAffinityEligible,
+  lintSystemVolatility,
   loadConfig,
   mimoHitRate,
   mimoSessionIdFor,
@@ -45,6 +46,7 @@ import {
   relocateVolatileEnvBlock,
   scanPage,
   shouldAggregate,
+  volatilityTransition,
 } from "./cache-engine-core.mjs"
 import { resolveRuntimePolicy } from "./cache-policy-core.mjs"
 
@@ -127,6 +129,10 @@ export const CacheEngineV2 = {
     const sessions = new Map()
     const tombstones = new Map()
     const evicted = new Map()
+    // Dedicated, bounded dedup signatures for the advisory linter, kept separate
+    // from `sessions` so a neutral/unknown-model context call never allocates or
+    // refreshes the main per-session state. Holds rule-ID signatures only.
+    const lintSigs = new Map()
 
     const isTombstoned = (sid) => {
       if (!sid) return false
@@ -142,6 +148,7 @@ export const CacheEngineV2 = {
       if (!sid) return
       sessions.delete(sid)
       evicted.delete(sid)
+      lintSigs.delete(sid)
       tombstones.set(sid, Date.now())
       pruneMarks(tombstones, DELETED_CAP, DELETED_TTL_MS)
     }
@@ -149,6 +156,21 @@ export const CacheEngineV2 = {
       if (!sid) return
       evicted.set(sid, Date.now())
       pruneMarks(evicted, EVICTED_CAP, EVICTED_TTL_MS)
+    }
+
+    // Linter dedup signatures: a dedicated bounded LRU, independent of `sessions`
+    // (so neutral/unknown models never allocate main state). Absence === no high
+    // state, so a cleared signature is simply deleted.
+    const lintSigFor = (sid) => (sid ? lintSigs.get(sid) ?? null : null)
+    const setLintSig = (sid, sig) => {
+      if (!sid) return
+      lintSigs.delete(sid)
+      if (sig === null) return
+      lintSigs.set(sid, sig)
+      if (lintSigs.size > MAX_SESSIONS) {
+        const victim = lintSigs.keys().next().value
+        if (victim !== undefined) lintSigs.delete(victim)
+      }
     }
 
     // Returns the session state, or null when the id is tombstoned (a
@@ -201,9 +223,40 @@ export const CacheEngineV2 = {
     const onContext = (event) => {
       try {
         const model = event?.model
+        const sid = String(event?.sessionID ?? "")
+
+        // Advisory silent-invalidator linter (read-only; never rewrites). Runs
+        // for every family (matching V1) using a dedicated bounded signature map,
+        // so neutral/unknown models never allocate or refresh the main session
+        // state. Emits ONE additive `boundary` record per transition into a
+        // high-severity state (never every turn). It runs before the `<env>`
+        // relocation below; those rules are position-invariant, so the finding
+        // set matches V1's post-relocation evaluation.
+        if (sid && !isTombstoned(sid)) {
+          try {
+            const lint = lintSystemVolatility(event?.system)
+            const { signature, emit, rules } = volatilityTransition(lintSigFor(sid), lint.findings)
+            if (emit) {
+              recordSafe({
+                kind: "boundary",
+                sid,
+                ts: Date.now(),
+                reason: "system_volatility",
+                severity: "high",
+                rules,
+                ...(model?.providerID ? { provider: String(model.providerID) } : {}),
+                ...(model?.id ? { model: String(model.id) } : {}),
+              })
+            }
+            // null clears the signature so a later recurrence emits again.
+            setLintSig(sid, signature)
+          } catch {
+            /* diagnostics must never break the request */
+          }
+        }
+
         const caps = resolveRuntimePolicy(toModelInfo(model))
         if (!caps || caps.isNeutral) return
-        const sid = String(event?.sessionID ?? "")
         const s = getSession(sid)
         if (s) s.caps = caps
 
@@ -482,7 +535,7 @@ export const CacheEngineV2 = {
     log("info", "opencode-cache-engine V2 adapter ready")
 
     // Cleanup: stop the consumer, dispose hook registrations, clear state.
-    return async () => {
+    const cleanup = async () => {
       try {
         ac.abort()
       } catch {
@@ -498,7 +551,15 @@ export const CacheEngineV2 = {
       sessions.clear()
       tombstones.clear()
       evicted.clear()
+      lintSigs.clear()
     }
+    // Test-only introspection of internal state sizes (non-enumerable; no
+    // request/provider effect).
+    Object.defineProperty(cleanup, "__debug", {
+      value: { sessionCount: () => sessions.size, lintSigCount: () => lintSigs.size },
+      enumerable: false,
+    })
+    return cleanup
   },
 }
 
