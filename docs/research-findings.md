@@ -1508,7 +1508,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   adapter checkpoint `2a00607`.
 - Re-verify when: OpenCode changes its system-prompt shape (adds/removes the
   model-name preamble or the `<env>` block), or the relocation helper changes.
-- Superseded by: null
+- Superseded by: RF-OC-035
 - Notes: **Layers (keep distinct):** (1) policy **enabled** — yes for GLM/MiMo;
   (2) helper **accepts the prompt shape** — **no** on the captured 2.0.26 shape
   (marker absent); (3) mutation **reaching the outgoing request** — no (OFF==ON);
@@ -1549,6 +1549,50 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   non-empty line multiset are unchanged, and the reorder is deterministic and
   idempotent. Not a cache-affecting change and does not affect provider cache
   benefit (still unverified).
+
+### RF-OC-035 — OpenCode 2.0.26 delivers the system prompt as four text parts; the daily date is a standalone line in part 2 and the `<env>` relocation is a within-part wire no-op (supersedes the stale reason in RF-OC-033)
+
+- Status: current
+- Verified: 2026-10-14
+- Area: opencode-runtime
+- Fact:
+  - The V2 `context` hook payload's `system` field is an array of text parts
+    `{ type: "text", text }`. On an offline-captured OpenCode 2.0.26 primary
+    request it has **four** parts: `[0]` agent/harness prompt (1471 B);
+    `[1]` `# Your Model` (Name / Provider ID / Model ID; 80 B); `[2]` skills/mode +
+    date + intro + `<env>` block (5748 B, **ends with `</env>`**); `[3]` worktree
+    paragraph (238 B).
+  - The daily date is a **standalone line** `Today's date: <EEE MMM D YYYY>`
+    **outside** and immediately **before** the `<env>` block, inside **part 2**.
+    There is no `You are powered by the model named ` START marker.
+  - The `<env>` block is **already terminal in part 2**, so
+    `relocateVolatileEnvBlock(part2)` returns `changed:false`; the GLM-5.3 /
+    MiMo-V2.6 `<env>` relocation therefore does **not** reach the wire (the neutral,
+    GLM-5.3, and MiMo-V2.6 system texts are byte-identical apart from the
+    `# Your Model` name/id lines).
+  - Telemetry confirms the policy resolves (`policy: "glm53"` / `"mimo26"`,
+    `provider: "mock"`), so the no-op is the **part boundary**, not classification
+    and not the helper precondition: the helper accepts the structural 2.0.26 shape
+    and returns `changed:true` when the block is interior to a part.
+  - Consequence: a content-preserving **date-line** relocation within part 2 is
+    implementable and would change part 2 (bounded by the part boundary; the date
+    cannot move past part 3).
+- Evidence: [O] (offline wire capture 2026-10-14, OpenCode 2.0.26, mock, netns;
+  temporary read-only instrumentation of `event.system` part shapes, reverted)
+- Sources: offline captures for `mock/synthetic` / `mock/glm-5.3-flash` /
+  `mock/mimo-v2.6-flash` via `test/harness/capture`; `src/cache-engine-v2.mjs`
+  (`onContext`); `src/cache-engine-core.mjs` (`relocateVolatileEnvBlock`);
+  `docs/phase2-date-relocation-hook-shape.md`.
+- Justifies: the Phase 2 date-relocation design and P2-T1's go/no-go.
+- Version context: OpenCode 2.0.26; `@opencode/plugin` 2.0.16; adapter at v1.1.0.
+- Re-verify when: OpenCode changes the number or boundaries of the `event.system`
+  parts, or the helper's part handling changes.
+- Superseded by: null
+- Notes: Supersedes **RF-OC-033**'s *reason* (RF-OC-033 concluded "no-op" correctly
+  but attributed it to the absent START marker; the current helper accepts the
+  structural shape — the wire no-op is the part boundary). Provider cache benefit
+  remains **unverified** (no provider requests). 1.18.x wire shape not captured
+  (that binary is not installed).
 
 ## RF-OR — OpenRouter transport and routing
 
