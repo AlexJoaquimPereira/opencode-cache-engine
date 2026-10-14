@@ -1787,6 +1787,91 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Notes: Only one non-core appended tool (`execute`) was observable; a scenario with
   multiple appended tools was not exercised.
 
+### RF-OC-043 — [SUPERSEDED by RF-OC-044] A connected local MCP server's tool does not appear in the serialized request on the verified offline route (mock provider, `opencode run --standalone`), and the MCP connection itself is asynchronous
+
+- Status: superseded
+- Verified: 2026-10-15
+- Area: opencode-runtime
+- Fact:
+  - With a local stdio MCP server configured in a disposable project
+    (`mcp: { "<name>": { type: "local", command: [...], enabled: true } }`), OpenCode
+    logs `mcp connected server=<name> tools=1` at INFO on each run (~0.4 s into the
+    process).
+  - Despite that connection — and with an explicit `tools: { "*": true }` enable plus
+    `slowtool` / `slow_slowtool` names — the MCP tool was **never present** in the
+    serialized request's `tools` (which stayed at the 12 built-ins) across repeated
+    one-shot runs. No first-vs-subsequent tool-set difference was reproducible.
+  - `opencode run` is one-shot, so a *second* request **within the same process** (which
+    could reveal a pending→connected transition) was not producible offline
+    (`RF-OC-040` notes).
+- Evidence: [O] (offline capture; minimal local stdio MCP server; `--print-logs` shows
+  `mcp connected`).
+- Sources: `docs/phase3-p3t3-startup-mcp.md` (P3-T3).
+- Justifies: the P3-T3 ranked entry (no observed avoidable startup variance; watch item).
+- Version context: OpenCode 2.0.26.
+- Re-verify when: OpenCode changes MCP tool admission/registration, or a same-process
+  multi-request capture becomes available.
+- Superseded by: RF-OC-044
+- Notes: Whether the absence is "request assembled before MCP is ready" or "MCP tools
+  excluded from this route" could not be separated offline (cause unverified).
+
+### RF-OC-044 — OpenCode 2.0.26 admits MCP tools primarily through Code Mode (`codemode` defaults true → folded into the single `execute` tool, absent from the request `tools` array) and does NOT await MCP connection before the first request (a real startup/readiness race); the native config is `permissions`/`agents`/MCP `disabled`
+
+- Status: current
+- Verified: 2026-10-15
+- Area: opencode-runtime
+- Fact:
+  - **MCP tools default to Code Mode.** An MCP server's tools register with `codemode`
+    defaulting to **true**. Code-Mode tools are **not** emitted as individual entries in
+    the request `tools` array; they are folded into the single `execute` tool and exposed
+    via the Code-Mode instructions/catalog. A tool id is
+    `<sanitized server>_<sanitized tool>` (server `slow` + tool `slowtool` →
+    `slow_slowtool`). Putting an MCP tool on the native wire list requires the server
+    config key `codemode: false` (undocumented on the public MCP page).
+  - **Observed (our capture).** With a local stdio MCP server, OpenCode logs
+    `mcp connected server=<name> tools=1` ~0.4 s into the run; the request `tools` array
+    stayed at the 12 built-ins (last = `execute`) across repeated one-shot runs —
+    including with global `tools: {"*": true}`, a per-agent `agents.<name>.tools` enable
+    (both **v1 legacy keys** here), and `codemode: false`.
+  - **Readiness race (source + timing).** `SessionContext.select` calls `mcpTools.flush`
+    before building the tool snapshot, but `flush` awaits only the first discovery pass,
+    which is `Effect.forkScoped` against a still-connecting server; `mcp.tools()` "reads
+    what is connected now". MCP connect is forked; completion is signalled by
+    `McpEvent.ToolsChanged` (+ `mcp.status.changed`) → a **100 ms debounced** registry
+    reconcile/reload. Our log shows `mcp connected` (~403 ms) landing *after* the first
+    request was assembled/answered, i.e. the first request can omit MCP-provided tools. A
+    plugin can observe readiness only indirectly (the per-request `context` hook `tools`
+    map + MCP bus events); there is no "tools ready" signal.
+  - **Config keys (v2 native vs legacy).** Native top-level: `permissions`
+    (`Permission.Ruleset` array of `{action,resource,effect}`) and `agents` (plural); MCP
+    servers use `disabled` (not `enabled`). An agent's native field is `permissions` —
+    there is **no** native per-agent `tools`. Legacy v1 keys (`tools` map, `permission`
+    map, `agent` singular, MCP `enabled`) are accepted and migrated/flattened into the
+    ordered `permissions` array. Tool admission is subtractive only: a tool is removed
+    solely by a whole-tool `deny` (`resource:"*"`), never force-added.
+  - **`opencode run` vs TUI.** No MCP-specific admission branch was found for
+    non-interactive `run`; the only run-mode difference is permission handling
+    (non-interactive auto-answers `ask` → once with `--auto`, else reject). Tool
+    visibility is unaffected.
+  - **The V2 `context` hook `tools` IS the on-wire list** (`direct` tools + `execute`,
+    from `snapshot.definitions`), not the full registry: Code-Mode/MCP tools are absent
+    from it (they live in the `execute` catalog).
+- Evidence: [D] (first-party v2.0.26 source) + [O] (our offline capture + log timing).
+- Sources: `docs/phase3-p3t3-startup-mcp.md`; librarian source packet (session
+  `ses_ec437c21effeSjcSIJA0cO7kDa`); OpenCode `v2.0.26` source `packages/{core,schema,cli,plugin}/**`;
+  docs `opencode.ai/docs/{mcp-servers,agents,tools,config}`.
+- Justifies: the P3-T3 ranked entry (startup/MCP readiness = real, structurally-verified
+  race; blocking deferred → no-op); corrects `RF-OC-043`; and explains the
+  `execute`-is-Code-Mode note in `RF-OC-041`.
+- Version context: OpenCode 2.0.26.
+- Re-verify when: OpenCode changes MCP registration / Code-Mode defaults, tool assembly,
+  or the `flush`/readiness path.
+- Superseded by: null
+- Notes: A same-process second request (to wire-observe a pending→connected transition)
+  was not producible offline; the race is *structurally verified* (source) +
+  timing-observed, not wire-observed. Whether a `codemode:false` tool reaches the wire was
+  not confirmed offline (the first request raced the connect).
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
