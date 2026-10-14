@@ -290,6 +290,10 @@ are our own known-neutral patterns.
 
 ## 6. Phase 2 — Date relocation investigation
 
+**Status: COMPLETE** (2026-10-14; P2-T1..P2-T5). The date-line relocation is
+implemented (default off), wire-verified (G3), and the provider A/B showed directional
+support only (G4 not promoted). See `docs/phase2-p2t5-acceptance-decision.md`.
+
 **Objective:** Determine whether moving the daily date line is safe and improves cache reuse.
 
 ### Verify hook shape

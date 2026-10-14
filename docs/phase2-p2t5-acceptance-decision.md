@@ -41,3 +41,24 @@ completion is not a promotion criterion.
   optional/open (tracked in `TODO.md`).
 - `stabilizeDate` ships **off**; the shipped structural capabilities are the `<env>`
   relocation (`stabilizeSystem`) and the (off-by-default) date-line relocation.
+
+## Phase 2 completion record (2026-10-14)
+Verified complete at HEAD `70f8e93` (package **1.1.2**; `npm test` **368/0**; all four
+capture-harness suites pass; worktree clean apart from the local `TODO.md` and the
+preserved untracked `package-lock.json`).
+
+| Task | Deliverable | Artifact(s) | Status |
+|---|---|---|---|
+| P2-T1 | Hook-shape research (per route) | `docs/phase2-date-relocation-hook-shape.md`; `RF-OC-035`; `test/fixtures/date-relocation-shapes.mjs` | done |
+| P2-T2 | Content-preserving date relocation | `relocateVolatileDateLine` + `stabilizeDate` (V1/V2); tests + audit hardening | done |
+| P2-T3 | Offline wire verification (gate G3) | `test/harness/capture/{verify-date-relocation.mjs,date-relocation.test.sh,run.sh}`; `RF-OC-036` | done |
+| P2-T4 | Provider-side A/B | `docs/phase2-p2t4-provider-ab-report.md`; `RF-OC-038`; `RF-OR-006` | performed (directional support) |
+| P2-T5 | Acceptance decision | this document | done |
+
+**Plan §6 acceptance:** hook shape and wire behavior documented; invariants pass; no
+stale date introduced; **provider-benefit threshold not met** → keep experimental
+(explicitly accepted).
+
+**§3C thresholds:** transform invariants **met**; provider benefit **not met** →
+`stabilizeDate` default **off**.
+
