@@ -375,8 +375,11 @@ confirmation is optional. **Phase 3 — other volatility sources: P3-T1 (offline
 capture groundwork) COMPLETE** (2026-10-15) — both pair types reproduce offline
 (`RF-OC-040`/`RF-OC-041`; `docs/phase3-p3t1-capture-groundwork.md`). **P3-T2 (tool
 ordering) COMPLETE** (2026-10-15) — **no-op** (deterministic order/definitions;
-`RF-OC-042`; `docs/phase3-p3t2-tool-ordering.md`); P3-T3 (startup/MCP readiness) is
-next. See `TODO.md`.
+`RF-OC-042`; `docs/phase3-p3t2-tool-ordering.md`). **P3-T3 (startup/MCP readiness)
+COMPLETE** (2026-10-15) — **no-op / watch item** (the MCP-readiness race is real:
+MCP tools are Code-Mode by default and the first request can precede MCP registration;
+`RF-OC-044` supersedes `RF-OC-043`; `docs/phase3-p3t3-startup-mcp.md`); P3-T4
+(dynamic instructions/project context) is next. See `TODO.md`.
 
 - **Diagnose before mutating.** Observe the rendered request, identify a specific
   avoidable instability, verify the hook can safely observe/change it, then make
