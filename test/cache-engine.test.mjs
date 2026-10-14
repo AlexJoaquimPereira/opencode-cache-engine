@@ -9,10 +9,11 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { execFileSync } from "node:child_process"
-import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
+import { execFileSync, spawnSync } from "node:child_process"
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, relative } from "node:path"
+import { fileURLToPath } from "node:url"
 import {
   POLICY_CLAUDE,
   POLICY_DEEPSEEK,
@@ -33,12 +34,15 @@ import {
   detectPolicy,
   detectReasoningIssues,
   digestDecision,
+  effectiveSeverity,
   expandHome,
+  firstSystemDifference,
   glmHitRatio,
   gptCacheOptionFieldNames,
   gptCacheOptionsDelta,
   hitRatePct,
   isOpenRouterAffinityEligible,
+  lintSystemVolatility,
   loadConfig,
   mimoHitRate,
   mimoSessionIdFor,
@@ -56,6 +60,7 @@ import {
   systemShapeHashes,
   toolFingerprint,
   toolWireFingerprint,
+  volatilityTransition,
 } from "../src/cache-engine-core.mjs"
 import {
   BASELINES,
@@ -77,6 +82,7 @@ import {
 } from "../src/cache-policy-core.mjs"
 import * as usageCore from "../src/cache-usage-core.mjs"
 import * as engineCore from "../src/cache-engine-core.mjs"
+import { diffCapture, diffRequests, loadCapture } from "./harness/capture/diff-requests.mjs"
 
 const asst = (id, read, write) => ({
   info: { id, role: "assistant", tokens: { cache: { read, write } } },
@@ -1132,6 +1138,420 @@ test("boundary: reason classification for prefix changes", () => {
   assert.deepEqual(prefixChangeReasons(["fullSystemHash"]), ["system_stable_prefix_changed"])
   // empty/unknown
   assert.deepEqual(prefixChangeReasons([]), ["unknown"])
+})
+
+// ===========================================================================
+// Phase 1 diagnostics: first-difference reporting + silent-invalidator linter
+// ===========================================================================
+
+test("phase1: firstSystemDifference locates the exact changed byte", () => {
+  const a = "AAAAABBBBB"
+  const b = "AAAAAXBBBB"
+  const d = firstSystemDifference(a, b)
+  assert.equal(d.equal, false)
+  assert.equal(d.firstDiffOffset, 5)
+  assert.equal(d.beforeLength, 10)
+  assert.equal(d.afterLength, 10)
+  // pure: inputs untouched
+  assert.equal(a, "AAAAABBBBB")
+  assert.equal(b, "AAAAAXBBBB")
+})
+
+test("phase1: firstSystemDifference reports equality and full-prefix length", () => {
+  const d = firstSystemDifference("same", "same")
+  assert.equal(d.equal, true)
+  assert.equal(d.firstDiffOffset, 4)
+  assert.equal(d.beforeLength, 4)
+  assert.equal(d.afterLength, 4)
+  // non-string inputs are treated as empty, never throw
+  const e = firstSystemDifference(undefined, "x")
+  assert.equal(e.equal, false)
+  assert.equal(e.firstDiffOffset, 0)
+})
+
+test("phase1: firstSystemDifference handles empty inputs", () => {
+  assert.deepEqual(firstSystemDifference("", ""), {
+    equal: true,
+    firstDiffOffset: 0,
+    beforeLength: 0,
+    afterLength: 0,
+  })
+  const emptyVsX = firstSystemDifference("", "x")
+  assert.equal(emptyVsX.equal, false)
+  assert.equal(emptyVsX.firstDiffOffset, 0)
+  assert.equal(emptyVsX.beforeLength, 0)
+  assert.equal(emptyVsX.afterLength, 1)
+  const xVsEmpty = firstSystemDifference("x", "")
+  assert.equal(xVsEmpty.equal, false)
+  assert.equal(xVsEmpty.firstDiffOffset, 0)
+  assert.equal(xVsEmpty.beforeLength, 1)
+  assert.equal(xVsEmpty.afterLength, 0)
+})
+
+test("phase1: first-difference localisation is exact across >=5 perturbations (threshold §3C)", () => {
+  const base = "AAAAABBBBBCCCCCDDDDD" // length 20
+  const cases = [
+    ["XXXXXBBBBBCCCCCDDDDD", 0],
+    ["AAAAAXBBBBCCCCCDDDDD", 5],
+    ["AAAAABBBBBXCCCCDDDDD", 10],
+    ["AAAAABBBBBCCCCCXDDDD", 15],
+    ["AAAAABBBBBCCCCCDDDDX", 19],
+    ["AAAAABBBBBCCCCCDDDDDX", 20], // append-only: no differing byte, offset == length
+  ]
+  for (const [cur, off] of cases) {
+    assert.equal(firstSystemDifference(base, cur).firstDiffOffset, off, "offset for " + cur)
+  }
+  // identical replay: no false change
+  assert.equal(firstSystemDifference(base, base).equal, true)
+})
+
+test("phase1: linter is silent on clean, stable system text", () => {
+  const res = lintSystemVolatility("You are a helpful coding assistant.\nFollow the rules.")
+  assert.equal(res.highCount, 0)
+  assert.equal(res.worstSeverity, "none")
+  assert.deepEqual(res.findings, [])
+})
+
+test("phase1: linter flags a per-turn timestamp (VOL-TIMESTAMP, high)", () => {
+  const res = lintSystemVolatility("Current time: 2026-10-14T09:12:33Z\nBe concise.")
+  assert.equal(res.worstSeverity, "high")
+  assert.ok(res.findings.some((f) => f.ruleId === "VOL-TIMESTAMP" && f.severity === "high"))
+})
+
+test("phase1: linter flags a session/random id (VOL-SESSION-ID, high)", () => {
+  const res = lintSystemVolatility("Session ses_abc123def456 is active.")
+  assert.equal(res.worstSeverity, "high")
+  assert.ok(res.findings.some((f) => f.ruleId === "VOL-SESSION-ID" && f.severity === "high"))
+})
+
+test("phase1: linter flags a tool-set change (VOL-TOOL-SET, high) only with a previous snapshot", () => {
+  const prev = [{ id: "read" }, { id: "grep" }]
+  const cur = [{ id: "read" }, { id: "write" }]
+  const res = lintSystemVolatility("stable", cur, { previousTools: prev })
+  assert.equal(res.worstSeverity, "high")
+  assert.ok(res.findings.some((f) => f.ruleId === "VOL-TOOL-SET" && f.severity === "high"))
+  // without a previous snapshot the outcome is never guessed
+  assert.equal(lintSystemVolatility("stable", cur).highCount, 0)
+})
+
+test("phase1: linter flags a tool-order change (VOL-TOOL-ORDER, medium)", () => {
+  const prev = [{ id: "read" }, { id: "grep" }]
+  const cur = [{ id: "grep" }, { id: "read" }]
+  const res = lintSystemVolatility("stable", cur, { previousTools: prev })
+  assert.equal(res.worstSeverity, "medium")
+  assert.ok(res.findings.some((f) => f.ruleId === "VOL-TOOL-ORDER" && f.severity === "medium"))
+  // identical order with a matching set is not a finding
+  assert.equal(lintSystemVolatility("stable", prev, { previousTools: prev }).findings.length, 0)
+})
+
+test("phase1: allowlisted volatility (date, cwd path) is info-only, never high", () => {
+  const date = lintSystemVolatility("Today's date: 2026-10-14")
+  assert.equal(date.highCount, 0)
+  assert.ok(date.findings.some((f) => f.ruleId === "VOL-DATE" && f.severity === "info" && f.allowlisted === true))
+  // a date-only line must NOT be classified as a timestamp
+  assert.ok(!date.findings.some((f) => f.ruleId === "VOL-TIMESTAMP"))
+
+  const cwd = lintSystemVolatility("Working directory: /home/alex/project")
+  assert.equal(cwd.highCount, 0)
+  assert.ok(cwd.findings.some((f) => f.ruleId === "VOL-CWD-PATH" && f.severity === "info" && f.allowlisted === true))
+})
+
+test("phase1: linter never mutates its inputs and tolerates non-array/odd parts", () => {
+  const parts = [{ type: "text", text: "Today's date: 2026-10-14" }]
+  const before = JSON.stringify(parts)
+  lintSystemVolatility(parts, null, {})
+  assert.equal(JSON.stringify(parts), before)
+  assert.doesNotThrow(() => lintSystemVolatility(undefined))
+  assert.doesNotThrow(() => lintSystemVolatility([{} , null, 42]))
+})
+
+test("phase1: systemShapeHashes exposes the stable-prefix byte length", () => {
+  assert.equal(systemShapeHashes("AAAAABBBBB", "AAAAABBBBBCCCCC").stablePrefixLength, 10)
+  assert.equal(systemShapeHashes("AAAAABBBBB", "XXXXXBBBBB").stablePrefixLength, 0)
+  assert.equal(systemShapeHashes("same", "same").stablePrefixLength, 4)
+})
+
+async function runLinterEmitProbe() {
+  const home = mkdtempSync(join(tmpdir(), "ce-linter-emit-"))
+  const pluginURL = new URL("../src/cache-engine.ts", import.meta.url).href
+  const script = `
+    import { readFileSync } from "node:fs"
+    process.env.CACHE_ENGINE_METRICS_FILE = process.env.HOME + "/linter.jsonl"
+    const { CacheEngine } = await import(${JSON.stringify(pluginURL)});
+    const fake = { app: { log: async () => ({}) }, session: { get: async () => ({ data: { parentID: null } }), messages: async () => ({ data: [] }) }, tool: { list: async () => ({ data: [] }) } };
+    const hooks = await CacheEngine({ client: fake, directory: process.env.HOME });
+    const model = { providerID: "deepseek", id: "deepseek-flash", api: { id: "deepseek-flash" } };
+    const provider = { source: "config", info: { id: "deepseek" }, options: {} };
+    const drive = async (sid, system) => {
+      const sysOut = { system: [system] };
+      await hooks["experimental.chat.system.transform"]({ sessionID: sid, model, provider }, sysOut);
+      return sysOut.system[0];
+    };
+    const dirty = "Current time: 2026-10-14T09:12:33Z\\nBe concise.";
+    const clean = "You are a helpful coding assistant.\\nFollow the rules.";
+    const dirtyOut = await drive("ses_lint_dirty", dirty);
+    const cleanOut = await drive("ses_lint_clean", clean);
+    const recs = readFileSync(process.env.CACHE_ENGINE_METRICS_FILE, "utf8").trim().split("\\n").filter(Boolean).map((l) => JSON.parse(l));
+    const vol = recs.filter((r) => r.kind === "boundary" && r.reason === "system_volatility");
+    process.stdout.write(JSON.stringify({
+      dirtyUnchanged: dirtyOut === dirty,
+      cleanUnchanged: cleanOut === clean,
+      volForDirty: vol.filter((r) => r.sid === "ses_lint_dirty").map((r) => r.rules),
+      volForClean: vol.filter((r) => r.sid === "ses_lint_clean").length,
+    }));
+  `
+  const stdout = execFileSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], {
+    cwd: process.cwd(),
+    env: { ...process.env, HOME: home },
+    encoding: "utf8",
+  })
+  return JSON.parse(stdout.trim())
+}
+
+test("phase1: the guarded linter emits a system_volatility record without mutating the request", async () => {
+  const out = await runLinterEmitProbe()
+  assert.equal(out.dirtyUnchanged, true, "diagnostics must not mutate the system text")
+  assert.equal(out.cleanUnchanged, true)
+  assert.ok(
+    out.volForDirty.some((rules) => Array.isArray(rules) && rules.includes("VOL-TIMESTAMP")),
+    "a timestamp turn must emit VOL-TIMESTAMP",
+  )
+  assert.equal(out.volForClean, 0, "a clean system must not emit a volatility record")
+})
+
+test("phase1: effectiveSeverity pins allow-listed rules to info", () => {
+  // A high default can never leak through the allowlist.
+  assert.equal(effectiveSeverity("VOL-DATE", "high"), "info")
+  assert.equal(effectiveSeverity("VOL-CWD-PATH", "high"), "info")
+  assert.equal(effectiveSeverity("VOL-TIMESTAMP", "high"), "high")
+  assert.equal(effectiveSeverity("VOL-TOOL-ORDER", "medium"), "medium")
+  assert.equal(effectiveSeverity("VOL-UNKNOWN-RULE", undefined), "medium") // fallback
+  // The linter's output cannot carry a high allow-listed finding.
+  const date = lintSystemVolatility("Today's date: 2026-10-14")
+  assert.equal(date.highCount, 0)
+  assert.ok(date.findings.filter((f) => f.ruleId === "VOL-DATE").every((f) => f.severity === "info"))
+})
+
+test("phase1: volatilityTransition emits only on high-state transition/change", () => {
+  const high = [{ ruleId: "VOL-TIMESTAMP", severity: "high" }]
+  const high2 = [
+    { ruleId: "VOL-TIMESTAMP", severity: "high" },
+    { ruleId: "VOL-SESSION-ID", severity: "high" },
+  ]
+  const infoOnly = [{ ruleId: "VOL-DATE", severity: "info" }]
+  assert.deepEqual(volatilityTransition(null, high), {
+    signature: "VOL-TIMESTAMP",
+    emit: true,
+    rules: ["VOL-TIMESTAMP"],
+  })
+  assert.deepEqual(volatilityTransition("VOL-TIMESTAMP", high), {
+    signature: "VOL-TIMESTAMP",
+    emit: false,
+    rules: ["VOL-TIMESTAMP"],
+  })
+  const changed = volatilityTransition("VOL-TIMESTAMP", high2)
+  assert.equal(changed.emit, true)
+  assert.equal(changed.signature, "VOL-SESSION-ID,VOL-TIMESTAMP") // deterministic sort
+  assert.deepEqual(volatilityTransition("VOL-TIMESTAMP", infoOnly), { signature: null, emit: false, rules: [] })
+  // recurrence after a cleared state emits again
+  assert.equal(volatilityTransition(null, high).emit, true)
+  // normalization is order-independent and de-duplicated
+  const normalized = volatilityTransition(null, [high2[1], high2[0], high2[0]])
+  assert.equal(normalized.signature, "VOL-SESSION-ID,VOL-TIMESTAMP")
+  // info-only findings never emit
+  assert.equal(volatilityTransition("VOL-TIMESTAMP", infoOnly).emit, false)
+})
+
+test("phase1: tool rules require BOTH snapshots (omitted is not empty)", () => {
+  const prev = [{ id: "read" }, { id: "grep" }]
+  const cur = [{ id: "read" }, { id: "write" }]
+  // omitted current tools: never inferred
+  assert.equal(lintSystemVolatility("x", undefined, { previousTools: prev }).highCount, 0)
+  // omitted previous tools: never inferred
+  assert.equal(lintSystemVolatility("x", cur).highCount, 0)
+  // two explicitly empty snapshots are equal -> no change, no finding
+  assert.equal(lintSystemVolatility("x", [], { previousTools: [] }).findings.length, 0)
+  // genuine change with both snapshots supplied
+  const res = lintSystemVolatility("x", cur, { previousTools: prev })
+  assert.ok(res.findings.some((f) => f.ruleId === "VOL-TOOL-SET" && f.severity === "high"))
+})
+
+test("phase1: 32-hex session detection requires surrounding session context", () => {
+  const hex = "0123456789abcdef0123456789abcdef"
+  // session context present -> high
+  const withCtx = lintSystemVolatility(`session id: ${hex}`)
+  assert.ok(withCtx.findings.some((f) => f.ruleId === "VOL-SESSION-ID" && f.severity === "high"))
+  // stable content hash with no session context -> no finding
+  const hashOnly = lintSystemVolatility(`The content hash is ${hex} and it is stable.`)
+  assert.equal(hashOnly.highCount, 0)
+  assert.ok(!hashOnly.findings.some((f) => f.ruleId === "VOL-SESSION-ID"))
+  // recognizable forms stay high
+  assert.ok(
+    lintSystemVolatility("id 12345678-9abc-def0-1234-56789abcdef0").findings.some(
+      (f) => f.ruleId === "VOL-SESSION-ID" && f.severity === "high",
+    ),
+  )
+  assert.ok(
+    lintSystemVolatility("ses_abc123def456").findings.some(
+      (f) => f.ruleId === "VOL-SESSION-ID" && f.severity === "high",
+    ),
+  )
+  // ordinary / short hex -> no finding
+  assert.equal(lintSystemVolatility("token deadbeefcafe").highCount, 0)
+})
+
+async function runLinterDedupProbe() {
+  const home = mkdtempSync(join(tmpdir(), "ce-linter-dedup-"))
+  const pluginURL = new URL("../src/cache-engine.ts", import.meta.url).href
+  const script = `
+    import { readFileSync } from "node:fs"
+    process.env.CACHE_ENGINE_METRICS_FILE = process.env.HOME + "/dedup.jsonl"
+    const { CacheEngine } = await import(${JSON.stringify(pluginURL)});
+    const fake = { app: { log: async () => ({}) }, session: { get: async () => ({ data: { parentID: null } }), messages: async () => ({ data: [] }) }, tool: { list: async () => ({ data: [] }) } };
+    const hooks = await CacheEngine({ client: fake, directory: process.env.HOME });
+    const model = { providerID: "deepseek", id: "deepseek-flash", api: { id: "deepseek-flash" } };
+    const provider = { source: "config", info: { id: "deepseek" }, options: {} };
+    const drive = async (sid, system) => {
+      const sysOut = { system: [system] };
+      await hooks["experimental.chat.system.transform"]({ sessionID: sid, model, provider }, sysOut);
+      return sysOut.system[0];
+    };
+    const ts = "Current time: 2026-10-14T09:12:33Z";
+    const tsAndSid = "Current time: 2026-10-14T09:12:33Z\\nSession ses_abc123def456";
+    const clean = "plain stable text";
+    await drive("ses_a", ts);
+    await drive("ses_a", ts);
+    await drive("ses_a", ts);
+    await drive("ses_b", ts);
+    await drive("ses_a", tsAndSid);
+    await drive("ses_a", clean);
+    await drive("ses_a", ts);
+    const recs = readFileSync(process.env.CACHE_ENGINE_METRICS_FILE, "utf8").trim().split("\\n").filter(Boolean).map((l) => JSON.parse(l));
+    const vol = recs.filter((r) => r.kind === "boundary" && r.reason === "system_volatility");
+    process.stdout.write(JSON.stringify({
+      aCount: vol.filter((r) => r.sid === "ses_a").length,
+      bCount: vol.filter((r) => r.sid === "ses_b").length,
+      aRules: vol.filter((r) => r.sid === "ses_a").map((r) => r.rules),
+    }));
+  `
+  const stdout = execFileSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], {
+    cwd: process.cwd(),
+    env: { ...process.env, HOME: home },
+    encoding: "utf8",
+  })
+  return JSON.parse(stdout.trim())
+}
+
+test("phase1/harness: diffRequests classifies expected vs unexpected differences", () => {
+  const base = { model: "m", messages: [{ role: "user", content: "hi" }], tools: [{ function: { name: "read" } }] }
+  assert.equal(diffRequests(base, base).equal, true)
+  const grown = { ...base, messages: [...base.messages, { role: "assistant", content: "ok" }] }
+  const d1 = diffRequests(base, grown)
+  assert.equal(d1.expected, true)
+  assert.equal(d1.firstDiffSection, "messages")
+  assert.ok(d1.firstDiffCanonicalByte >= 0)
+  const sys = diffRequests(base, { ...base, system: "Instruction drift." })
+  assert.equal(sys.expected, false)
+  assert.equal(sys.firstDiffSection, "system")
+  const cacheOpt = diffRequests(base, { ...base, prompt_cache_key: "abc" })
+  assert.equal(cacheOpt.expected, false)
+  const toolsCh = diffRequests(base, { ...base, tools: [{ function: { name: "write" } }] })
+  assert.equal(toolsCh.expected, false)
+  assert.equal(toolsCh.firstDiffSection, "tools")
+})
+
+test("phase1/harness: reporter validates input and reports clear errors", () => {
+  assert.throws(() => loadCapture(join(tmpdir(), "ce-missing-" + Date.now())), /cannot read capture directory/)
+  const dir = mkdtempSync(join(tmpdir(), "ce-rep-"))
+  assert.deepEqual(diffCapture(dir).pairs, []) // empty dir -> no pairs, no throw
+  writeFileSync(join(dir, "req-000.json"), "{ not json")
+  assert.throws(() => loadCapture(dir), /invalid JSON/)
+  writeFileSync(join(dir, "req-000.json"), JSON.stringify({ body: null }))
+  assert.throws(() => loadCapture(dir), /missing request body/)
+  writeFileSync(join(dir, "req-000.json"), JSON.stringify({ body: { model: "m", messages: [] } }))
+  writeFileSync(join(dir, "req-001.json"), JSON.stringify({ body: { model: "m", messages: [] } }))
+  assert.equal(diffCapture(dir).pairs.length, 1)
+})
+
+test("phase1/harness: diff-requests CLI exit codes via absolute and relative paths", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ce-cli-"))
+  const modulePath = fileURLToPath(new URL("./harness/capture/diff-requests.mjs", import.meta.url))
+  const rel = relative(process.cwd(), modulePath)
+  const run = (p) => spawnSync(process.execPath, [p, dir], { cwd: process.cwd(), encoding: "utf8" })
+  const body = (extra) =>
+    JSON.stringify({
+      body: { model: "m", system: "s", stream: true, messages: [{ role: "user", content: "hi" }], ...extra },
+    })
+  writeFileSync(join(dir, "req-000.json"), body({}))
+  writeFileSync(join(dir, "req-001.json"), body({}))
+  assert.equal(run(modulePath).status, 0, "identical (absolute path) -> 0")
+  assert.equal(run(rel).status, 0, "identical (relative path) -> 0")
+  writeFileSync(join(dir, "req-001.json"), body({ system: "drift" }))
+  assert.equal(run(modulePath).status, 1, "unexpected structural difference -> 1")
+  rmSync(join(dir, "req-001.json"))
+  assert.equal(run(modulePath).status, 2, "insufficient captures -> 2")
+  writeFileSync(join(dir, "req-001.json"), "{bad")
+  assert.equal(run(modulePath).status, 2, "invalid JSON -> 2")
+  const missing = spawnSync(process.execPath, [modulePath, join(dir, "missing-dir")], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  })
+  assert.equal(missing.status, 2, "missing directory -> 2")
+})
+
+test("phase1: per-session dedup emits on transition only and isolates sessions", async () => {
+  const out = await runLinterDedupProbe()
+  assert.equal(out.aCount, 3, "entry + changed rule set + recurrence after clear")
+  assert.equal(out.bCount, 1, "session isolation: an independent session emits its own entry")
+  assert.deepEqual(out.aRules[0], ["VOL-TIMESTAMP"])
+  assert.deepEqual(out.aRules[1], ["VOL-SESSION-ID", "VOL-TIMESTAMP"]) // normalized sort
+  assert.deepEqual(out.aRules[2], ["VOL-TIMESTAMP"])
+})
+
+async function runStablePrefixProbe() {
+  const home = mkdtempSync(join(tmpdir(), "ce-stable-prefix-"))
+  const pluginURL = new URL("../src/cache-engine.ts", import.meta.url).href
+  const script = `
+    import { readFileSync } from "node:fs"
+    process.env.CACHE_ENGINE_METRICS_FILE = process.env.HOME + "/sp.jsonl"
+    const { CacheEngine } = await import(${JSON.stringify(pluginURL)});
+    const fake = { app: { log: async () => ({}) }, session: { get: async () => ({ data: { parentID: null } }), messages: async () => ({ data: [] }) }, tool: { list: async () => ({ data: [] }) } };
+    const hooks = await CacheEngine({ client: fake, directory: process.env.HOME });
+    const model = { providerID: "deepseek", id: "deepseek-flash", api: { id: "deepseek-flash" } };
+    const provider = { source: "config", info: { id: "deepseek" }, options: {} };
+    const drive = async (sid, system) => {
+      const out = { system: [system] };
+      await hooks["experimental.chat.system.transform"]({ sessionID: sid, model, provider }, out);
+      return out.system[0];
+    };
+    await drive("ses_sp", "AAAAABBBBB");
+    await drive("ses_sp", "AAAAABBBBBCCCCC");
+    await drive("ses_sp", "XXXXXBBBBB");
+    const has = (o) => Object.prototype.hasOwnProperty.call(o, "systemStablePrefixLength");
+    const recs = readFileSync(process.env.CACHE_ENGINE_METRICS_FILE, "utf8").trim().split("\\n").filter(Boolean).map((l) => JSON.parse(l)).filter((r) => r.sid === "ses_sp");
+    const obs = recs.find((r) => r.kind === "prefix-observation");
+    const chg = recs.filter((r) => r.kind === "prefix-change");
+    process.stdout.write(JSON.stringify({
+      obsHas: obs ? has(obs) : false,
+      obsLen: obs ? obs.systemStablePrefixLength : null,
+      chgHas: chg.map(has),
+      chgLen: chg.map((r) => r.systemStablePrefixLength),
+    }));
+  `
+  const stdout = execFileSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], {
+    cwd: process.cwd(),
+    env: { ...process.env, HOME: home },
+    encoding: "utf8",
+  })
+  return JSON.parse(stdout.trim())
+}
+
+test("phase1: V1 persists systemStablePrefixLength (baseline-relative) in prefix-observation and prefix-change", async () => {
+  const out = await runStablePrefixProbe()
+  assert.equal(out.obsHas, true, "prefix-observation must carry systemStablePrefixLength")
+  assert.equal(out.obsLen, 10, "the initial observation reports the whole baseline as the stable prefix")
+  assert.deepEqual(out.chgHas, [true, true], "prefix-change must carry systemStablePrefixLength")
+  assert.deepEqual(out.chgLen, [10, 0], "append keeps the 10-byte baseline prefix; head change yields offset 0")
 })
 
 test("boundary: reasoning-integrity reason tokens", () => {
@@ -6212,6 +6632,118 @@ test("v2 adapter: unknown/neutral provider is passive and emits no transform tel
     let recs = []
     try { recs = readRecords(metrics) } catch { recs = [] }
     assert.equal(recs.filter((r) => r.kind === "cache-options" || r.kind === "boundary").length, 0, "neutral: no transform telemetry")
+    await cleanup()
+  })
+})
+
+test("v2 adapter: linter emits on transition only, stays silent on clean systems, and never mutates", async () => {
+  await withTempMetrics(async (metrics) => {
+    const mod = await import("../src/cache-engine-v2.mjs")
+    const { ctx, handlers } = makeV2Ctx()
+    const cleanup = await mod.default.setup(ctx)
+    const dirty = "Current time: 2026-10-14T09:12:33Z"
+    const mk = (sid, text) => ({
+      sessionID: sid,
+      model: { id: "m", providerID: "somegateway" },
+      system: [{ type: "text", text }],
+      options: { keep: 1 },
+      headers: { keep: "1" },
+    })
+    const e1 = mk("ses_v2_lint", dirty)
+    await handlers["context"](e1)
+    assert.equal(e1.system[0].text, dirty, "diagnostics must not mutate V2 system bytes")
+    assert.deepEqual(e1.options, { keep: 1 }, "diagnostics must not touch options")
+    await handlers["context"](mk("ses_v2_lint", dirty)) // repeat: no emit
+    await handlers["context"](mk("ses_v2_clean", "plain")) // clean
+    await handlers["context"](mk("ses_v2_lint", "plain")) // cleared
+    await handlers["context"](mk("ses_v2_lint", dirty)) // recurrence
+    let recs = []
+    try {
+      recs = readRecords(metrics)
+    } catch {
+      recs = []
+    }
+    const vol = recs.filter((r) => r.kind === "boundary" && r.reason === "system_volatility")
+    assert.equal(vol.filter((r) => r.sid === "ses_v2_lint").length, 2, "entry + recurrence only")
+    assert.equal(vol.filter((r) => r.sid === "ses_v2_clean").length, 0)
+    assert.deepEqual(vol.find((r) => r.sid === "ses_v2_lint").rules, ["VOL-TIMESTAMP"])
+    await cleanup()
+  })
+})
+
+test("v2 adapter: neutral/unknown models lint without allocating session state", async () => {
+  await withTempMetrics(async (metrics) => {
+    const mod = await import("../src/cache-engine-v2.mjs")
+    const { ctx, handlers } = makeV2Ctx()
+    const cleanup = await mod.default.setup(ctx)
+    const mk = (sid, text) => ({
+      sessionID: sid,
+      model: { id: "unknown-model", providerID: "somegateway" },
+      system: [{ type: "text", text }],
+      options: {},
+      headers: {},
+    })
+    const dirty = "Current time: 2026-10-14T09:12:33Z"
+    await handlers["context"](mk("ses_n_lint", dirty))
+    await handlers["context"](mk("ses_n_lint", dirty)) // repeat: no emit
+    await handlers["context"](mk("ses_n_lint", "plain")) // cleared
+    await handlers["context"](mk("ses_n_lint", dirty)) // recurrence
+    assert.equal(cleanup.__debug.sessionCount(), 0, "neutral model must not allocate/refresh main session state")
+    let recs = []
+    try {
+      recs = readRecords(metrics)
+    } catch {
+      recs = []
+    }
+    const vol = recs.filter((r) => r.kind === "boundary" && r.reason === "system_volatility")
+    assert.equal(vol.filter((r) => r.sid === "ses_n_lint").length, 2, "entry + recurrence only")
+    await cleanup()
+  })
+})
+
+test("v2 adapter: a policy model still allocates session state", async () => {
+  const mod = await import("../src/cache-engine-v2.mjs")
+  const { ctx, handlers } = makeV2Ctx()
+  const cleanup = await mod.default.setup(ctx)
+  const policy = {
+    sessionID: "ses_policy",
+    model: { id: "mimo-v2.6-flash", providerID: "opencode-go" },
+    system: [{ type: "text", text: "sys" }],
+    options: {},
+    headers: {},
+  }
+  await handlers["context"](policy)
+  assert.ok(cleanup.__debug.sessionCount() >= 1, "a policy model allocates session state")
+  await cleanup()
+})
+
+test("v2 adapter: system_volatility includes provider/model when available and omits them otherwise", async () => {
+  await withTempMetrics(async (metrics) => {
+    const mod = await import("../src/cache-engine-v2.mjs")
+    const { ctx, handlers } = makeV2Ctx()
+    const cleanup = await mod.default.setup(ctx)
+    const dirty = "Current time: 2026-10-14T09:12:33Z"
+    await handlers["context"]({
+      sessionID: "ses_v2_meta",
+      model: { id: "unknown-model", providerID: "somegateway" },
+      system: [{ type: "text", text: dirty }],
+      options: {},
+      headers: {},
+    })
+    await handlers["context"]({
+      sessionID: "ses_v2_nometa",
+      model: {},
+      system: [{ type: "text", text: dirty }],
+      options: {},
+      headers: {},
+    })
+    const recs = readRecords(metrics).filter((r) => r.kind === "boundary" && r.reason === "system_volatility")
+    const withMeta = recs.find((r) => r.sid === "ses_v2_meta")
+    const noMeta = recs.find((r) => r.sid === "ses_v2_nometa")
+    assert.equal(withMeta.provider, "somegateway")
+    assert.equal(withMeta.model, "unknown-model")
+    assert.ok(!("provider" in noMeta), "provider omitted when unavailable (no placeholder)")
+    assert.ok(!("model" in noMeta), "model omitted when unavailable (no placeholder)")
     await cleanup()
   })
 })
