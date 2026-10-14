@@ -1,7 +1,7 @@
 # OpenCode Cache Engine — Post-1.0.0 Implementation Plan
 
 **Document type:** Harness implementation plan  
-**Status:** Phase 1 complete (2026-10-14); Phase 2 in progress — P2-T1/P2-T2/P2-T3 done; P2-T4 provider A/B directional support (G4 not cleanly passed; simulated rollover); see `TODO.md`; further implementation requires explicit authorization
+**Status:** Phase 1 complete (2026-10-14); Phase 2 complete (P2-T1..P2-T5; P2-T4 real-rollover optional); further implementation requires explicit authorization
 **Baseline:** `opencode-cache-engine` 1.0.0; V1 and V2 entry points load  
 **Planning date:** 2026-10-13  
 **Primary objective:** Improve prompt-cache stability through conservative, provider-aware interventions that are structurally verified and, where possible, proven to improve provider-reported cache reuse.

@@ -366,14 +366,12 @@ current task's gate is met.
 **Phase 1 — structural diagnostics + offline capture harness: COMPLETE**
 (2026-10-14; suite 362/0). Delivered `lintSystemVolatility`/`firstSystemDifference`,
 `systemStablePrefixLength` telemetry, V1/V2 diagnostic integration, and the
-offline/mock capture harness. **Phase 2 is in progress:** P2-T1 (hook-shape
-research, `RF-OC-035`), P2-T2 (`stabilizeDate` date-line relocation; default off),
-and P2-T3 (serialized-request wire verification, `RF-OC-036`) are complete. P2-T4
-(provider A/B) shows **directional support** on the pinned OpenRouter route — the
-candidate `cache.read` was >= baseline in 6/6 nonce-isolated trials
-(`RF-OC-038`/`RF-OR-006`) — but is not a clean provider-measured benefit (the
-rollover was simulated); a real-calendar confirmation remains open. P2-T5 keeps the
-transform experimental. See `TODO.md`.
+offline/mock capture harness. **Phase 2 — date relocation: COMPLETE** (P2-T1..P2-T5, 2026-10-14). The
+`stabilizeDate` date-line relocation is implemented for V1/V2 (**default off**),
+wire-verified (G3, `RF-OC-036`); the provider A/B showed **directional support**
+(`RF-OC-038`) but not a clean benefit (G4, simulated rollover). **P2-T5 keeps it
+experimental** (`docs/phase2-p2t5-acceptance-decision.md`); a real-calendar rollover
+confirmation is optional. See `TODO.md`.
 
 - **Diagnose before mutating.** Observe the rendered request, identify a specific
   avoidable instability, verify the hook can safely observe/change it, then make
