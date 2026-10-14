@@ -369,10 +369,11 @@ current task's gate is met.
 offline/mock capture harness. **Phase 2 is in progress:** P2-T1 (hook-shape
 research, `RF-OC-035`), P2-T2 (`stabilizeDate` date-line relocation; default off),
 and P2-T3 (serialized-request wire verification, `RF-OC-036`) are complete. P2-T4
-(provider A/B) is **inconclusive** — no reproducible benefit above the cache
-signal's noise (`RF-OC-037`/`RF-OC-038`); a real-calendar-rollover confirmation and
-the GLM `z-ai/fp8` re-pin remain open. P2-T5 keeps the transform experimental.
-See `TODO.md`.
+(provider A/B) shows **directional support** on the pinned OpenRouter route — the
+candidate `cache.read` was >= baseline in 6/6 nonce-isolated trials
+(`RF-OC-038`/`RF-OR-006`) — but is not a clean provider-measured benefit (the
+rollover was simulated); a real-calendar confirmation remains open. P2-T5 keeps the
+transform experimental. See `TODO.md`.
 
 - **Diagnose before mutating.** Observe the rendered request, identify a specific
   avoidable instability, verify the hook can safely observe/change it, then make
