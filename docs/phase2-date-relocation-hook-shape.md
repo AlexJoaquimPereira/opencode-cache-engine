@@ -9,8 +9,10 @@
 **Evidence labels:** *Observed* / *Structurally verified* / *Offline-mock verified*.
 **Provider measured: not performed** (no provider requests, no credentials).
 
-> Status: **sections §4 and §5 pending lane memos** (V2 `context`-hook part shape;
-> per-family wire capture). Everything else below is verified.
+> Status: **complete** — §4/§5 confirmed by both lanes. **P2-T2:** the date-line
+> relocation (`relocateVolatileDateLine` + the `stabilizeDate` policy flag) is
+> implemented for V1 and V2, **default off** (experimental). Provider-side benefit
+> is still unmeasured (P2-T4).
 
 ---
 
