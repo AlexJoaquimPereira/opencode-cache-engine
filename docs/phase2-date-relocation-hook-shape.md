@@ -129,30 +129,37 @@ Three offline captures (`OC_CAPTURE_MODEL` = `mock/synthetic`, `mock/glm-5.3-fla
 ## 5A. P2-T3 — serialized-request (wire) verification (gate G3)
 
 Offline, on the **serialized** request (not hook/adapter output): the harness
-(`run.sh` with `OC_CAPTURE_MODEL` and a new `OC_CAPTURE_ENGINE_CONFIG` that writes
+(`run.sh` with `OC_CAPTURE_MODEL` and `OC_CAPTURE_ENGINE_CONFIG`, which writes
 `~/.config/opencode/cache-engine.json` into the sandbox) ran an off/on pair per
-model, and `verify-date-relocation.mjs` compared the primary system content.
+model, and `verify-date-relocation.mjs` compared the primary system content. Byte
+lengths/offsets below are on the temp-root-normalized text (`capture.XXXXXX` →
+`capture.RUN`), exactly as the verifier reports them.
 
-| Signal | GLM-5.3 | MiMo-V2.6 | neutral (control) |
-|---|---|---|---|
-| date count (off / on) | 1 / 1 | 1 / 1 | 1 / 1 |
-| off: date before `<env>` | yes | yes | yes |
-| on: date after `</env>` | yes | yes | **no** |
-| date value unchanged | yes | yes | yes |
-| non-empty line multiset preserved | yes | yes | yes |
-| length delta | **+1** | **+1** | 0 |
+| model | off root / req | off len | off date / `<env>` | on root / req | on len | on date / `<env>` | Δlen |
+|---|---|---|---|---|---|---|---|
+| GLM-5.3 | `capture.BkwWDE` / `req-002` | 7534 | 6891 / 6996–7289 | `capture.Wk7oPP` / `req-002` | 7535 | 7267 / 6967–7260 | +1 |
+| MiMo-V2.6 | `capture.OYXMRU` / `req-002` | 7538 | 6895 / 7000–7293 | `capture.lAtKeA` / `req-002` | 7539 | 7271 / 6971–7264 | +1 |
+| neutral | `capture.EORRzN` / `req-002` | 7526 | 6883 / 6988–7281 | `capture.CWdRpz` / `req-002` | 7526 | 6883 / 6988–7281 | 0 |
 
-The date line moved from before the `<env>` block to after it on the wire for both
-families; the neutral control was byte-unchanged. This establishes **G3** (the
-serialized request carries the intended change) for the tested shim route and
-positively closes the `system` hook→wire gap flagged in §4 (`RF-OC-036`). It is a
-**structural** result — provider cache benefit remains unmeasured (P2-T4).
+Checks (all pass for GLM/MiMo; the neutral control is `--unchanged`): exactly one
+anchored date line and one `<env>` pair in each text; **off** date before `<env>`;
+**on** date after `</env>` with the date value unchanged; and — order-sensitively —
+the text with only the date line's bytes removed identical apart from at most the
+one optional separator `\n`. The neutral run (transform on) is identical after
+temp-root normalization. (The roots are ephemeral harness temp dirs; the numbers
+above are the verifier's report for that run.)
+
+This establishes **G3** (the serialized request carries the intended change) for
+the tested shim route and positively closes the `system` hook→wire gap flagged in
+§4 (`RF-OC-036`). It is a **structural** result — provider cache benefit remains
+unmeasured (P2-T4).
 
 Hermetic coverage: `date-relocation.test.sh` (part of `npm run test:harness`)
-checks the verifier's exit contract. `verify-date-relocation.mjs` deliberately does
-**not** import the transform helper, so it cannot pass by sharing the
-implementation's logic — it checks line-level preservation, the exact date value,
-and the length delta independently.
+checks the verifier's exit contract (correct relocation; no-relocation; unchanged
+control with temp-root normalization; changed date value; duplicate date line;
+`capture/` subdir layout; multi-file largest-selection; two blockers).
+`verify-date-relocation.mjs` deliberately does **not** import the transform helper,
+so it cannot pass by sharing the implementation's logic.
 
 ## 6. Anchor-per-version table
 
