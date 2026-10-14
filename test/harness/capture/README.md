@@ -34,6 +34,11 @@ OC_CAPTURE_TMPDIR=/some/writable/dir test/harness/capture/run.sh
 OC_CAPTURE_TURN_TIMEOUT=180 test/harness/capture/run.sh
 MOCK_PORT=39420 test/harness/capture/run.sh
 OC_CAPTURE_RETENTION_MIN=1440 test/harness/capture/run.sh
+# optional per-model capture, and an inline CacheEngine config written to the
+# sandbox ~/.config/opencode/cache-engine.json (e.g. to enable an experimental
+# policy for a wire test):
+OC_CAPTURE_MODEL=mock/glm-5.3-flash test/harness/capture/run.sh
+OC_CAPTURE_ENGINE_CONFIG='{"policies":{"glm53":{"stabilizeDate":true}}}' test/harness/capture/run.sh
 # debug/test only — write the project for the configured port, no capture:
 OC_CAPTURE_DRY_RUN=1 test/harness/capture/run.sh
 # debug/test only — diff an existing capture dir, no capture, no provider:
@@ -54,19 +59,21 @@ testable without a sandbox) and propagates its status.
 ## Testing the contract
 
 ```sh
-npm run test:harness        # runs all three below
+npm run test:harness        # runs all four below
 # or individually:
 test/harness/capture/exit-contract.test.sh
 test/harness/capture/retention.test.sh
 test/harness/capture/port-parity.test.sh
+test/harness/capture/date-relocation.test.sh
 ```
 
 Synthetic fixtures only (no sandbox, no provider). `exit-contract` exercises the
 reporter CLI (relative + absolute), `decide.sh` (turn failure, insufficient
 captures, identical/expected/unexpected), `run.sh` propagation and blockers, and
 the `inner.sh` timeout validation and timeout-as-failure signalling. `retention`
-covers capture-root pruning; `port-parity` covers the host/sandbox port. All
-exit nonzero on failure (`npm run test:harness` stops at the first failing one).
+covers capture-root pruning; `port-parity` covers the host/sandbox port;
+`date-relocation` covers the P2-T3 wire verifier's exit contract. All exit
+nonzero on failure (`npm run test:harness` stops at the first failing one).
 
 ## Timeouts
 
@@ -126,3 +133,9 @@ unisolated request.
 - `retention.test.sh` — retention/prune checks (old/new pruned/retained, `=0`
   disables, unrelated paths untouched, fail-closed on invalid input).
 - `port-parity.test.sh` — host base-URL vs sandbox `MOCK_PORT` parity via dry-run.
+- `verify-date-relocation.mjs` — P2-T3 offline WIRE verifier: compares an
+  off/on capture pair and asserts, on the serialized system content, that the
+  daily date line moved past the `<env>` block with the date value and non-date
+  content preserved (`--unchanged` for the control).
+- `date-relocation.test.sh` — hermetic exit-code checks for the wire verifier
+  (synthetic off/on capture dirs; no sandbox, no provider).

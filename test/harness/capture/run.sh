@@ -12,6 +12,8 @@
 # Env:
 #   OC2=/path/to/opencode            (default ~/.opencode/bin/opencode)
 #   OC_CAPTURE_TMPDIR=/some/dir     (default /tmp/opencode)
+#   OC_CAPTURE_ENGINE_CONFIG=<json> (optional inline CacheEngine config written to
+#                                    the sandbox ~/.config/opencode/cache-engine.json)
 #   OC_CAPTURE_TURN_TIMEOUT=120     (per-turn seconds; validated in inner.sh)
 #   OC_CAPTURE_MODEL=mock/synthetic (model id for `-m` and the config; the
 #                                    provider part must be `mock`)
@@ -112,6 +114,18 @@ if [ -z "${TMP:-}" ] || [ ! -d "$TMP" ]; then echo "BLOCKER: temp directory was 
 
 mkdir -p "$TMP/home/.config" "$TMP/home/.local/share" "$TMP/home/.local/state" "$TMP/home/.cache"
 write_project "$TMP/proj" "$MOCK_PORT"
+
+# Optional CacheEngine config injection (offline): write the inline JSON to the
+# sandbox HOME's ~/.config/opencode/cache-engine.json so a wire test can enable an
+# experimental policy. Invalid JSON is a blocker (never silently defaulted).
+if [ -n "${OC_CAPTURE_ENGINE_CONFIG:-}" ]; then
+  mkdir -p "$TMP/home/.config/opencode"
+  if ! "$NODE_BIN" -e 'JSON.parse(process.argv[1])' "$OC_CAPTURE_ENGINE_CONFIG" >/dev/null 2>&1; then
+    echo "BLOCKER: OC_CAPTURE_ENGINE_CONFIG is not valid JSON" >&2
+    exit 2
+  fi
+  printf '%s' "$OC_CAPTURE_ENGINE_CONFIG" >"$TMP/home/.config/opencode/cache-engine.json"
+fi
 
 echo "capture root: $TMP" >&2
 bwrap --unshare-net --unshare-pid --unshare-uts --unshare-ipc \
