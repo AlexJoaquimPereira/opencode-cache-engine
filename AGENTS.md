@@ -93,11 +93,15 @@ npm pack --dry-run
   Compaction has its separate `<root>:compact` namespace. Reasoning effort is
   observe-only. Context/output limits and the 272K pricing boundary belong to
   user/harness configuration; never set or raise them here.
-- **GLM-5.3 and MiMo-V2.6:** the only prompt mutation is the exact,
-  content-preserving relocation of the identifiable `<env>` block to the
-  system tail, only when enabled and eligible. Don't reorder instructions,
-  rewrite reasoning, or move generic dynamic content. MiMo detection must stay
-  narrow: `/mimo-v2\.6-(flash|pro)(?![\w-])/i`.
+- **GLM-5.3 and MiMo-V2.6:** the only prompt mutations are exact,
+  content-preserving relocations, only when enabled and eligible: (a) the
+  identifiable `<env>` block to the system tail (`stabilizeSystem`), and (b) the
+  standalone daily date line (`Today's date: …`) to the system tail
+  (`stabilizeDate`, experimental and default **off**; on the 2.0.26 shape the date
+  sits outside `<env>`, so (a) does not move it; (b) is a no-op for missing /
+  duplicate / malformed / ambiguous date lines and for the legacy inside-`<env>`
+  shape). Don't reorder instructions, rewrite reasoning, or move generic dynamic
+  content. MiMo detection must stay narrow: `/mimo-v2\.6-(flash|pro)(?![\w-])/i`.
 - **OpenRouter affinity:** `chat.headers` adds deterministic `x-session-id`
   only for GLM-5.3/MiMo-V2.6 when the actual `providerID` is exactly
   `openrouter`. Preserve any case-insensitive pre-existing header; never add it
