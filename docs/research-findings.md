@@ -1660,25 +1660,28 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Notes: `--standalone` gating was observed for a project-local shim; the config
   `plugins` entry path (`RF-OC-023`/`RF-OC-024`) is separate.
 
-### RF-OC-038 — Provider A/B (OpenRouter): the date-line relocation's ~100-token prefix extension is below the cache-signal noise (inconclusive); the pinned GLM route reports no caching
+### RF-OC-038 — Provider A/B (OpenRouter, pinned route): the date line at the tail reuses a longer cached prefix (ON >= OFF in 6/6 nonce-isolated trials); GLM caches on Z.AI; an unpinned route invalidated an earlier pass
 
 - Status: current
 - Verified: 2026-10-14
 - Area: provider-api
 - Fact:
-  - On `xiaomi/mimo-v2.6-flash` (OpenRouter, xiaomi/fp8) the provider reports
-    `cache.read`/`cache.write` (an identical repeat of a ~24K-token prompt read
-    23872 cached tokens).
-  - On `z-ai/glm-5.3-flash` with the pinned upstream order
-    (streamlake/novita/z-ai fp8) two identical ~23K-token requests reported
-    `cache.read: 0`, `cache.write: 0` — the pinned route does **not** report GLM
-    caching (historical direct-route sessions have shown `cache.read` ~185K, so it
-    is route-dependent).
-  - A nonce-isolated A/B on MiMo (unique stable prefix per trial; date value
-    rewritten "Wed 14" -> "Thu 15" Oct 2026 to simulate a rollover) gave OFF vs ON
-    `cache.read`: `0/4672/4736` vs `4608/4096/4736` tokens — **no reproducible,
-    directionally consistent increase; a sign flip is present**. The expected
-    effect (~a 368-byte / ~90-token prefix extension) is below the signal's noise.
+  - On the **pinned** OpenRouter route (GLM `z-ai/fp8` -> Z.AI; MiMo `xiaomi/fp8`
+    -> Xiaomi), a **nonce-isolated** A/B (a unique stable prefix per trial, so prior
+    runs' caches cannot carry over) with a **simulated** date rollover (a local proxy
+    rewrites `Today's date: Wed 14 Oct 2026` -> `Thu 15 Oct 2026`) reported candidate
+    (`stabilizeDate`, date at the tail) `cache.read` **>=** baseline (date before
+    `<env>`) in **6/6** trials:
+    - GLM OFF->ON tokens: `8128->10240` (+2112), `10240->10304` (+64), `10240->10304` (+64)
+    - MiMo OFF->ON tokens: `4096->10240` (+6144), `8192->10240` (+2048), `10240->10240` (0)
+    No sign flip; deltas 0..+6144; values cluster near ~10240, suggesting a provider
+    cached-prefix **cap** can saturate the difference.
+  - GLM **does** report caching on Z.AI (an identical ~23.7K repeat reported
+    `cached_tokens: 23616` of `23673`). An earlier "no caching" observation applied to
+    a *different* pinned upstream set (streamlake/novita fp8) / an unpinned route.
+  - An earlier pass pointed `XDG_CONFIG_HOME` at a temp config without the pins, so
+    requests carried `provider: null` and OpenRouter load-balanced (GLM served by
+    "Near AI"); those numbers are invalid for the pinned-route question.
 - Evidence: [O] with a provider-measured component (real OpenRouter requests;
   authorized; small spend; credentials used by OpenCode, never read or logged)
 - Sources: local P2-T4 experiment (`/tmp/opencode/t4*`); `docs/phase2-p2t4-provider-ab-report.md`.
@@ -1912,6 +1915,44 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Notes: Complements RF-PRV-006 (provider-side semantics) and mirrors RF-OR-003
   (the same implicit-vs-explicit documentation conflict for Gemini). No
   Qwen-specific live probe has been run.
+
+### RF-OR-006 — OpenCode passes the configured `provider` routing object verbatim; OpenRouter's UI provider slugs (e.g. `z-ai/fp8`) bind (observed); aux (title/summary) requests use a different model with no pin
+
+- Status: current
+- Verified: 2026-10-14
+- Area: openrouter-transport
+- Fact:
+  - OpenCode passes a configured `providers.<id>.models.<model>.settings.provider`
+    object through to the request body's `provider` field **verbatim** (observed on
+    the wire: `{"order":["z-ai/fp8"],"only":["z-ai/fp8"],"allow_fallbacks":false}`).
+  - OpenRouter honors those slugs: with `only:["z-ai/fp8"]` the response `provider`
+    was **Z.AI**; with `only:["xiaomi/fp8"]` it was **Xiaomi**. The `/fp8` suffix is a
+    quantized provider-endpoint slug as surfaced by OpenRouter's UI. (The first-party
+    provider-routing docs describe slugs as provider names with an optional endpoint
+    suffix and put quantization in a separate `provider.quantizations` field; the UI
+    supplies combined slugs that work in practice.)
+  - OpenCode's **auxiliary** requests (title/summary) are sent to a **different**
+    model — observed `openai/gpt-6-luna` — and carry **no** `provider` routing field,
+    so they route elsewhere (observed `provider: "OpenAI"`). This is a likely source
+    of "different provider" sightings in OpenRouter logs when the main model is
+    pinned. (A pin keyed on a variant id such as `openai/gpt-6-luna:flex` does not
+    match the bare `openai/gpt-6-luna` aux request.)
+  - `GET /api/v1/generation?id=<x-generation-id>` returned `404 generation not found`
+    for these streamed requests in this run (id not queryable that way).
+- Evidence: [O] (real OpenRouter requests, 2026-10-14; OpenCode 2.0.26; loopback
+  capture proxy; no credentials logged)
+- Sources: local P2-T4 experiment (`/tmp/opencode/t4*`);
+  `docs/phase2-p2t4-provider-ab-report.md`; OpenRouter "Provider Routing" docs
+  (`openrouter.ai/docs/guides/routing/provider-selection`).
+- Justifies: interpreting OpenRouter activity logs and the P2-T4 routing setup.
+- Version context: OpenRouter; OpenCode 2.0.26.
+- Re-verify when: OpenCode changes request assembly or aux-model selection;
+  OpenRouter changes provider-slug semantics; or the `/generation` response changes.
+- Superseded by: null
+- Notes: `allow_fallbacks:false` + `only` binds to the specified slug; the first-party
+  docs are not explicit about how an *unrecognized* slug is treated, so a mistyped
+  slug may silently fail to bind. Aux-model behavior is harness (OpenCode) behavior,
+  not an OpenRouter fact.
 
 ## RF-SDK — AI-SDK and provider-package serialization
 
