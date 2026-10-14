@@ -30,6 +30,7 @@ without runtime evidence. Per-model evidence lives in
 
 ```bash
 npm test
+npm run test:harness
 node --test --test-name-pattern='OpenRouter|affinity' test/cache-engine.test.mjs
 node --experimental-strip-types -e "import('./src/cache-engine.ts').then(m=>console.log(Object.keys(m)))"
 npm pack --dry-run
@@ -41,6 +42,12 @@ npm pack --dry-run
   use Node's built-in runner and import the plain-JS core; the server entry can
   be loaded with `--experimental-strip-types`. Don't add a bundler or `tsc` just
   to satisfy a harness.
+- `npm run test:harness` runs the hermetic capture-harness suites
+  (`test/harness/capture/`: exit-contract, retention, port-parity, and the
+  date-relocation wire-verifier contract); they need no sandbox or provider. The
+  harness itself (`run.sh`) captures serialized requests inside a `bwrap` sandbox
+  against a loopback mock; `OC_CAPTURE_MODEL` selects the model and
+  `OC_CAPTURE_ENGINE_CONFIG` injects an inline CacheEngine config.
 - `postpublish` creates and pushes a `v<version>` Git tag. Never publish as a
   test; publish only when explicitly requested.
 
@@ -359,8 +366,11 @@ current task's gate is met.
 **Phase 1 — structural diagnostics + offline capture harness: COMPLETE**
 (2026-10-14; suite 362/0). Delivered `lintSystemVolatility`/`firstSystemDifference`,
 `systemStablePrefixLength` telemetry, V1/V2 diagnostic integration, and the
-offline/mock capture harness. Phase 2 (date relocation) is not started and
-remains gated on provider-side rollover evidence and explicit authorization.
+offline/mock capture harness. **Phase 2 is in progress:** P2-T1 (date-relocation
+hook-shape research, `RF-OC-035`), P2-T2 (`stabilizeDate` date-line relocation;
+default off), and P2-T3 (serialized-request wire verification, `RF-OC-036`) are
+complete; P2-T4 (provider-side A/B) remains gated on provider-access authorization
+and P2-T5 decides promotion. See `TODO.md`.
 
 - **Diagnose before mutating.** Observe the rendered request, identify a specific
   avoidable instability, verify the hook can safely observe/change it, then make

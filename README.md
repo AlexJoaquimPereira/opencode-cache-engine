@@ -2001,8 +2001,11 @@ Coverage includes:
 * Claude classification, passive (no-mutation) resolution, and generic usage accounting
 * Gemini classification, passive (no-mutation) resolution, and generic usage accounting
 * Qwen classification, matcher boundaries, passive (no-mutation) route resolution, and generic usage accounting
+* date-line relocation (`stabilizeDate`): invariants, no-op conditions, and V1/V2 adapter gating
 
 The tests are designed around the pure core logic, while OpenCode runtime behavior is validated separately through actual plugin loading.
+
+The offline capture harness (`test/harness/capture/`) has its own hermetic suites via `npm run test:harness` (exit-contract, retention, port-parity, and the date-relocation wire-verifier contract). The harness runs OpenCode inside a `bwrap` sandbox against a loopback mock and captures the **serialized** provider requests; `verify-date-relocation.mjs` compares an off/on pair to confirm the date line moves past the `<env>` block on the wire. The suites need no sandbox or provider.
 
 ---
 
