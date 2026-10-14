@@ -347,6 +347,11 @@ input (competitor/ecosystem research — its third-party claims are
 **author-reported, not verified**). The plan is **proposed**: nothing in it is
 authorization to implement. Use its §17 task-result template for phase reports.
 
+`TODO.md` (repo root) is the **parent task list** for the post-1.0.0 work: read it
+before starting phase work, work **one task at a time**, and expand the selected
+task's kickoff contract into child todos. Do not start the next task until the
+current task's gate is met.
+
 **Phase 1 — structural diagnostics + offline capture harness: COMPLETE**
 (2026-10-14; suite 362/0). Delivered `lintSystemVolatility`/`firstSystemDifference`,
 `systemStablePrefixLength` telemetry, V1/V2 diagnostic integration, and the
