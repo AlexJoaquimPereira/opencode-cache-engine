@@ -45,6 +45,26 @@ OC_CAPTURE_DRY_RUN=1 test/harness/capture/run.sh
 OC_CAPTURE_ONLY_DIFF=/path/to/capture-dir test/harness/capture/run.sh
 ```
 
+## Session-pair capture (P3-T1)
+
+Beyond the default two equivalent turns, the harness reproduces a
+**first-vs-subsequent** request pair and a ≥3-repeat determinism check:
+
+```sh
+OC_CAPTURE_TURNS=3 OC_CAPTURE_CONTINUE=1 test/harness/capture/run.sh
+```
+
+- `OC_CAPTURE_TURNS=<n>` — equivalent turns (integer ≥ 2; default 2).
+- `OC_CAPTURE_CONTINUE=1` — append one `opencode run … --continue` turn, which
+  produces a *subsequent* same-session request (history grows; `tools` and the
+  system message stay byte-identical to the first request).
+
+A fresh `opencode run` emits two requests — an auxiliary (title/summary) request
+with **no tools**, then the main agent request — so `diff-requests.mjs` pairs them
+by kind. Shape findings and the go/no-go are in
+`docs/phase3-p3t1-capture-groundwork.md`; consumable fixture data is in
+`test/fixtures/volatility-shapes.mjs`.
+
 ## Exit contract
 
 | Code | Meaning |
