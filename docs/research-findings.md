@@ -1758,6 +1758,35 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   the Chat Completions route with the default tool set. Whether the appended `execute`
   can reorder when other tools are added is open (P3-T2).
 
+### RF-OC-042 — OpenCode 2.0.26 tool definitions are static (no cwd/path interpolation; byte-identical across project roots), and the tool list is re-sorted when the set changes, with `execute` appended last
+
+- Status: current
+- Verified: 2026-10-15
+- Area: opencode-runtime
+- Fact:
+  - Tool **definitions** (name/description/JSON schema) on the main request are
+    byte-identical across equivalent turns, the session-continue turn, repeated runs, and
+    **three distinct project roots** with different working directories — i.e. tool
+    descriptions do **not** embed the cwd/path. (The strings "Working directory" /
+    "session" are static prose in parameter descriptions, e.g. the `shell` tool's
+    `workdir`.)
+  - Disabling built-in tools via a project config `tools: { "<name>": false }` removes
+    them and the remaining core tools stay ASCII-sorted, with the appended `execute`
+    staying last (12 tools -> 10 tools: `edit, glob, grep, question, read, shell, skill,
+    subagent, write, execute`).
+  - `toolFingerprint` (order-insensitive) and `toolWireFingerprint` (order-sensitive) are
+    equal and stable across every captured main request for a fixed tool set.
+- Evidence: [O] (offline capture, OpenCode 2.0.26; harness + a `tools:{}` project config).
+- Sources: `docs/phase3-p3t2-tool-ordering.md` (P3-T2); `RF-OC-040`/`RF-OC-041`.
+- Justifies: the P3-T2 ranked entry (tool ordering = no-op), and supports **not** adding
+  tool sorting/normalization.
+- Version context: OpenCode 2.0.26.
+- Re-verify when: OpenCode changes tool registration, tool serialization, or tool
+  descriptions.
+- Superseded by: null
+- Notes: Only one non-core appended tool (`execute`) was observable; a scenario with
+  multiple appended tools was not exercised.
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
