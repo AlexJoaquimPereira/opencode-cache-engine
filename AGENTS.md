@@ -371,7 +371,10 @@ offline/mock capture harness. **Phase 2 — date relocation: COMPLETE** (P2-T1..
 wire-verified (G3, `RF-OC-036`); the provider A/B showed **directional support**
 (`RF-OC-038`) but not a clean benefit (G4, simulated rollover). **P2-T5 keeps it
 experimental** (`docs/phase2-p2t5-acceptance-decision.md`); a real-calendar rollover
-confirmation is optional. See `TODO.md`.
+confirmation is optional. **Phase 3 — other volatility sources: P3-T1 (offline
+capture groundwork) COMPLETE** (2026-10-15) — both pair types reproduce offline
+(`RF-OC-040`/`RF-OC-041`; `docs/phase3-p3t1-capture-groundwork.md`); P3-T2 (tool
+ordering) is next. See `TODO.md`.
 
 - **Diagnose before mutating.** Observe the rendered request, identify a specific
   avoidable instability, verify the hook can safely observe/change it, then make
