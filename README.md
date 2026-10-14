@@ -2214,7 +2214,7 @@ and fails to install. Use the bare package name; the `./server` entry provides t
 V2 `setup` automatically.
 
 **Verification status.** Verified in isolated OpenCode **1.18.35** and **2.0.26**
-environments using the packed package (`opencode-cache-engine@1.1.0`) installed
+environments using the packed package (`opencode-cache-engine@1.1.1`) installed
 **by name** against a **disposable local npm registry** (no public registry):
 V1's `opencode plugin -g opencode-cache-engine` installed the package and a
 `plugin` config entry then loaded it (V1 hooks ran, no V2 initialization); V2's
@@ -2241,7 +2241,7 @@ name, load the package from a project-local file:
   `export { default } from "opencode-cache-engine/v2"`
 
 Prerequisite for any route: the package must resolve from the project's
-`node_modules` (e.g. `npm install opencode-cache-engine@1.1.0`, or a local
+`node_modules` (e.g. `npm install opencode-cache-engine@1.1.1`, or a local
 `file:`/tarball install).
 
 Both routes are **additive** and do not modify OpenCode's shared or managed
@@ -2264,7 +2264,7 @@ release, use:
 ```json
 {
   "plugin": [
-    "opencode-cache-engine@1.1.0"
+    "opencode-cache-engine@1.1.1"
   ]
 }
 ```
