@@ -1362,11 +1362,13 @@ The default configuration is:
     "glm53": {
       "enabled": true,
       "stabilizeSystem": true,
+      "stabilizeDate": false,
       "preserveThinkingIntegrity": true
     },
     "mimo26": {
       "enabled": true,
       "stabilizeSystem": true,
+      "stabilizeDate": false,
       "stickySession": true,
       "preserveThinkingIntegrity": true
     },
