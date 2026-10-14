@@ -35,6 +35,12 @@ Evidence tags are the same legend the inventory uses:
 `docs/audit-report-*.md` and `session-*.md` are gitignored, so anything durable
 found in them is lost on a fresh clone. Promote it here.
 
+The post-1.0.0 plan `docs/opencode-cache-engine-v1.x.x-implementation-plan.md` is
+the tracked distillation of `docs/competitor-prompt-cache-plugins-research-report.md`
+(gitignored/local-only). The report's competitor claims are author-reported, never
+first-party facts; cite the plan for the distilled conclusions and keep the `RF-*`
+entries here for first-party runtime/API facts.
+
 ## Entry template
 
 ```markdown
