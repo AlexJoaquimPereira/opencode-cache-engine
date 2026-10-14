@@ -1695,37 +1695,6 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   n=3 per condition; OpenRouter routing/TTL are confounders. This is a
   **route-specific** result, not a universal statement about GLM/MiMo caching.
 
-### RF-OC-039 — OpenCode V2 supports the top-level `small_model` config key (title/summary model); it maps to the `title` agent
-
-- Status: current
-- Verified: 2026-10-14
-- Area: opencode-runtime
-- Fact:
-  - The OpenCode config schema (`https://opencode.ai/config.json`) has a top-level
-    `small_model` (string): "Small model to use for tasks like title generation in the
-    format of provider/model".
-  - The V2 runtime reads `small_model`, parses it as `provider/model`, and assigns it
-    to the `title` agent's model. A value that is **not** `provider/model` is omitted
-    with the diagnostic "omitted unsupported legacy model reference" (so a bare value
-    like `free` or a `#variant` form can silently fail).
-  - Observed: setting the top-level `"small_model": "<provider>/<model>"` changed the
-    auxiliary (title) request's model on the wire — from the default
-    `openai/gpt-6-luna` to the configured model (with that model's provider pin
-    applied). So `small_model` **is** effective in V2.
-- Evidence: [O] (OpenCode 2.0.26 config schema; runtime normalization in the binary;
-  local request capture with a project `small_model`)
-- Sources: `https://opencode.ai/config.json` (`small_model`); OpenCode 2.0.26 binary;
-  local capture (P2-T4 proxy).
-- Justifies: configuring the OpenCode title/summary (small) model; complements
-  RF-OR-006 (aux requests use a different model when it is not pinned/configured).
-- Version context: OpenCode 2.0.26.
-- Re-verify when: OpenCode changes the config key or the aux-model selection.
-- Superseded by: null
-- Notes: The user's global config sets no `small_model`, so the aux/title model was
-  OpenCode's default (`openai/gpt-6-luna`) — a likely "different provider" source in
-  OpenRouter logs. The value must be `provider/model` (e.g.
-  `"small_model": "openrouter/<model>"`).
-
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
