@@ -11,8 +11,9 @@
 
 > Status: **complete** — §4/§5 confirmed by both lanes. **P2-T2:** the date-line
 > relocation (`relocateVolatileDateLine` + the `stabilizeDate` policy flag) is
-> implemented for V1 and V2, **default off** (experimental). Provider-side benefit
-> is still unmeasured (P2-T4).
+> implemented for V1 and V2, **default off** (experimental). **P2-T3:** the
+> relocation is **wire-verified** (§5A, gate G3) for GLM-5.3 / MiMo-V2.6; the
+> neutral control is unchanged. Provider-side benefit is still unmeasured (P2-T4).
 
 ---
 
@@ -124,6 +125,34 @@ Three offline captures (`OC_CAPTURE_MODEL` = `mock/synthetic`, `mock/glm-5.3-fla
 
 *(Lane B memo `ses_ec56c6d30ffeSi2G7xgM4zM6l3` merged — independently confirms
 §4–§5 with a second capture set and matches `RF-OC-035`.)*
+
+## 5A. P2-T3 — serialized-request (wire) verification (gate G3)
+
+Offline, on the **serialized** request (not hook/adapter output): the harness
+(`run.sh` with `OC_CAPTURE_MODEL` and a new `OC_CAPTURE_ENGINE_CONFIG` that writes
+`~/.config/opencode/cache-engine.json` into the sandbox) ran an off/on pair per
+model, and `verify-date-relocation.mjs` compared the primary system content.
+
+| Signal | GLM-5.3 | MiMo-V2.6 | neutral (control) |
+|---|---|---|---|
+| date count (off / on) | 1 / 1 | 1 / 1 | 1 / 1 |
+| off: date before `<env>` | yes | yes | yes |
+| on: date after `</env>` | yes | yes | **no** |
+| date value unchanged | yes | yes | yes |
+| non-empty line multiset preserved | yes | yes | yes |
+| length delta | **+1** | **+1** | 0 |
+
+The date line moved from before the `<env>` block to after it on the wire for both
+families; the neutral control was byte-unchanged. This establishes **G3** (the
+serialized request carries the intended change) for the tested shim route and
+positively closes the `system` hook→wire gap flagged in §4 (`RF-OC-036`). It is a
+**structural** result — provider cache benefit remains unmeasured (P2-T4).
+
+Hermetic coverage: `date-relocation.test.sh` (part of `npm run test:harness`)
+checks the verifier's exit contract. `verify-date-relocation.mjs` deliberately does
+**not** import the transform helper, so it cannot pass by sharing the
+implementation's logic — it checks line-level preservation, the exact date value,
+and the length delta independently.
 
 ## 6. Anchor-per-version table
 
