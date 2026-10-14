@@ -13,6 +13,8 @@
 #   OC2=/path/to/opencode            (default ~/.opencode/bin/opencode)
 #   OC_CAPTURE_TMPDIR=/some/dir     (default /tmp/opencode)
 #   OC_CAPTURE_TURN_TIMEOUT=120     (per-turn seconds; validated in inner.sh)
+#   OC_CAPTURE_MODEL=mock/synthetic (model id for `-m` and the config; the
+#                                    provider part must be `mock`)
 #   OC_CAPTURE_RETENTION_MIN=1440   (prune capture.* roots older than N minutes;
 #                                    0 disables pruning)
 #   MOCK_PORT=39420                 (loopback mock + provider base URL port)
@@ -34,6 +36,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 OC2="${OC2:-$HOME/.opencode/bin/opencode}"
 MOCK_PORT="${MOCK_PORT:-39420}"
+# Model override: `<provider>/<model>`. The harness configures the `mock`
+# provider only, so the provider part must be `mock` for the turn to resolve;
+# any other provider part fails the turn (recorded as a blocker by inner.sh).
+CAPTURE_MODEL="${OC_CAPTURE_MODEL:-mock/synthetic}"
+case "$CAPTURE_MODEL" in
+  */*) : ;;
+  *) echo "BLOCKER: OC_CAPTURE_MODEL must be <provider>/<model> (got '$CAPTURE_MODEL')" >&2; exit 2 ;;
+esac
+CAPTURE_PROVIDER="${CAPTURE_MODEL%%/*}"
+CAPTURE_MODEL_ID="${CAPTURE_MODEL#*/}"
 NODE_BIN="$(command -v node || true)"
 
 if [ -z "${NODE_BIN:-}" ]; then echo "BLOCKER: node not found" >&2; exit 2; fi
@@ -51,10 +63,10 @@ write_project() {
       "npm": "@ai-sdk/openai-compatible",
       "name": "Mock",
       "options": { "baseURL": "http://127.0.0.1:${port}/v1", "apiKey": "not-a-real-key" },
-      "models": { "synthetic": { "name": "synthetic" } }
+      "models": { "$CAPTURE_MODEL_ID": { "name": "$CAPTURE_MODEL_ID" } }
     }
   },
-  "model": "mock/synthetic"
+  "model": "$CAPTURE_MODEL"
 }
 JSON
   cat >"$proj/.opencode/plugins/capture-entry.ts" <<TS
@@ -118,6 +130,7 @@ bwrap --unshare-net --unshare-pid --unshare-uts --unshare-ipc \
   --setenv XDG_STATE_HOME "$TMP/home/.local/state" \
   --setenv XDG_CACHE_HOME "$TMP/home/.cache" \
   --setenv OC_CAPTURE_TURN_TIMEOUT "${OC_CAPTURE_TURN_TIMEOUT:-120}" \
+  --setenv OC_CAPTURE_MODEL "$CAPTURE_MODEL" \
   --setenv MOCK_PORT "$MOCK_PORT" \
   /bin/bash "$REPO/test/harness/capture/inner.sh"
 

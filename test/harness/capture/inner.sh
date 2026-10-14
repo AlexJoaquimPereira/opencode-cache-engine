@@ -12,6 +12,7 @@ CAPTURE_DIR="$CE/capture"
 MOCK_PORT="${MOCK_PORT:-39420}"
 TURN_TIMEOUT="${OC_CAPTURE_TURN_TIMEOUT:-120}"
 OC_BIN="${OC_BIN:-/oc/opencode}"
+CAPTURE_MODEL="${OC_CAPTURE_MODEL:-mock/synthetic}"
 export CAPTURE_DIR MOCK_PORT
 
 # Validate the per-turn timeout: positive integer only.
@@ -34,7 +35,7 @@ cd "$CE/proj" || exit 3
 # any failure) marks the capture as failed so the orchestrator never compares.
 run_turn() {
   local n="$1"
-  timeout --kill-after=5 "$TURN_TIMEOUT" "$OC_BIN" run --standalone --print-logs --log-level info -m mock/synthetic "say hi" >"$CE/run${n}.log" 2>&1
+  timeout --kill-after=5 "$TURN_TIMEOUT" "$OC_BIN" run --standalone --print-logs --log-level info -m "$CAPTURE_MODEL" "say hi" >"$CE/run${n}.log" 2>&1
   local rc=$?
   echo "run${n}_rc=$rc" >>"$CE/status"
   if [ "$rc" -ne 0 ]; then
