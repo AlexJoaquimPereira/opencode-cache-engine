@@ -1004,7 +1004,7 @@ a **compatibility finding for the captured runtime/prompt shape** (not universal
 and the provider **cache benefit remains unverified**. The marker's safety
 rationale is preserved (it scopes relocation to OpenCode's own `<env>` preamble);
 removing it or adding a broad `<env>`-only trigger is **not currently justified**.
-See `RF-OC-033`. No implementation behavior is changed by this note.
+See `RF-OC-033`. No implementation behavior is changed by this note. **Superseded (2026-10-14, P2-T1):** the *reason* stated here (absent START marker) is stale — the helper now accepts the structural 2.0.26 shape, and the wire no-op is the **part boundary** (`<env>` is terminal in the eligible system part); see `RF-OC-035` and `docs/phase2-date-relocation-hook-shape.md`.
 
 **Status: preview.** The adapter imports and passes offline contract tests
 (including a declaration-level `SessionContext` contract check and a V1-adapter

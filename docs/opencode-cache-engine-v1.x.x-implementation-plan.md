@@ -63,7 +63,7 @@ Reconfirm repository state before implementation; these notes are not a substitu
 - GPT cache-option mutation has not been proven to survive every relevant schema/serialization route (Gate 4 **NOT PASS**; `RF-OC-030`/`RF-OC-031`).
 - OpenRouter affinity decisions and actual header attachment are separate facts (`RF-OC-026`/`RF-OC-027`).
 - Usage accounting is best-effort: event loss, cursor restarts, compaction, timestamp ties, eviction/expiry, and telemetry-write failure can cause undercounting or recounting (`docs/implementation-plan-v2.md` §2D.12; `RF-OC-017`–`RF-OC-021`).
-- The existing GLM/MiMo `<env>` relocation helper did not modify the captured OpenCode 2.0.26 prompt because it relied on an older marker absent from that prompt (`RF-OC-033`).
+- The existing GLM/MiMo `<env>` relocation does **not** reach the wire on the captured OpenCode 2.0.26 prompt: the helper now accepts the structural shape, but the `<env>` block is already terminal in the eligible `event.system` part (part 2 of 4), so the within-part relocation is a no-op (`RF-OC-035`, superseding the stale *reason* in `RF-OC-033`).
 - The captured prompt contained a daily date line before `<env>`. Equivalent same-session requests within a day had byte-identical system text.
 - A fixture-only date relocation preserved non-date lines and their relative order. It did not prove provider cache benefit.
 - Date-relocation provider benefit remains unproven.
