@@ -79,6 +79,7 @@ TS
 # Debug/test path: diff an existing capture directory with the same exit contract.
 # No capture, no sandbox, no provider.
 if [ -n "${OC_CAPTURE_ONLY_DIFF:-}" ]; then
+  if [ -n "${OC_CAPTURE_ENGINE_CONFIG:-}" ]; then echo "warn: OC_CAPTURE_ENGINE_CONFIG is ignored in only-diff mode" >&2; fi
   node "$SCRIPT_DIR/diff-requests.mjs" "$OC_CAPTURE_ONLY_DIFF"
   exit $?
 fi
@@ -91,6 +92,7 @@ if ! mkdir -p "$TMPROOT"; then echo "BLOCKER: cannot create temp root $TMPROOT" 
 # Debug/test path: write the project for the configured port and report the
 # resolved orchestration values. No capture, no sandbox, no provider.
 if [ -n "${OC_CAPTURE_DRY_RUN:-}" ]; then
+  if [ -n "${OC_CAPTURE_ENGINE_CONFIG:-}" ]; then echo "warn: OC_CAPTURE_ENGINE_CONFIG is ignored in dry-run mode" >&2; fi
   DRY="$(mktemp -d "$TMPROOT/dryrun.XXXXXX")" || { echo "BLOCKER: dry-run mktemp failed" >&2; exit 2; }
   write_project "$DRY/proj" "$MOCK_PORT"
   echo "mock_port=$MOCK_PORT"

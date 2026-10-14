@@ -1,25 +1,29 @@
 // Offline WIRE verifier for the Phase 2 date-line relocation (task P2-T3).
 //
-// It compares the SERIALIZED system content captured from two offline harness
-// runs of the SAME model: a baseline (transform off) and a candidate
-// (`stabilizeDate` on). It asserts on the WIRE — not on hook or adapter output —
-// that the single standalone daily date line moved from BEFORE the <env> block to
-// AFTER it, that the date value and the non-date content are preserved, and that
-// the byte length changed by at most the one documented separator newline.
+// Compares the SERIALIZED system content captured from two offline harness runs
+// of the SAME model: a baseline (transform off) and a candidate (`stabilizeDate`
+// on). It asserts on the WIRE — not on hook or adapter output — that the single
+// standalone daily date line moved from BEFORE the <env> block to AFTER it, that
+// the date value is unchanged, and (order-sensitively) that the content with the
+// date line removed is identical between the two, i.e. the only change is the
+// relocation (plus at most the one documented separator newline).
 //
-// The harness writes each run under a fresh `capture.XXXXXX` temp root, so the
-// env block's cwd path differs between runs; both systems are normalized by
-// replacing that temp-root segment before comparison.
+// The harness writes each run under a fresh `capture.XXXXXX` temp root, so the env
+// block's cwd path differs between runs; both systems are normalized by replacing
+// that temp-root segment before comparison (the report labels comparisons as
+// "after temp-root normalization").
 //
 // Deliberately does NOT import the transform helper: this is an independent wire
-// check (line-level preservation + exact date value + length delta), so it cannot
-// pass merely because it shares the implementation's logic.
+// check, so it cannot pass merely because it shares the implementation's logic.
 //
 // Exit: 0 as expected; 1 wire mismatch; 2 blocker (missing/invalid input).
 //
 // Usage:
 //   node verify-date-relocation.mjs <offCaptureDir> <onCaptureDir>
 //   node verify-date-relocation.mjs <offDir> <onDir> --unchanged   (control)
+//
+// A capture dir may be either the harness capture root (containing
+// `capture/req-*.json`) or the `capture` directory itself.
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
@@ -27,16 +31,35 @@ import { pathToFileURL } from "node:url"
 
 const DATE_STR = "Today's date:"
 const DATE_LINE = /^Today's date:/
+const isEnvOpen = (l) => l.trim() === "<env>"
+const isEnvClose = (l) => l.trim() === "</env>"
 
 export const normalizeCaptureRoot = (s) =>
   typeof s === "string" ? s.replace(/capture\.[A-Za-z0-9]+/g, "capture.RUN") : s
 
-const nonEmptyLines = (s) => s.split("\n").filter((l) => l.trim() !== "")
-const multiset = (s) => nonEmptyLines(s).slice().sort().join("\n")
+// Remove the date line's CHARACTERS (leaving its newline) — the exact bytes the
+// transform moves. Two texts processed this way then differ only by the optional
+// separator newline.
+const stripDateBlock = (s) => {
+  const L = s.split("\n")
+  const idx = L.findIndex((l) => DATE_LINE.test(l))
+  return idx < 0 ? s : L.slice(0, idx).concat([""]).concat(L.slice(idx + 1)).join("\n")
+}
+
+// True when a and b are equal, or differ by at most one optional "\n" (the one
+// separator newline the relocation may insert).
+const differsByAtMostOneNewline = (a, b) => {
+  let p = 0
+  while (p < Math.min(a.length, b.length) && a[p] === b[p]) p++
+  let s = 0
+  while (s < a.length - p && s < b.length - p && a[a.length - 1 - s] === b[b.length - 1 - s]) s++
+  const am = a.slice(p, a.length - s)
+  const bm = b.slice(p, b.length - s)
+  return am.replace(/\n/g, "") === "" && bm.replace(/\n/g, "") === "" && am.length + bm.length <= 1
+}
 
 // The primary agent request is the one with the largest role=system content.
-// Accepts either a capture root (containing `capture/req-*.json`) or the
-// `capture` directory itself.
+// Returns { file, text } so the compared request is attributable.
 export function primarySystem(dir) {
   const base = existsSync(join(dir, "capture")) ? join(dir, "capture") : dir
   let names
@@ -62,38 +85,60 @@ export function primarySystem(dir) {
         : typeof b.instructions === "string"
           ? b.instructions
           : null
-    if (s && (best === null || s.length > best.length)) best = s
+    if (s && (best === null || s.length > best.text.length)) best = { file: f, text: s }
   }
   if (best === null) throw new Error(`no serialized system content found in ${base}`)
   return best
 }
 
 export function verifyDateRelocation(offRaw, onRaw, options = {}) {
-  const off = normalizeCaptureRoot(offRaw)
-  const on = normalizeCaptureRoot(onRaw)
-  const offDate = off.split("\n").find((l) => DATE_LINE.test(l)) ?? null
-  const onDate = on.split("\n").find((l) => DATE_LINE.test(l)) ?? null
+  const offText = normalizeCaptureRoot(typeof offRaw === "string" ? offRaw : offRaw.text)
+  const onText = normalizeCaptureRoot(typeof onRaw === "string" ? onRaw : onRaw.text)
+  const offL = offText.split("\n")
+  const onL = onText.split("\n")
+  const offDateIdx = offL.findIndex((l) => DATE_LINE.test(l))
+  const onDateIdx = onL.findIndex((l) => DATE_LINE.test(l))
+  const offEnvOpenIdx = offL.findIndex(isEnvOpen)
+  const offEnvCloseIdx = offL.findIndex(isEnvClose)
+  const onEnvOpenIdx = onL.findIndex(isEnvOpen)
+  const onEnvCloseIdx = onL.findIndex(isEnvClose)
+
   const checks = {
-    offCount: (off.match(/^Today's date:/gm) || []).length,
-    onCount: (on.match(/^Today's date:/gm) || []).length,
-    offBeforeEnv: off.indexOf(DATE_STR) !== -1 && off.indexOf(DATE_STR) < off.indexOf("<env>"),
-    onAfterEnv: on.indexOf(DATE_STR) !== -1 && on.indexOf("</env>") !== -1 && on.indexOf(DATE_STR) > on.indexOf("</env>"),
-    dateValueSame: offDate !== null && offDate === onDate,
-    multisetSame: multiset(off) === multiset(on),
-    lengthDelta: on.length - off.length,
-    unchanged: on === off,
+    offDateCount: offL.filter((l) => DATE_LINE.test(l)).length,
+    onDateCount: onL.filter((l) => DATE_LINE.test(l)).length,
+    singleEnvPair:
+      offL.filter(isEnvOpen).length === 1 && offL.filter(isEnvClose).length === 1 &&
+      onL.filter(isEnvOpen).length === 1 && onL.filter(isEnvClose).length === 1,
+    offDateBeforeEnv: offDateIdx >= 0 && offEnvOpenIdx >= 0 && offDateIdx < offEnvOpenIdx,
+    onDateAfterEnv: onDateIdx >= 0 && onEnvCloseIdx >= 0 && onDateIdx > onEnvCloseIdx,
+    dateValueSame: offDateIdx >= 0 && onDateIdx >= 0 && offL[offDateIdx] === onL[onDateIdx],
+    // Order-sensitive: with ONLY the date line's bytes removed, the two texts are
+    // identical apart from at most the one optional separator newline.
+    sameWithoutDateBlock: differsByAtMostOneNewline(stripDateBlock(offText), stripDateBlock(onText)),
+    unchanged: offText === onText,
   }
   const relocationOk =
-    checks.offCount === 1 &&
-    checks.onCount === 1 &&
-    checks.offBeforeEnv === true &&
-    checks.onAfterEnv === true &&
+    checks.offDateCount === 1 &&
+    checks.onDateCount === 1 &&
+    checks.singleEnvPair === true &&
+    checks.offDateBeforeEnv === true &&
+    checks.onDateAfterEnv === true &&
     checks.dateValueSame === true &&
-    checks.multisetSame === true &&
-    checks.lengthDelta >= 0 &&
-    checks.lengthDelta <= 1
+    checks.sameWithoutDateBlock === true
   const ok = options.expectUnchanged ? checks.unchanged : relocationOk
-  return { ok, mode: options.expectUnchanged ? "unchanged" : "relocate", checks }
+  return {
+    ok,
+    mode: options.expectUnchanged ? "unchanged" : "relocate",
+    offFile: options.offFile ?? null,
+    onFile: options.onFile ?? null,
+    offLength: offText.length,
+    onLength: onText.length,
+    offDateOffset: offText.indexOf(DATE_STR),
+    onDateOffset: onText.indexOf(DATE_STR),
+    offEnvOffset: [offText.indexOf("<env>"), offText.indexOf("</env>")],
+    onEnvOffset: [onText.indexOf("<env>"), onText.indexOf("</env>")],
+    checks,
+  }
 }
 
 function runCli(argv) {
@@ -119,7 +164,9 @@ function runCli(argv) {
   }
   let report
   try {
-    report = verifyDateRelocation(primarySystem(offDir), primarySystem(onDir), { expectUnchanged })
+    const off = primarySystem(offDir)
+    const on = primarySystem(onDir)
+    report = verifyDateRelocation(off.text, on.text, { offFile: off.file, onFile: on.file, expectUnchanged })
   } catch (e) {
     console.error(`error: ${e?.message ?? e}`)
     return 2
