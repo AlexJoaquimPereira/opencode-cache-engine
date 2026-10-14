@@ -1630,6 +1630,68 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   cache benefit remains unmeasured (P2-T4). Transform-off and neutral are
   unchanged.
 
+### RF-OC-037 — OpenCode 2.0.26 loads a project `.opencode/plugins/*` shim only under `run --standalone`, and overrides a provider endpoint via `provider.<id>.options.baseURL`
+
+- Status: current
+- Verified: 2026-10-14
+- Area: opencode-runtime
+- Fact:
+  - A project `.opencode/plugins/<name>.ts` that re-exports a package adapter
+    (`export { default } from ".../cache-engine-v2.mjs"`) is loaded by
+    `opencode run` **only with `--standalone`**: without it the adapter's `setup`
+    never runs (no metrics file, no mutation); with it, `setup` runs and the
+    `context`-hook mutation reaches the serialized request.
+  - A provider's endpoint can be overridden in the project config at
+    `provider.<id>.options.baseURL` (schema path; **singular** `provider`); the
+    plural `providers` form did not apply the override.
+  - The V2 adapter's `session.usage.updated`-driven `usage` telemetry does not fire
+    in a headless `opencode run`, so provider cache usage must be read from the
+    session DB (`session_message.data.tokens.cache.{read,write}`).
+- Evidence: [O] (offline/local runs 2026-10-14; OpenCode 2.0.26; real OpenRouter
+  traffic for the routing probe)
+- Sources: `test/harness/capture/run.sh` (shim pattern); `~/.config/opencode/opencode.jsonc`
+  (pinned providers); OpenCode config schema `provider.<id>.options.baseURL`;
+  `~/.local/share/opencode/opencode.db`.
+- Justifies: the P2-T4 measurement machinery (`docs/phase2-p2t4-provider-ab-report.md`).
+- Version context: OpenCode 2.0.26; `@opencode/plugin` 2.0.16.
+- Re-verify when: OpenCode changes plugin discovery, the provider-options schema, or
+  the headless usage-events behavior.
+- Superseded by: null
+- Notes: `--standalone` gating was observed for a project-local shim; the config
+  `plugins` entry path (`RF-OC-023`/`RF-OC-024`) is separate.
+
+### RF-OC-038 — Provider A/B (OpenRouter): the date-line relocation's ~100-token prefix extension is below the cache-signal noise (inconclusive); the pinned GLM route reports no caching
+
+- Status: current
+- Verified: 2026-10-14
+- Area: provider-api
+- Fact:
+  - On `xiaomi/mimo-v2.6-flash` (OpenRouter, xiaomi/fp8) the provider reports
+    `cache.read`/`cache.write` (an identical repeat of a ~24K-token prompt read
+    23872 cached tokens).
+  - On `z-ai/glm-5.3-flash` with the pinned upstream order
+    (streamlake/novita/z-ai fp8) two identical ~23K-token requests reported
+    `cache.read: 0`, `cache.write: 0` — the pinned route does **not** report GLM
+    caching (historical direct-route sessions have shown `cache.read` ~185K, so it
+    is route-dependent).
+  - A nonce-isolated A/B on MiMo (unique stable prefix per trial; date value
+    rewritten "Wed 14" -> "Thu 15" Oct 2026 to simulate a rollover) gave OFF vs ON
+    `cache.read`: `0/4672/4736` vs `4608/4096/4736` tokens — **no reproducible,
+    directionally consistent increase; a sign flip is present**. The expected
+    effect (~a 368-byte / ~90-token prefix extension) is below the signal's noise.
+- Evidence: [O] with a provider-measured component (real OpenRouter requests;
+  authorized; small spend; credentials used by OpenCode, never read or logged)
+- Sources: local P2-T4 experiment (`/tmp/opencode/t4*`); `docs/phase2-p2t4-provider-ab-report.md`.
+- Justifies: the P2-T4 verdict and the P2-T5 decision (keep experimental).
+- Version context: OpenRouter, `z-ai/glm-5.3-flash` and `xiaomi/mimo-v2.6-flash`;
+  OpenCode 2.0.26.
+- Re-verify when: the pinned upstreams change, a real-calendar rollover is measured,
+  or a larger volatile region is proposed.
+- Superseded by: null
+- Notes: **Simulated** rollover (proxy date rewrite), not a real calendar rollover;
+  n=3 per condition; OpenRouter routing/TTL are confounders. This is a
+  **route-specific** result, not a universal statement about GLM/MiMo caching.
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
