@@ -5,7 +5,7 @@ request structure only for verified provider behavior, and keep each mutation
 narrow, deterministic, and tested; otherwise preserve the request and observe
 provider-reported usage.
 
-**Current state:** v1.0.0 has shipped — one package loads on OpenCode V1
+**Current state:** v1.2.0 has shipped — one package loads on OpenCode V1
 (`./server`) and V2 (`./v2`), with `./tui` for registration, atop the v0.5.x
 provider line (DeepSeek, GPT‑5.6+, GLM‑5.3, MiMo‑V2.6, Kimi, Claude, Gemini,
 Qwen, xAI/Grok, Meta Muse, MiniMax) and the v0.6.0 shared-core consolidation.
