@@ -1501,6 +1501,58 @@ test("phase1/harness: diff-requests CLI exit codes via absolute and relative pat
   assert.equal(missing.status, 2, "missing directory -> 2")
 })
 
+test("phase3/p3t1: volatility shape fixtures (tool order + request kinds)", async () => {
+  const f = await import("./fixtures/volatility-shapes.mjs")
+  assert.equal(f.isAsciiSorted(f.sortedCore()), true, "the 11 core tools are ASCII-sorted")
+  assert.equal(f.sortedCore().length, 11)
+  assert.ok(f.TOOL_ORDER_2_0_26.includes(f.APPENDED_TOOL))
+  assert.ok(
+    f.TOOL_ORDER_2_0_26.indexOf(f.APPENDED_TOOL) > f.sortedCore().indexOf("write"),
+    "the Code Mode tool is appended after the sorted core",
+  )
+  assert.equal(f.isAsciiSorted(f.TOOL_ORDER_2_0_26), false, "the full list is deliberately NOT sorted")
+  const kindOf = (b) =>
+    Object.keys(b)
+      .filter((k) => !["messages", "input", "stream", "stream_options", "options"].includes(k))
+      .sort()
+      .join(",")
+  assert.equal(kindOf({ model: 1, store: 1, messages: [], stream: true, stream_options: {} }), f.REQUEST_KINDS.aux)
+  assert.equal(
+    kindOf({ max_completion_tokens: 1, model: 1, store: 1, tools: [], messages: [], stream: true }),
+    f.REQUEST_KINDS.main,
+  )
+})
+
+test("phase3/p3t1: equivalent-turn vs first-vs-subsequent pair semantics", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ce-pairs-"))
+  const main = (msgs) =>
+    JSON.stringify({
+      seq: 1,
+      method: "POST",
+      url: "/v1/chat/completions",
+      body: {
+        max_completion_tokens: 8,
+        model: "m",
+        store: true,
+        stream: true,
+        tools: [{ function: { name: "read" } }],
+        messages: msgs,
+      },
+    })
+  const sys = { role: "system", content: "S" }
+  const u1 = { role: "user", content: "say hi" }
+  writeFileSync(join(dir, "req-000.json"), main([sys, u1]))
+  writeFileSync(join(dir, "req-001.json"), main([sys, u1])) // equivalent turn 2 -> identical
+  writeFileSync(join(dir, "req-002.json"), main([sys, u1])) // equivalent turn 3 -> identical
+  writeFileSync(join(dir, "req-003.json"), main([sys, u1, { role: "assistant", content: "ok" }, u1])) // subsequent
+  const { pairs } = diffCapture(dir)
+  assert.equal(pairs.length, 3)
+  assert.ok(pairs.slice(0, 2).every((p) => p.equal), "equivalent turns are byte-identical")
+  const last = pairs[pairs.length - 1]
+  assert.deepEqual(last.changedSections, ["messages"], "the subsequent request differs only in messages")
+  assert.equal(last.expected, true)
+})
+
 test("phase1: per-session dedup emits on transition only and isolates sessions", async () => {
   const out = await runLinterDedupProbe()
   assert.equal(out.aCount, 3, "entry + changed rule set + recurrence after clear")
