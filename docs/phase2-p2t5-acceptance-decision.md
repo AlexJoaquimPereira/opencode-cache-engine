@@ -61,4 +61,3 @@ stale date introduced; **provider-benefit threshold not met** → keep experimen
 
 **§3C thresholds:** transform invariants **met**; provider benefit **not met** →
 `stabilizeDate` default **off**.
-
