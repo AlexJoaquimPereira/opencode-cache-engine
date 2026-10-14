@@ -14,6 +14,7 @@ import {
   gptCacheOptionsDelta,
   hitRatePct,
   loadConfig,
+  lintSystemVolatility,
   mimoHitRate,
   mimoSessionIdFor,
   nextProcessedCursor,
@@ -32,6 +33,7 @@ import {
   systemShapeHashes,
   toolFingerprint,
   toolWireFingerprint,
+  volatilityTransition,
 } from "./cache-engine-core.mjs"
 import { explainPolicyResolution, resolveRuntimePolicy } from "./cache-policy-core.mjs"
 
@@ -106,6 +108,7 @@ type Shape = {
   semanticToolsHash: string | null
   wireToolsHash: string | null
   toolCount: number | null
+  stablePrefixLength: number | null
 }
 
 // Resolved runtime policy (the registry's runtime descriptor). `policy` is the
@@ -140,6 +143,11 @@ type EffortObs = { known: boolean; value: string | null }
 type SessionState = {
   shape: Shape | null
   baselineSystem: string | null
+  // Signature of the last emitted high-severity volatility rule set (sorted,
+  // unique rule IDs joined), or null when the session is not in a high state.
+  // Used to emit `system_volatility` only on transition, never every turn. Holds
+  // rule IDs only — never prompt text.
+  lintSig: string | null
   modelInfo: ModelInfo | null
   tools: ToolCache | null
   toolCount: number | null
@@ -179,6 +187,7 @@ const emptyShape = (): Shape => ({
   semanticToolsHash: null,
   wireToolsHash: null,
   toolCount: null,
+  stablePrefixLength: null,
 })
 
 type ChatParamsModel = {
@@ -216,6 +225,7 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
       s = {
         shape: null,
         baselineSystem: null,
+        lintSig: null,
         modelInfo: null,
         tools: null,
         toolCount: null,
@@ -611,6 +621,8 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
     semanticToolsHash: shape.semanticToolsHash,
     wireToolsHash: shape.wireToolsHash,
     toolCount,
+    // byte length of the stable prefix = first-differing byte offset vs baseline
+    systemStablePrefixLength: shape.stablePrefixLength,
     // legacy aliases for backward compatibility with earlier dashboards
     systemHash: shape.fullSystemHash,
     toolsHash: shape.semanticToolsHash,
@@ -1127,11 +1139,39 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
           }
         }
 
+        // Advisory silent-invalidator linter (read-only; never rewrites the
+        // request). Emits ONE additive boundary record on TRANSITION into a
+        // high-severity state (never on every turn); a diagnostic failure is
+        // swallowed so it can never break the request. Reuses the already-joined
+        // `systemText` rather than joining the parts array a second time.
+        try {
+          const lint = lintSystemVolatility(systemText)
+          const { signature, emit, rules } = volatilityTransition(s.lintSig, lint.findings)
+          if (emit) {
+            rec.record({
+              kind: "boundary",
+              sid,
+              ts: Date.now(),
+              reason: "system_volatility",
+              severity: "high",
+              rules,
+              ...(s.modelInfo
+                ? { provider: s.modelInfo.providerID, model: s.modelInfo.modelID, policy: s.modelInfo.family }
+                : {}),
+            })
+          }
+          // null clears the state so a later recurrence emits again.
+          s.lintSig = signature
+        } catch {
+          /* diagnostics must never break the request */
+        }
+
         const cur: Shape = { ...emptyShape() }
         const curHashes = systemShapeHashes(s.baselineSystem ?? systemText, systemText)
         cur.fullSystemHash = curHashes.fullSystemHash
         cur.stableSystemPrefixHash = curHashes.stableSystemPrefixHash
         cur.volatileSystemSuffixHash = curHashes.volatileSystemSuffixHash
+        cur.stablePrefixLength = curHashes.stablePrefixLength
         if (s.baselineSystem === null) s.baselineSystem = systemText
         await refreshTools(sid, s, model as { providerID: string; id?: string; api?: { id?: string } } | undefined)
         cur.semanticToolsHash = s.tools?.semanticToolsHash ?? null
@@ -1191,6 +1231,7 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
               ? { provider: s.modelInfo.providerID, model: s.modelInfo.modelID, policy: s.modelInfo.family }
               : {}),
             ...cacheCtx(s.cacheRoot),
+            systemStablePrefixLength: cur.stablePrefixLength,
             dimensions: changed,
             changedFields: granular,
             reasons,
