@@ -83,3 +83,24 @@ leaving it before `<env>` (baseline) when the date changes (§6, §3C).
 **Directional support, not a clean provider-measured benefit.** Keep `stabilizeDate`
 **experimental (default off)**; the signal justifies a **real-calendar >=2-rollover
 confirmation** before any promotion (G4). The structural work (G2/G3) stands.
+
+## Reproduction (measurement procedure)
+1. **Route/pins:** OpenRouter with the pinned providers (GLM `z-ai/fp8` -> Z.AI,
+   MiMo `xiaomi/fp8` -> Xiaomi). Real `XDG_CONFIG_HOME` must be used so the pins load.
+2. **Disposable project:** `.opencode/plugins/<shim>.ts` ->
+   `export { default } from "<repo>/src/cache-engine-v2.mjs"`, and
+   `.opencode/opencode.json` with
+   `provider.openrouter.options.baseURL = http://127.0.0.1:<port>/api/v1`.
+3. **Proxy:** a loopback proxy forwards to `https://openrouter.ai`, captures routing
+   metadata, and (for the simulated rollover) rewrites the `Today's date: ...` value.
+4. **Candidate toggle:** run `opencode run --standalone -m <model> "<prompt>"`; enable
+   `stabilizeDate` by pointing `HOME` at a temp dir holding
+   `.config/opencode/cache-engine.json` (`{"policies":{"<family>":{"stabilizeDate":true}}}`)
+   while `XDG_CONFIG_HOME` stays real.
+5. **Per trial:** prime (no rewrite) then measure (rewrite the date), with a **unique
+   nonce** in the stable prompt so prior runs' caches cannot carry over. Read
+   `cache.read`/`write` from the session DB
+   (`session_message.data.tokens.cache.{read,write}`) or the OpenRouter usage.
+6. **Threshold (§3C):** a reproducible `cache.read` increase vs baseline, directionally
+   consistent (no sign flip), across >=2 rollovers.
+
