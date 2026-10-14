@@ -1,13 +1,13 @@
 # OpenCode Cache Engine — Post-1.0.0 Implementation Plan
 
 **Document type:** Harness implementation plan  
-**Status:** Proposed; implementation requires explicit authorization  
+**Status:** Phase 1 complete (2026-10-14); Phase 2+ proposed — implementation requires explicit authorization  
 **Baseline:** `opencode-cache-engine` 1.0.0; V1 and V2 entry points load  
 **Planning date:** 2026-10-13  
 **Primary objective:** Improve prompt-cache stability through conservative, provider-aware interventions that are structurally verified and, where possible, proven to improve provider-reported cache reuse.
 
 **Revision:** 2 — engineering hardening (implementation mapping, harness contract, phase metadata, risk register).  
-**Input:** `docs/competitor-prompt-cache-plugins-research-report.md`  
+**Input:** `docs/competitor-prompt-cache-plugins-research-report.md` (local-only / gitignored; durable conclusions inlined in §2, §6, §13)  
 **Companion context:** `docs/implementation-plan-v2.md` (shipped V2 milestone record, Phases A–D), `docs/research-findings.md`, `docs/cache-policy-inventory.md`
 
 ## 1. Purpose
@@ -218,6 +218,12 @@ Default, measurable thresholds. A phase that misses a threshold does not advance
 **Gate 0:** Do not proceed until baseline behavior and regression boundaries are clear.
 
 ## 5. Phase 1 — Structural diagnostics and offline capture
+
+**Status: COMPLETE** (Phase 1 closure, 2026-10-14; suite 362/0). Delivered the
+`lintSystemVolatility` linter, `firstSystemDifference`, baseline-relative
+`systemStablePrefixLength` telemetry, V1/V2 diagnostic integration, and the
+offline/mock capture harness. Phase 2 (date relocation) is not started and remains
+gated on provider-side rollover evidence and explicit authorization.
 
 **Objective:** Detect and explain instability without mutating requests.
 

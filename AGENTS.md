@@ -177,9 +177,9 @@ stores:
   transports: OpenCode runtime/SDK/plugin API, OpenRouter routing, AI-SDK and
   provider-package serialization, and provider API mechanics.
 - `docs/competitor-prompt-cache-plugins-research-report.md` — competitor/ecosystem
-  landscape and the input to the post-1.0.0 plan. Its third-party claims are
-  **author-reported, not verified**; never promote one to `[D]`/`[O]` without our
-  own reproduction.
+  landscape and the input to the post-1.0.0 plan (**gitignored/local-only**; the
+  tracked distillation is the plan). Its third-party claims are **author-reported,
+  not verified**; never promote one to `[D]`/`[O]` without our own reproduction.
 
 The two tracked stores use the same evidence tags: `[D]` documented, `[O]`
 observed, `[I]` inferred, `[U]` unknown. Cite a finding ID (`RF-OC-001`) instead
@@ -346,6 +346,12 @@ post-1.0.0 plan; `docs/competitor-prompt-cache-plugins-research-report.md` is it
 input (competitor/ecosystem research — its third-party claims are
 **author-reported, not verified**). The plan is **proposed**: nothing in it is
 authorization to implement. Use its §17 task-result template for phase reports.
+
+**Phase 1 — structural diagnostics + offline capture harness: COMPLETE**
+(2026-10-14; suite 362/0). Delivered `lintSystemVolatility`/`firstSystemDifference`,
+`systemStablePrefixLength` telemetry, V1/V2 diagnostic integration, and the
+offline/mock capture harness. Phase 2 (date relocation) is not started and
+remains gated on provider-side rollover evidence and explicit authorization.
 
 - **Diagnose before mutating.** Observe the rendered request, identify a specific
   avoidable instability, verify the hook can safely observe/change it, then make
