@@ -1695,6 +1695,69 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   n=3 per condition; OpenRouter routing/TTL are confounders. This is a
   **route-specific** result, not a universal statement about GLM/MiMo caching.
 
+### RF-OC-040 — OpenCode 2.0.26 request shape (Chat Completions route): a fresh run emits an aux (no-tools) request then a main (12-tool) request; the system prompt rides inside `messages[0]`; equivalent turns are byte-identical and a session-continue request differs only in `messages`
+
+- Status: current
+- Verified: 2026-10-15
+- Area: opencode-runtime
+- Fact:
+  - One `opencode run --standalone` (Chat Completions route, OpenAI-compatible
+    provider) emits **two** serialized requests: first an **auxiliary** (title/summary)
+    request whose kind (top-level keys minus conversation/stream/options) is
+    `model,store` with **no tools** (roles `system>user`); then the **main** agent-loop
+    request, kind `max_completion_tokens,model,store,tools` with **12 tools**
+    (`max_completion_tokens, messages, model, store, stream, stream_options, tools`;
+    no `prompt_cache_key` on a non-GPT provider).
+  - A session-continue run (`opencode run … --continue`) emits **one** request (the
+    main; the title is not regenerated), with roles grown to
+    `system>user>assistant>user`. Passing multiple positional messages to a single
+    `opencode run` does **not** create multiple turns (they collapse into one message).
+  - The system prompt is carried **inside `messages[0]`** (role `system`, ~7.5 KB on
+    the harness project) — there is no top-level `system` key on this route. It embeds
+    the working directory (`<env>`), so it varies with the project path.
+  - **Determinism / pairs:** across >=3 equivalent turns in one capture the main
+    requests are **byte-identical**; a first-vs-subsequent pair differs **only** in
+    `messages` (the first differing canonical byte is immediately after the system
+    message) — `model`, `tools`, and the system message stay byte-identical.
+- Evidence: [O] (offline capture, OpenCode 2.0.26, mock provider + `bwrap --unshare-net`;
+  harness `OC_CAPTURE_TURNS=3 OC_CAPTURE_CONTINUE=1`).
+- Sources: `docs/phase3-p3t1-capture-groundwork.md` (P3-T1); the Phase 1 capture harness.
+- Justifies: P3-T2..P3-T5 volatility ranking, and the caveat that system-prompt drift is
+  invisible to the current `messages`-based diff (P3-T4 must compare `messages[0].content`
+  explicitly).
+- Version context: OpenCode 2.0.26.
+- Re-verify when: OpenCode changes request assembly or system-message placement on the
+  Chat Completions route.
+- Superseded by: null
+- Notes: A second request *within one process* (tool-loop) was not exercised; the
+  "subsequent" request here is a session-continue across processes.
+
+### RF-OC-041 — OpenCode 2.0.26 sorts the main request's tools ASCII-ascending but appends `execute` (the Code Mode tool) after the sorted core, so the full list is not sorted; the order is stable across equivalent turns, the session-continue turn, and repeated runs
+
+- Status: current
+- Verified: 2026-10-15
+- Area: opencode-runtime
+- Fact:
+  - The main agent request carries 12 tools in this order (stable): `edit, glob, grep,
+    question, read, shell, skill, subagent, webfetch, websearch, write, execute`.
+  - The first **11** tools are in non-decreasing ASCII order; `execute` (the Code Mode
+    tool) is **appended after** the sorted core and is therefore NOT in sort position
+    (ASCII order would place it between `edit` and `glob`).
+  - The order is identical across equivalent turns, the session-continue turn, and
+    repeated runs (>=3) — i.e. deterministic for a fixed tool set.
+- Evidence: [O] (offline capture, OpenCode 2.0.26; `test/fixtures/volatility-shapes.mjs`
+  asserts the sorted-core + appended-`execute` invariant).
+- Sources: `docs/phase3-p3t1-capture-groundwork.md` (P3-T1); `RF-OC-040`.
+- Justifies: P3-T2 (tool-ordering investigation) has a concrete observed order baseline
+  and a candidate source of avoidable order instability (a separately-registered tool
+  appended after the sort).
+- Version context: OpenCode 2.0.26.
+- Re-verify when: OpenCode changes tool registration or tool-list ordering.
+- Superseded by: null
+- Notes: `toolWireFingerprint` is order-sensitive; this entry is the observed order for
+  the Chat Completions route with the default tool set. Whether the appended `execute`
+  can reorder when other tools are added is open (P3-T2).
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
