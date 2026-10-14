@@ -1594,6 +1594,40 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   remains **unverified** (no provider requests). 1.18.x wire shape not captured
   (that binary is not installed).
 
+### RF-OC-036 — A V2 `context`-hook mutation of a `system` text part reaches the serialized Chat Completions request (offline wire-verified for the P2-T3 date-line relocation)
+
+- Status: current
+- Verified: 2026-10-14
+- Area: opencode-runtime
+- Fact:
+  - With the project-local shim loading the V2 adapter (`RF-OC-024`) and the
+    experimental `stabilizeDate` policy enabled, the offline-captured
+    **serialized** system content (`messages[0].content`) for both
+    `mock/glm-5.3-flash` and `mock/mimo-v2.6-flash` had the single daily date line
+    moved from **before** the `<env>` block to **after** it (still before the
+    trailing worktree part). A neutral model (`mock/synthetic`) was byte-unchanged.
+  - On the wire, exactly one date line remained, its value was unchanged, the
+    non-empty line multiset was preserved, and the byte length grew by exactly
+    **+1** (the documented separator newline) — a **relocate-only** effect within
+    the eligible `event.system` text part.
+  - This positively establishes, for the tested shim route, that a `context`-hook
+    `system`-part mutation survives to the serialized request — the mapping
+    RF-OC-032 verified only for `options` and that RF-OC-035 flagged as unproven
+    for `system`.
+- Evidence: [O] (offline wire capture 2026-10-14, OpenCode 2.0.26, loopback mock,
+  `bwrap --unshare-net`; no provider requests)
+- Sources: `test/harness/capture/run.sh` + `verify-date-relocation.mjs` +
+  `date-relocation.test.sh`; `src/cache-engine-v2.mjs` (`onContext`);
+  `docs/phase2-date-relocation-hook-shape.md` (P2-T3 section).
+- Justifies: P2-T3 gate G3 (wire) and the Phase 2 report.
+- Version context: OpenCode 2.0.26; `@opencode/plugin` 2.0.16; adapter at v1.1.1.
+- Re-verify when: OpenCode changes how `event.system` parts are serialized, or the
+  adapter's transform/part handling changes.
+- Superseded by: null
+- Notes: Wire-verified **structurally** for the relocate-only effect; **provider**
+  cache benefit remains unmeasured (P2-T4). Transform-off and neutral are
+  unchanged.
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
