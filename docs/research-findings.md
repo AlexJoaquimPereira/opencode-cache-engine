@@ -1610,10 +1610,11 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
     non-empty line multiset was preserved, and the byte length grew by exactly
     **+1** (the documented separator newline) — a **relocate-only** effect within
     the eligible `event.system` text part.
-  - This positively establishes, for the tested shim route, that a `context`-hook
-    `system`-part mutation survives to the serialized request — the mapping
-    RF-OC-032 verified only for `options` and that RF-OC-035 flagged as unproven
-    for `system`.
+  - This positively establishes, for the tested shim route, that **this
+    relocate-only** `context`-hook `system`-part mutation survives to the
+    serialized request — the mapping RF-OC-032 verified only for `options` and
+    that RF-OC-035 flagged as unproven for `system`. (It does not establish that
+    every `system` mutation round-trips.)
 - Evidence: [O] (offline wire capture 2026-10-14, OpenCode 2.0.26, loopback mock,
   `bwrap --unshare-net`; no provider requests)
 - Sources: `test/harness/capture/run.sh` + `verify-date-relocation.mjs` +
