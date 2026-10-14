@@ -3,85 +3,83 @@
 **Task:** P2-T4 (see `TODO.md`) — measure whether the `stabilizeDate` date-line
 relocation improves provider-reported prefix-cache reuse across a date change.
 **Type:** measurement (authorized). **Evidence label:** *Provider measured*.
-**Status:** **inconclusive** — G4 **NOT passed** (no reproducible benefit).
-**Still open:** a real-calendar-rollover confirmation and the GLM re-pin.
+**Status:** **directional support** (on the pinned route, every nonce-isolated trial
+showed ON >= OFF), but **G4 not cleanly passed** — the rollover was simulated and the
+magnitude is variable. **Still open:** a real-calendar >=2-rollover confirmation.
 
 ## Objective
 From provider-reported usage, determine whether relocating the daily date line to
-the system-prompt tail (candidate) yields a **larger reused cached prefix** than
+the system-prompt tail (candidate) yields a larger reused cached prefix than
 leaving it before `<env>` (baseline) when the date changes (§6, §3C).
 
-## Initial state
-- Branch / HEAD: `master` @ `c5927d4`; package version **1.1.2**.
-- Test baseline: `npm test` 368/0; `npm run test:harness` all pass.
-- Lockfile integrity: `package-lock.json` SHA1 `bcf39bba1806d74418eedb4decdb97aefd43c409` (untouched).
-- Route: OpenRouter, pinned models `z-ai/glm-5.3-flash` and `xiaomi/mimo-v2.6-flash`.
+## Measurement machinery
+- **Route:** OpenRouter with the user's pinned providers — GLM `z-ai/fp8` -> **Z.AI**,
+  MiMo `xiaomi/fp8` -> **Xiaomi** (observed via the response `provider` field).
+- **Capture/rewrite:** a disposable project overrides the endpoint
+  (`provider.openrouter.options.baseURL` -> local proxy); the proxy captures routing
+  metadata and rewrites the `Today's date: ...` value to **simulate** a rollover.
+- **Plugin:** the project `.opencode/plugins/<shim>.ts` loads only under
+  `opencode run --standalone`; `stabilizeDate` is enabled by pointing `HOME` at a
+  temp dir holding `~/.config/opencode/cache-engine.json` while `XDG_CONFIG_HOME`
+  stays **real** (so the pins load). No managed config was modified.
+- **Isolation:** each trial uses a **unique stable prefix** (nonce) so prior runs'
+  caches cannot carry over.
+- **Usage:** OpenCode session DB `session_message.data.tokens.cache.{read,write}`
+  (the plugin's own telemetry does not fire headless).
 
-## Findings
-- **Observed — measurement path.** The plugin's own `usage` telemetry does **not**
-  fire under headless `opencode run`; provider cache usage is read from OpenCode's
-  session DB (`~/.local/share/opencode/opencode.db`, `session_message.data.tokens.cache.{read,write}`).
-- **Observed — project plugin load.** A project `.opencode/plugins/<shim>.ts`
-  (re-exporting `src/cache-engine-v2.mjs`) loads only under `opencode run
-  --standalone`; without it the adapter's `setup` never runs (no metrics file).
-- **Documented — provider endpoint override.** A provider endpoint can be
-  overridden via `provider.<id>.options.baseURL` (OpenCode config schema; singular
-  `provider`).
-- **Observed — GLM route not measurable.** With the pinned upstreams
-  (streamlake/novita/z-ai fp8), two identical ~23K-token requests reported
-  `cache.read: 0`, `cache.write: 0`. Historical direct-route sessions have shown
-  `cache.read` (~185K), so this is route-dependent.
-- **Observed — MiMo route measurable.** With xiaomi/fp8, identical repeat requests
-  reported `cache.read` (e.g. 23872 of ~24K input).
-- **Provider measured — result (MiMo v2.6 Flash, simulated rollover).** Using a
-  local forwarding proxy that rewrites the date value (Wed 14 -> Thu 15 Oct 2026):
+## Findings — provider measured (pinned route, nonce-isolated, simulated rollover "Wed 14" -> "Thu 15" Oct 2026)
+| model | trial | OFF `cache.read` | ON `cache.read` | delta |
+|---|---|---:|---:|---:|
+| GLM-5.3 Flash (Z.AI) | A | 8128 | 10240 | +2112 |
+| GLM-5.3 Flash (Z.AI) | B | 10240 | 10304 | +64 |
+| GLM-5.3 Flash (Z.AI) | C | 10240 | 10304 | +64 |
+| MiMo v2.6 Flash (Xiaomi) | A | 4096 | 10240 | +6144 |
+| MiMo v2.6 Flash (Xiaomi) | B | 8192 | 10240 | +2048 |
+| MiMo v2.6 Flash (Xiaomi) | C | 10240 | 10240 | 0 |
 
-  | trial | OFF `cache.read` (date before `<env>`) | ON `cache.read` (date at tail) | delta |
-  |---|---:|---:|---:|
-  | non-isolated | 3072 / 4608 / 15552 | 4672 / 15552 / 15552 | 0..+10944 (confounded by cache carryover) |
-  | **nonce-isolated** | **0 / 4672 / 4736** | **4608 / 4096 / 4736** | **+4608 / -576 / 0** |
+- **ON >= OFF in 6/6** (no sign flip): directionally consistent with the mechanism
+  (date at the tail -> a longer surviving prefix after the rollover).
+- Magnitude varies (0..+6144) and values cluster near ~10240, suggesting a provider
+  cached-prefix **cap** can saturate the difference (when the baseline already hits
+  the cap, the delta is 0).
 
-- **Inferred / unresolved.** With independent caches (unique stable prefix per
-  trial) there is **no reproducible, directionally consistent** `cache.read`
-  increase — a sign flip is present and the variance (0..+4608) far exceeds the
-  expected effect (~368 B / ~90 tokens). The effect is **below the cache signal's
-  noise** on this route/design.
+## Corrections to earlier statements (this session)
+- The **first A/B pass was invalid**: it used a *temp* `XDG_CONFIG_HOME` (no pins),
+  so the requests carried `provider: null` and OpenRouter load-balanced (GLM was
+  served by "Near AI", not Z.AI). Those numbers are discarded.
+- "GLM reports no caching" was measured on the **old pin** (streamlake/novita) / an
+  unpinned route. With the pin binding to Z.AI, GLM **does** report reads (e.g.
+  23616 of 23673 cached on an identical repeat).
+- The provider pins are sent verbatim and honored (GLM -> z-ai, MiMo -> xiaomi);
+  the earlier novita/makora sighting was the pre-binding state.
 
 ## Changes
-- **Files changed:** none in the repository (this task used disposable projects and
-  a local proxy under `/tmp/opencode`).
-- **Behavior changed:** none (the `stabilizeDate` default remains **off**).
-- **Behavior intentionally unchanged:** the shipped transform and its defaults.
+- **Files changed:** none in the repository (disposable projects + a local proxy
+  under `/tmp/opencode`). **Behavior changed:** none (`stabilizeDate` stays off by default).
 
 ## Validation
-- Commands and tests: N/A (no repo change); the structural gates G2/G3 were closed
-  in P2-T2/P2-T3.
-- Offline isolation: the plugin loaded via the project shim and relocated the date
-  (`dateAfterEnv: true`) under the candidate condition.
-- **Provider requests made: yes** (OpenRouter; small spend).
-- **Credentials accessed: no** (auth used by OpenCode from its store; never read or logged).
+- **Provider requests made: yes** (OpenRouter; small spend). **Credentials accessed: no**
+  (used by OpenCode from its store; never read or logged).
+- No offline/structural change (G2/G3 unchanged from P2-T2/P2-T3).
 
 ## Acceptance criteria
-- [ ] A reproducible `cache.read` increase vs baseline, directionally consistent
-      (no sign flip), across >=2 rollovers — **NOT met** (inconclusive).
+- [ ] Reproducible `cache.read` increase, directionally consistent, across >=2
+      **real** rollovers — **partial**: directionally consistent on the pinned route
+      (6/6, no sign flip), but **simulated** rollovers and a variable magnitude.
 - [x] Measurement machinery established and reproducible.
-- [x] Provider requests made under authorization.
 
 ## Risks and limitations
 - **Simulated** rollover (proxy date rewrite), not a real calendar rollover (§6).
-- **GLM blocked** on the pinned route (pending re-pin to `z-ai/fp8`).
-- Small effect below the cache signal's noise; n=3 per condition.
-- OpenRouter upstream routing and cache TTL are confounders.
+- Variable magnitude; a possible provider cached-prefix cap saturates the delta.
+- n=3 per model; OpenRouter routing/TTL remain confounders.
 
 ## Cleanup and integrity
-- Temporary artifacts: `/tmp/opencode/{t4proxy.mjs,t4ab.sh,t4probe,t4route,t4home,phase2-p2t4-*}`.
+- Temporary artifacts: `/tmp/opencode/{t4proxy.mjs,t4ab.sh,t4route,t4home,phase2-p2t4-*}`
+  (plus the disposable experiment project).
 - Worktree status: repository unchanged by this task.
-- Lockfile hash: `bcf39bba1806d74418eedb4decdb97aefd43c409` (untouched).
 - Managed config/services untouched.
 
 ## Recommendation
-**Inconclusive.** Keep `stabilizeDate` **experimental (default off)**; do **not**
-promote. Per §3C/§15 a non-reproducible `cache.read` delta is inconclusive. The
-structural work (G2/G3) stands. Revisit with a real-calendar rollover confirmation
-and, if desired, the GLM `z-ai/fp8` re-pin; a materially larger (non-date) volatile
-region would be a separate, safety-cased investigation (deferred).
+**Directional support, not a clean provider-measured benefit.** Keep `stabilizeDate`
+**experimental (default off)**; the signal justifies a **real-calendar >=2-rollover
+confirmation** before any promotion (G4). The structural work (G2/G3) stands.
