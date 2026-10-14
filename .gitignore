@@ -19,8 +19,9 @@ coverage/
 .opencode
 session-*.md
 
-# Project audits
+# Project audits and reports
 audit-report-*.md
+baseline-report-*.md
 
 # Research inputs (kept local; referenced by the post-1.0.0 plan)
 docs/competitor-prompt-cache-plugins-research-report.md
