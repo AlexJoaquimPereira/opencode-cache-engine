@@ -1523,6 +1523,7 @@ context or output limits; apply the existing harness/user-side limits.
 "glm53": {
   "enabled": true,
   "stabilizeSystem": true,
+  "stabilizeDate": false,
   "preserveThinkingIntegrity": true
 }
 ```
@@ -1530,6 +1531,18 @@ context or output limits; apply the existing harness/user-side limits.
 ### `stabilizeSystem`
 
 Enables relocation of the volatile `<env>` section to the system-prompt tail.
+
+### `stabilizeDate`
+
+Experimental (default `false`): relocate the standalone daily date line
+(`Today's date: …`) to the system-prompt tail, so a daily rollover invalidates the
+smallest possible tail. On the OpenCode 2.0.26 shape the date sits *outside*
+`<env>`, so `stabilizeSystem` does not move it. The transform is content-preserving
+(the date value/format is unchanged and never pinned) and is a no-op for
+missing/duplicate/malformed/ambiguous date lines and for the legacy shape where the
+date is inside `<env>` (the `<env>` relocation owns that case). Controlled
+independently of `stabilizeSystem`. Default off pending provider-side cache
+evidence.
 
 ### `preserveThinkingIntegrity`
 
@@ -1551,6 +1564,7 @@ It is diagnostic rather than a reason to rewrite or fabricate reasoning content.
   "mimo26": {
     "enabled": true,
     "stabilizeSystem": true,
+    "stabilizeDate": false,
     "stickySession": true,
     "preserveThinkingIntegrity": true
   }
@@ -1565,6 +1579,12 @@ Enables the MiMo-V2.6 policy.
 
 Enables relocation of the volatile `<env>` section to the system-prompt tail
 (same narrow, content-preserving transformation as GLM-5.3).
+
+### `stabilizeDate`
+
+Experimental (default `false`): same date-line relocation as
+`glm53.stabilizeDate` (the standalone `Today's date: …` line moved to the
+system-prompt tail). Controlled independently of `stabilizeSystem`.
 
 ### `stickySession`
 
