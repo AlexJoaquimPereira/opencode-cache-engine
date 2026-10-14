@@ -89,6 +89,23 @@ OC_CAPTURE_ONLY_DIFF="$TMP/does-not-exist" "$RUN" >/dev/null 2>&1; check 2 $? "r
 # --- inner.sh: invalid timeout -> 2 (no sandbox) ---
 CE="$TMP/ce-invalid" REPO="$REPO" OC_CAPTURE_TURN_TIMEOUT=abc bash "$INNER" >/dev/null 2>&1; check 2 $? "inner.sh: invalid timeout"
 
+# --- inner.sh: P3-T1 turn-plan validation (no sandbox) ---
+CE="$TMP/ce-turns-bad" REPO="$REPO" OC_CAPTURE_TURNS=abc bash "$INNER" >/dev/null 2>&1; check 2 $? "inner.sh: invalid OC_CAPTURE_TURNS"
+CE="$TMP/ce-turns-one" REPO="$REPO" OC_CAPTURE_TURNS=1 bash "$INNER" >/dev/null 2>&1; check 2 $? "inner.sh: OC_CAPTURE_TURNS < 2"
+CE="$TMP/ce-cont-bad" REPO="$REPO" OC_CAPTURE_CONTINUE=yes bash "$INNER" >/dev/null 2>&1; check 2 $? "inner.sh: invalid OC_CAPTURE_CONTINUE"
+
+# --- inner.sh: TURNS=3 + CONTINUE=1 -> 4 turns; only the last is --continue ---
+ARGVSTUB="$TMP/stub-argv.sh"; printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >>"$CE/argv.log"\n' >"$ARGVSTUB"; chmod +x "$ARGVSTUB"
+mkdir -p "$TMP/ce-turns/proj"
+CE="$TMP/ce-turns" REPO="$REPO" OC_BIN="$ARGVSTUB" MOCK_PORT=39432 OC_CAPTURE_TURNS=3 OC_CAPTURE_CONTINUE=1 OC_CAPTURE_TURN_TIMEOUT=5 bash "$INNER" >/dev/null 2>&1
+turns=$(wc -l <"$TMP/ce-turns/argv.log" 2>/dev/null | tr -d ' ')
+check 4 "${turns:-0}" "inner.sh: TURNS=3 + CONTINUE=1 runs 4 turns"
+if grep -q -- '--continue' <(sed -n '4p' "$TMP/ce-turns/argv.log" 2>/dev/null) && ! grep -q -- '--continue' <(sed -n '1,3p' "$TMP/ce-turns/argv.log" 2>/dev/null); then
+  echo "ok   inner.sh: only the last turn uses --continue"
+else
+  echo "FAIL inner.sh: --continue placement"; fail=1
+fi
+
 # --- inner.sh: a controlled stub turn exceeds the timeout -> turn_failed=1 ---
 STUB="$TMP/stub-sleep.sh"; printf '#!/usr/bin/env bash\nsleep 30\n' >"$STUB"; chmod +x "$STUB"
 mkdir -p "$TMP/ce-timeout/proj"
