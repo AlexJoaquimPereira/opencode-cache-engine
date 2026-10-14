@@ -6286,18 +6286,56 @@ test("fixtures: relocateVolatileDateLine matches the P2-T1 shape corpus (string 
       assert.equal((r.text.match(/Today's date:/g) || []).length, s.dateCount, `${s.id}: date count preserved`)
       assert.equal(lineMultiset(r.text), lineMultiset(s.input), `${s.id}: line multiset preserved`)
       const date = s.input.split("\n").find((l) => /^Today's date:/.test(l))
-      assert.ok(r.text.endsWith(date), `${s.id}: date at the tail`)
+      const rest = s.input.slice(0, s.input.indexOf(date)) + s.input.slice(s.input.indexOf(date) + date.length)
+      assert.equal(r.text, rest + "\n" + date, `${s.id}: exact bytes (rest + one separator newline + date)`)
     } else {
       assert.equal(r.text, s.input, `${s.id}: no-op returns the input unchanged`)
     }
   }
 })
 
+test("fixtures: multi-part shapes have exactly one date-eligible part", async () => {
+  const { SHAPES } = await import("./fixtures/date-relocation-shapes.mjs")
+  for (const s of SHAPES) {
+    if (!Array.isArray(s.input)) continue
+    const eligible = s.input.filter(
+      (p) => p && p.type === "text" && typeof p.text === "string" && relocateVolatileDateLine(p.text).changed,
+    ).length
+    assert.equal(eligible, s.expect === "eligible" ? 1 : 0, `${s.id}: date-eligible part count`)
+  }
+})
+
+test("core: relocateVolatileDateLine regression guards (multi-<env>, second label, already-at-tail)", () => {
+  // P1-1: a date inside a SECOND <env> block must not be relocated (the guard
+  // mirrors the sibling <env> helper's single-pair requirement).
+  const twoEnv = [
+    "A",
+    "<env>",
+    "  Working directory: /x",
+    "  Platform: linux",
+    "</env>",
+    "<env>",
+    "Today's date: Wed Oct 14 2026",
+    "  Platform: linux",
+    "</env>",
+    "Z",
+  ].join("\n")
+  assert.equal(relocateVolatileDateLine(twoEnv).changed, false, "date inside a second <env> -> no-op")
+  // P2-1: a valid date plus a second (malformed) label is ambiguous -> no-op.
+  assert.equal(
+    relocateVolatileDateLine("A\nToday's date: Wed Oct 14 2026\nToday's date: someday\nZ").changed,
+    false,
+    "valid date + a second malformed label -> no-op",
+  )
+  // P3-1: already at the tail with a trailing newline -> no-op (no churn).
+  assert.equal(relocateVolatileDateLine("A\nToday's date: Wed Oct 14 2026\n").changed, false, "already at the tail -> no-op")
+})
+
 test("adapters: date relocation is gated by stabilizeDate (default off) and moves only the eligible part", () => {
   const run = (mode) => {
     const home = mkdtempSync(join(tmpdir(), "ce-date-"))
     const script = `
-      import { writeFileSync, mkdirSync } from "node:fs"
+      import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs"
       const dir = process.env.HOME + "/.config/opencode"
       mkdirSync(dir, { recursive: true })
       writeFileSync(dir + "/cache-engine.json", JSON.stringify(process.env.CE_MODE === "on" ? { policies: { glm53: { stabilizeDate: true }, mimo26: { stabilizeDate: true } } } : {}))
@@ -6313,11 +6351,17 @@ test("adapters: date relocation is gated by stabilizeDate (default off) and move
       const handlers = {}; const waiters = []
       const ctx = { session: { hook: async (n, cb) => { handlers[n] = cb; return { dispose: async () => {} } }, context: async () => ({ data: [] }) }, event: { subscribe: () => ({ [Symbol.asyncIterator]: async function* () { while (true) await new Promise((r) => waiters.push(r)) } }) } }
       const cleanup = await v2.default.setup(ctx)
-      const driveV2 = async (model) => { const ev = { sessionID: "s2_" + model.id, model, system: [{ type: "text", text: "HEAD" }, { type: "text", text: SYS }, { type: "text", text: "TAIL" }], options: {} }; await handlers["context"](ev); return ev }
+      const driveV2 = async (model, system) => { const ev = { sessionID: "s2_" + model.id + "_" + Math.random().toString(36).slice(2, 8), model, system, options: {} }; await handlers["context"](ev); return ev }
       const g1 = await driveV1(GLM); const d1 = await driveV1(DEEP)
-      const g2 = await driveV2(GLM); const d2 = await driveV2(DEEP)
+      const parts = (t) => [{ type: "text", text: "HEAD" }, { type: "text", text: t }, { type: "text", text: "TAIL" }]
+      const AMB1 = "Today's date: Tue Oct 13 2026\\nZ"
+      const g2 = await driveV2(GLM, parts(SYS)); const d2 = await driveV2(DEEP, parts(SYS))
+      const amb = await driveV2(GLM, [{ type: "text", text: SYS }, { type: "text", text: AMB1 }])
       await cleanup()
-      process.stdout.write(JSON.stringify({ v1Glm: g1 !== SYS, v1Deep: d1 !== SYS, v2Glm: g2.system[1].text !== SYS, v2Deep: d2.system[1].text !== SYS, v2Head: g2.system[0].text, v2Tail: g2.system[2].text }))
+      let recs = []
+      const mf = process.env.CACHE_ENGINE_METRICS_FILE
+      if (existsSync(mf)) recs = readFileSync(mf, "utf8").trim().split("\\n").filter(Boolean).map((l) => JSON.parse(l))
+      process.stdout.write(JSON.stringify({ v1Glm: g1 !== SYS, v1Deep: d1 !== SYS, v2Glm: g2.system[1].text !== SYS, v2GlmTail: g2.system[1].text.endsWith("Today's date: Wed Oct 14 2026"), v2Deep: d2.system[1].text !== SYS, v2Head: g2.system[0].text, v2Tail: g2.system[2].text, v2Amb: amb.system[0].text !== SYS || amb.system[1].text !== AMB1, dateRecords: recs.filter((r) => r.kind === "boundary" && r.reason === "system_date_relocated").length }))
     `
     return JSON.parse(
       execFileSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], {
@@ -6336,10 +6380,13 @@ test("adapters: date relocation is gated by stabilizeDate (default off) and move
   const on = run("on")
   assert.equal(on.v1Glm, true, "V1: GLM with stabilizeDate moves the date")
   assert.equal(on.v2Glm, true, "V2: GLM with stabilizeDate moves the date")
+  assert.equal(on.v2GlmTail, true, "V2: the eligible part ends at the moved date")
   assert.equal(on.v1Deep, false, "V1: neutral family unchanged")
   assert.equal(on.v2Deep, false, "V2: neutral family unchanged")
   assert.equal(on.v2Head, "HEAD", "V2: unrelated part 0 byte-identical")
   assert.equal(on.v2Tail, "TAIL", "V2: unrelated part 2 byte-identical")
+  assert.equal(on.v2Amb, false, "V2: two date-eligible parts -> no-op (ambiguous)")
+  assert.ok(on.dateRecords >= 2, "V1+V2 emit a system_date_relocated boundary record")
   const off = run("off")
   assert.equal(off.v1Glm, false, "V1: default off -> unchanged")
   assert.equal(off.v2Glm, false, "V2: default off -> unchanged")

@@ -481,19 +481,30 @@ const RE_DATE_VALUE = /^(?:\d{4}-\d{2}-\d{2}|[A-Za-z]{3,9}\s+[A-Za-z]{3,9}\s+\d{
 export function relocateVolatileDateLine(text) {
   if (typeof text !== "string") return { text, changed: false }
   const lines = text.split("\n")
+  // The anchor label must appear EXACTLY ONCE and carry a well-formed value. A
+  // second label (even with a malformed/empty value) is ambiguous -> no-op.
   let idx = -1
   for (let i = 0; i < lines.length; i++) {
     const m = RE_DATE_LINE.exec(lines[i])
     if (!m) continue
-    if (!RE_DATE_VALUE.test(m[1].trim())) continue // malformed value -> ignore
-    if (idx !== -1) return { text, changed: false } // duplicate -> ambiguous
+    if (idx !== -1) return { text, changed: false } // second label -> ambiguous
+    if (!RE_DATE_VALUE.test(m[1].trim())) return { text, changed: false } // malformed value
     idx = i
   }
-  if (idx === -1) return { text, changed: false } // absent or malformed
-  // The legacy shape keeps the date inside <env>; leave it to the block relocation.
-  const open = lines.findIndex((l) => l.includes("<env>"))
-  const close = lines.findIndex((l) => l.includes("</env>"))
-  if (open !== -1 && close !== -1 && open < idx && idx < close) return { text, changed: false }
+  if (idx === -1) return { text, changed: false } // absent
+  // The <env> structure must be well-formed (at most one marker pair), and the
+  // date must not sit inside it. This mirrors the sibling <env> helper's
+  // single-pair guard so we never relocate a date that belongs to a block.
+  const openN = countOccurrences(text, "<env>")
+  const closeN = countOccurrences(text, "</env>")
+  if (openN !== closeN || openN > 1) return { text, changed: false }
+  if (openN === 1) {
+    const open = lines.findIndex((l) => l.includes("<env>"))
+    const close = lines.findIndex((l) => l.includes("</env>"))
+    if (open < idx && idx < close) return { text, changed: false }
+  }
+  // Already at the tail (only blank lines follow) -> no-op (no churn).
+  if (lines.slice(idx + 1).every((l) => l.trim() === "")) return { text, changed: false }
   let start = 0
   for (let i = 0; i < idx; i++) start += lines[i].length + 1
   return relocateRange(text, start, start + lines[idx].length)

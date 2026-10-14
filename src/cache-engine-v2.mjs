@@ -305,6 +305,15 @@ export const CacheEngineV2 = {
             const i = changedIdx[0]
             system[i].text = relocs[i].text
             log("debug", `${envVariant} system date line relocated`, { sid })
+            recordSafe({
+              kind: "boundary",
+              sid,
+              ts: Date.now(),
+              reason: "system_date_relocated",
+              policy: caps.policy,
+              provider: providerID,
+              model: modelID,
+            })
           }
         }
 

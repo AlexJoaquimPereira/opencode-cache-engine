@@ -1158,6 +1158,15 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
             output.system[0] = rel.text
             systemText = rel.text
             log("debug", `${envVariant} system date line relocated to suffix`, { sid })
+            rec.record({
+              kind: "boundary",
+              sid,
+              ts: Date.now(),
+              reason: "system_date_relocated",
+              policy: caps!.policy,
+              provider: String(model?.providerID ?? ""),
+              model: String(model?.api?.id ?? model?.id ?? ""),
+            })
           }
         }
 

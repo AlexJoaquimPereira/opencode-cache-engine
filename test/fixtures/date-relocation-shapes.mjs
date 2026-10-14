@@ -167,11 +167,5 @@ export const SHAPES = [
   },
 ]
 
-// Classification is model-id-only; the same shape is treated differently per family.
-export const FAMILY_CLASSIFICATION = [
-  { model: "glm-5.3-flash", providerID: "mock", family: "glm53", envRelocation: "glm" },
-  { model: "mimo-v2.6-flash", providerID: "mock", family: "mimo26", envRelocation: "mimo" },
-  { model: "synthetic", providerID: "mock", family: "neutral", envRelocation: null },
-]
-
-export const FIXTURES = { ENV_26, OC2_TAIL, LEGACY }
+// (The shape fixtures above are the only exports; family classification is
+// model-id-only and lives in src/cache-policy-core.mjs.)
