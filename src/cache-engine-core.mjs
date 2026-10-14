@@ -474,7 +474,10 @@ export function systemShapeHashes(baseline, current) {
   const stableSystemPrefixHash = shorthash(current.slice(0, common))
   const volatile = current.slice(common)
   const volatileSystemSuffixHash = volatile.length > 0 ? shorthash(volatile) : null
-  return { fullSystemHash, stableSystemPrefixHash, volatileSystemSuffixHash }
+  // Byte length of the stable prefix = the first-differing byte offset (relative
+  // to the session baseline). Persisted as `systemStablePrefixLength` so a change
+  // can be located by byte offset, not only by hash.
+  return { fullSystemHash, stableSystemPrefixHash, volatileSystemSuffixHash, stablePrefixLength: common }
 }
 
 // ---------------------------------------------------------------------------
@@ -553,6 +556,158 @@ export function shapeFieldDiffs(prev, cur, fields) {
     if (prev[f] != null && cur[f] != null && prev[f] !== cur[f]) out.push(f)
   }
   return out
+}
+
+// ---------------------------------------------------------------------------
+// First-difference reporting and the silent-invalidator linter
+// ---------------------------------------------------------------------------
+
+// Byte-level first difference between two system texts. `firstDiffOffset` is the
+// length of the longest common prefix (0 when the first byte differs; the full
+// length when identical). Read-only; never mutates its inputs. This is the
+// primitive behind "locate the exact byte that changed".
+export function firstSystemDifference(baseline, current) {
+  const a = typeof baseline === "string" ? baseline : ""
+  const b = typeof current === "string" ? current : ""
+  const firstDiffOffset = commonPrefixLength(a, b)
+  return {
+    equal: a === b,
+    firstDiffOffset,
+    beforeLength: a.length,
+    afterLength: b.length,
+  }
+}
+
+// Default severities live in one table. `effectiveSeverity` is the single source
+// of truth: allow-listed rules are FORCED to `info`, so an allow-listed rule can
+// never emit a high-severity finding even if its default severity is changed.
+const VOLATILITY_RULES = Object.freeze({
+  "VOL-TIMESTAMP": "high",
+  "VOL-SESSION-ID": "high",
+  "VOL-TOOL-SET": "high",
+  "VOL-TOOL-ORDER": "medium",
+  // Reserved: reliably detecting these needs delta/serialization evidence a
+  // single snapshot cannot supply; not emitted, to avoid false positives.
+  "VOL-CONDITIONAL": "medium",
+  "VOL-NONDET-JSON": "medium",
+  "VOL-DYNAMIC-BEFORE-STABLE": "medium",
+  "VOL-DATE": "info",
+  "VOL-CWD-PATH": "info",
+})
+
+// Rules whose volatility is expected; forced to `info` regardless of the table.
+const LINTER_ALLOWLIST = new Set(["VOL-DATE", "VOL-CWD-PATH"])
+const LINTER_MAX_TEXT = 200_000
+
+// Deterministic effective severity for a rule. Allow-listed rules are pinned to
+// `info`; any other rule uses its declared default (falling back to `medium`).
+// Exported so the policy is directly testable.
+export function effectiveSeverity(ruleId, defaultSeverity) {
+  if (LINTER_ALLOWLIST.has(ruleId)) return "info"
+  return defaultSeverity ?? VOLATILITY_RULES[ruleId] ?? "medium"
+}
+
+// Normalize the set of high-severity rule IDs deterministically: sorted, unique,
+// joined. Returns null when there are no high findings. Pure; stores no content.
+export function volatilitySignature(findings) {
+  const high = [...new Set((findings || []).filter((f) => f && f.severity === "high").map((f) => f.ruleId))].sort()
+  return high.length > 0 ? high.join(",") : null
+}
+
+// Decide whether to emit a `system_volatility` boundary record given the previous
+// per-session signature. Emits only on transition into a high-severity state or
+// when the rule set changes; a cleared state (null) resets so a later recurrence
+// emits again. Pure and bounded — the persisted value is only the signature.
+export function volatilityTransition(prevSignature, findings) {
+  const signature = volatilitySignature(findings)
+  const emit = signature !== null && signature !== prevSignature
+  return { signature, emit, rules: signature ? signature.split(",") : [] }
+}
+
+function systemTextOf(parts) {
+  if (parts == null) return ""
+  const pick = (p) => (typeof p === "string" ? p : typeof p?.text === "string" ? p.text : "")
+  const joined = Array.isArray(parts) ? parts.map(pick).join("\n") : pick(parts)
+  // Bound work on pathological inputs; never throw.
+  return joined.length > LINTER_MAX_TEXT ? joined.slice(0, LINTER_MAX_TEXT) : joined
+}
+
+// A timestamp must carry a time-of-day (the date-only case is VOL-DATE), so a
+// plain `2026-10-14` does not trip this rule.
+const RE_TIMESTAMP =
+  /\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?\b|\b\d{2}:\d{2}:\d{2}(?:\.\d+)?\b/
+const RE_DATE = /\b\d{4}-\d{2}-\d{2}\b|\b(?:today'?s date|current date)\b/i
+// Strong session-id forms (always high): OpenCode `ses_…` and UUIDs.
+const RE_SESSION_ID_STRONG =
+  /\bses_[A-Za-z0-9]{8,}\b|\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i
+// A bare 32-hex token is ambiguous (it can be a content hash), so it is only a
+// finding when session-related context is nearby.
+const RE_HEX32 = /\b[0-9a-f]{32}\b/i
+const RE_SESSION_CONTEXT = /\b(?:session|conversation|chat)[ _-]?(?:id|key|token)?\b/i
+const RE_CWD =
+  /\b(?:working directory|cwd|worktree)\s*[:=]\s*\S|(?:^|\s)\/(?:home|Users|root)\/\S|(?:^|\s)[A-Za-z]:\\/i
+
+// Silent-invalidator linter (read-only, advisory). Operates on the rendered
+// system text parts and, optionally, the current tool list. Returns findings
+// keyed by stable rule IDs; it NEVER rewrites the request.
+//
+// Severity is resolved through `effectiveSeverity`, so allow-listed rules are
+// always `info`. Tool rules compare only when BOTH the current and previous tool
+// snapshots are explicitly supplied as arrays; an omitted snapshot is never
+// treated as an empty one.
+export function lintSystemVolatility(parts, tools, options = {}) {
+  const findings = []
+  const push = (ruleId, detail) =>
+    findings.push({
+      ruleId,
+      severity: effectiveSeverity(ruleId, VOLATILITY_RULES[ruleId]),
+      detail,
+      allowlisted: LINTER_ALLOWLIST.has(ruleId),
+    })
+
+  const text = systemTextOf(parts)
+
+  if (RE_TIMESTAMP.test(text)) push("VOL-TIMESTAMP", "wall-clock timestamp in system text")
+
+  if (RE_SESSION_ID_STRONG.test(text)) {
+    push("VOL-SESSION-ID", "session identifier in system text")
+  } else if (RE_HEX32.test(text)) {
+    const m = text.match(RE_HEX32)
+    const idx = m ? m.index : -1
+    const window = idx >= 0 ? text.slice(Math.max(0, idx - 48), idx + 48 + 32) : ""
+    // Only high when session-related context is adjacent; a stable hash with no
+    // context is intentionally not a finding (avoids a high false positive).
+    if (RE_SESSION_CONTEXT.test(window)) {
+      push("VOL-SESSION-ID", "hex session identifier with session context")
+    }
+  }
+
+  if (RE_CWD.test(text)) push("VOL-CWD-PATH", "absolute cwd/worktree path in system text")
+  if (RE_DATE.test(text)) push("VOL-DATE", "date line in system text")
+
+  const prev = options?.previousTools
+  if (Array.isArray(prev) && Array.isArray(tools)) {
+    const curIds = tools.map((t) => String(t?.id ?? ""))
+    const prevIds = prev.map((t) => String(t?.id ?? ""))
+    const prevSet = new Set(prevIds)
+    const setChanged =
+      curIds.length !== prevIds.length || curIds.some((id) => !prevSet.has(id))
+    if (setChanged) {
+      push("VOL-TOOL-SET", "tool set changed")
+    } else if (curIds.join("\u0000") !== prevIds.join("\u0000")) {
+      push("VOL-TOOL-ORDER", "tool order changed")
+    }
+  }
+
+  const highCount = findings.filter((f) => f.severity === "high").length
+  const worstSeverity = findings.some((f) => f.severity === "high")
+    ? "high"
+    : findings.some((f) => f.severity === "medium")
+      ? "medium"
+      : findings.length > 0
+        ? "info"
+        : "none"
+  return { findings, highCount, worstSeverity }
 }
 
 // ---------------------------------------------------------------------------
