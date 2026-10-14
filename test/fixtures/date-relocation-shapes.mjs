@@ -89,12 +89,12 @@ export const SHAPES = [
   {
     id: "legacy_1_18_34",
     origin: "1.18.34",
-    description: "legacy marker shape: date INSIDE <env>, after the model-name preamble",
+    description: "legacy marker shape: date INSIDE <env>; the block relocation handles it, so the date-line relocation must no-op",
     input: LEGACY,
     dateCount: 1,
     dateInsideEnv: true,
     hasStartMarker: true,
-    expect: "eligible",
+    expect: "no-op",
   },
   {
     id: "duplicate_date",

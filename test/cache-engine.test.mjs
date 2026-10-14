@@ -50,6 +50,7 @@ import {
   parseConfig,
   policyEnabled,
   providerChangeEvent,
+  relocateVolatileDateLine,
   relocateVolatileEnvBlock,
   scanPage,
   shapeDiff,
@@ -917,10 +918,11 @@ test("config defaults enable all eleven policies", () => {
   assert.deepEqual(cfg.policies.muse, { enabled: true })
   assert.deepEqual(cfg.policies.minimax, { enabled: true })
   assert.deepEqual(cfg.policies.deepseek, { enabled: true })
-  assert.deepEqual(cfg.policies.glm53, { enabled: true, stabilizeSystem: true, preserveThinkingIntegrity: true })
+  assert.deepEqual(cfg.policies.glm53, { enabled: true, stabilizeSystem: true, stabilizeDate: false, preserveThinkingIntegrity: true })
   assert.deepEqual(cfg.policies.mimo26, {
     enabled: true,
     stabilizeSystem: true,
+    stabilizeDate: false,
     stickySession: true,
     preserveThinkingIntegrity: true,
   })
@@ -977,7 +979,7 @@ test("config invalid policy values fall back to defaults", () => {
   assert.equal(cfg.policies.gpt56.mode, "implicit")
   assert.equal(cfg.policies.gpt56.ttl, "30m")
   const cfg2 = parseConfig({ policies: { glm53: "nope" } }, {})
-  assert.deepEqual(cfg2.policies.glm53, { enabled: true, stabilizeSystem: true, preserveThinkingIntegrity: true })
+  assert.deepEqual(cfg2.policies.glm53, { enabled: true, stabilizeSystem: true, stabilizeDate: false, preserveThinkingIntegrity: true })
 })
 
 // ===========================================================================
@@ -6231,6 +6233,116 @@ test("core: relocateVolatileEnvBlock inserts exactly one separator newline when 
   // 6. malformed/ambiguous block behavior unchanged
   const reversed = "A\n</env>\n  Working directory: /x\n  Platform: linux\n<env>\nZ"
   assert.equal(relocateVolatileEnvBlock(reversed).changed, false, "reversed markers remain unchanged")
+})
+
+// ===========================================================================
+// Daily date-line relocation (P2-T2, experimental: `stabilizeDate`)
+// ===========================================================================
+
+test("core: relocateVolatileDateLine moves the standalone date line to the tail (content-preserving)", () => {
+  const input = [
+    "</available_skills>",
+    "",
+    "Today's date: Wed Oct 14 2026",
+    "",
+    "Here is some useful information about the environment you are running in:",
+    "<env>",
+    "  Working directory: /x",
+    "  Platform: linux",
+    "</env>",
+  ].join("\n")
+  const r = relocateVolatileDateLine(input)
+  assert.equal(r.changed, true)
+  assert.ok(r.text.endsWith("Today's date: Wed Oct 14 2026"), "date line moved to the tail")
+  assert.equal((r.text.match(/Today's date:/g) || []).length, 1, "date occurs exactly once")
+  // Byte-preservation contract: every non-date byte is preserved exactly and at
+  // most one separator newline is inserted before the moved date line.
+  const date = "Today's date: Wed Oct 14 2026"
+  const rest = input.slice(0, input.indexOf(date)) + input.slice(input.indexOf(date) + date.length)
+  assert.equal(r.text, rest + "\n" + date, "non-date bytes preserved; exactly one separator newline")
+  assert.equal(lineMultiset(r.text), lineMultiset(input), "non-empty line multiset preserved")
+  const r2 = relocateVolatileDateLine(r.text)
+  assert.equal(r2.changed, false, "already at the tail -> no-op (idempotent)")
+  assert.equal(r2.text, r.text)
+})
+
+test("core: relocateVolatileDateLine is a no-op for missing/duplicate/malformed/inside-<env> dates", () => {
+  assert.equal(relocateVolatileDateLine("A\n<env>\n  Working directory: /x\n  Platform: linux\n</env>\nZ").changed, false, "missing")
+  assert.equal(relocateVolatileDateLine("A\nToday's date: Wed Oct 14 2026\nToday's date: Tue Oct 13 2026\nZ").changed, false, "duplicate -> ambiguous")
+  assert.equal(relocateVolatileDateLine("A\nToday's date: someday\nZ").changed, false, "malformed value")
+  assert.equal(relocateVolatileDateLine("A\nToday's date:\nZ").changed, false, "label without value")
+  const legacy = "A\nYou are powered by the model named X\n<env>\nToday's date: 2026-08-17\n</env>\nZ"
+  assert.equal(relocateVolatileDateLine(legacy).changed, false, "legacy shape (date inside <env>) -> the block relocation owns it")
+  assert.equal(relocateVolatileDateLine("A\nToday's date: 2026-08-17\nB").changed, true, "ISO value outside <env> is eligible")
+})
+
+test("fixtures: relocateVolatileDateLine matches the P2-T1 shape corpus (string shapes)", async () => {
+  const { SHAPES } = await import("./fixtures/date-relocation-shapes.mjs")
+  for (const s of SHAPES) {
+    if (Array.isArray(s.input)) continue
+    const r = relocateVolatileDateLine(s.input)
+    assert.equal(r.changed, s.expect === "eligible", `${s.id}: expected ${s.expect}`)
+    if (r.changed) {
+      assert.equal((r.text.match(/Today's date:/g) || []).length, s.dateCount, `${s.id}: date count preserved`)
+      assert.equal(lineMultiset(r.text), lineMultiset(s.input), `${s.id}: line multiset preserved`)
+      const date = s.input.split("\n").find((l) => /^Today's date:/.test(l))
+      assert.ok(r.text.endsWith(date), `${s.id}: date at the tail`)
+    } else {
+      assert.equal(r.text, s.input, `${s.id}: no-op returns the input unchanged`)
+    }
+  }
+})
+
+test("adapters: date relocation is gated by stabilizeDate (default off) and moves only the eligible part", () => {
+  const run = (mode) => {
+    const home = mkdtempSync(join(tmpdir(), "ce-date-"))
+    const script = `
+      import { writeFileSync, mkdirSync } from "node:fs"
+      const dir = process.env.HOME + "/.config/opencode"
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(dir + "/cache-engine.json", JSON.stringify(process.env.CE_MODE === "on" ? { policies: { glm53: { stabilizeDate: true }, mimo26: { stabilizeDate: true } } } : {}))
+      process.env.CACHE_ENGINE_METRICS_FILE = process.env.HOME + "/m.jsonl"
+      const SYS = ["A: keep1", "Today's date: Wed Oct 14 2026", "Here is some useful information about the environment you are running in:", "<env>", "  Working directory: /x", "  Platform: linux", "</env>"].join("\\n")
+      const GLM = { providerID: "zai", id: "glm-5.3", api: { id: "glm-5.3", npm: "@ai-sdk/openai-compatible" } }
+      const DEEP = { providerID: "deepseek", id: "deepseek-flash", api: { id: "deepseek-flash" } }
+      const { CacheEngine } = await import(process.env.CE_V1)
+      const fake = { app: { log: async () => ({}) }, session: { get: async () => ({ data: { parentID: null } }), messages: async () => ({ data: [] }) }, tool: { list: async () => ({ data: [] }) } }
+      const v1 = await CacheEngine({ client: fake, directory: process.env.HOME })
+      const driveV1 = async (model) => { const o = { system: [SYS] }; await v1["experimental.chat.system.transform"]({ sessionID: "s1_" + model.id, model, provider: { source: "config", info: { id: model.providerID }, options: {} } }, o); return o.system[0] }
+      const v2 = await import(process.env.CE_V2)
+      const handlers = {}; const waiters = []
+      const ctx = { session: { hook: async (n, cb) => { handlers[n] = cb; return { dispose: async () => {} } }, context: async () => ({ data: [] }) }, event: { subscribe: () => ({ [Symbol.asyncIterator]: async function* () { while (true) await new Promise((r) => waiters.push(r)) } }) } }
+      const cleanup = await v2.default.setup(ctx)
+      const driveV2 = async (model) => { const ev = { sessionID: "s2_" + model.id, model, system: [{ type: "text", text: "HEAD" }, { type: "text", text: SYS }, { type: "text", text: "TAIL" }], options: {} }; await handlers["context"](ev); return ev }
+      const g1 = await driveV1(GLM); const d1 = await driveV1(DEEP)
+      const g2 = await driveV2(GLM); const d2 = await driveV2(DEEP)
+      await cleanup()
+      process.stdout.write(JSON.stringify({ v1Glm: g1 !== SYS, v1Deep: d1 !== SYS, v2Glm: g2.system[1].text !== SYS, v2Deep: d2.system[1].text !== SYS, v2Head: g2.system[0].text, v2Tail: g2.system[2].text }))
+    `
+    return JSON.parse(
+      execFileSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: home,
+          CE_MODE: mode,
+          CE_V1: new URL("../src/cache-engine.ts", import.meta.url).href,
+          CE_V2: new URL("../src/cache-engine-v2.mjs", import.meta.url).href,
+        },
+      }).trim(),
+    )
+  }
+  const on = run("on")
+  assert.equal(on.v1Glm, true, "V1: GLM with stabilizeDate moves the date")
+  assert.equal(on.v2Glm, true, "V2: GLM with stabilizeDate moves the date")
+  assert.equal(on.v1Deep, false, "V1: neutral family unchanged")
+  assert.equal(on.v2Deep, false, "V2: neutral family unchanged")
+  assert.equal(on.v2Head, "HEAD", "V2: unrelated part 0 byte-identical")
+  assert.equal(on.v2Tail, "TAIL", "V2: unrelated part 2 byte-identical")
+  const off = run("off")
+  assert.equal(off.v1Glm, false, "V1: default off -> unchanged")
+  assert.equal(off.v2Glm, false, "V2: default off -> unchanged")
 })
 
 test("v2 adapter: <env> relocation is a no-op when multiple candidate blocks/parts are eligible", async () => {

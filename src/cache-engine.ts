@@ -24,6 +24,7 @@ import {
   providerChangeEvent,
   reasoningEffortFromOptions,
   reasoningIssueReasons,
+  relocateVolatileDateLine,
   relocateVolatileEnvBlock,
   resolveCacheRootSync,
   scanPage,
@@ -1136,6 +1137,27 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
             } else {
               log("debug", "glm system env block relocated to suffix", { sid })
             }
+          }
+        }
+
+        // ---- Daily date-line relocation (experimental, P2-T2) ---------------
+        // Same families and the same content-preserving contract as the <env>
+        // relocation above. On the 2.0.26 shape the daily date line is the only
+        // per-day volatile byte, and it sits OUTSIDE <env>, so the <env>
+        // relocation does not move it. Gated independently by `stabilizeDate`
+        // (default OFF until provider-side evidence). Missing/duplicate/
+        // malformed/ambiguous date lines, and the legacy shape (date inside
+        // <env>), are a no-op.
+        const stabilizeDate =
+          envVariant !== null &&
+          policyEnabled(cfg, caps!.policy) &&
+          cfg.policies?.[caps!.policy]?.stabilizeDate === true
+        if (stabilizeDate && output.system.length === 1) {
+          const rel = relocateVolatileDateLine(output.system[0])
+          if (rel.changed) {
+            output.system[0] = rel.text
+            systemText = rel.text
+            log("debug", `${envVariant} system date line relocated to suffix`, { sid })
           }
         }
 

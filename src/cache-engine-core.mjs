@@ -87,11 +87,18 @@ function defaultPolicies() {
     glm53: {
       enabled: true,
       stabilizeSystem: true,
+      // Experimental (P2-T2): relocate the standalone daily date line to the
+      // system tail. Content-preserving; default OFF until provider-side evidence
+      // shows repeatable cache benefit (plan §6). Controlled independently of
+      // stabilizeSystem.
+      stabilizeDate: false,
       preserveThinkingIntegrity: true,
     },
     mimo26: {
       enabled: true,
       stabilizeSystem: true,
+      // See glm53.stabilizeDate: experimental date-line relocation, default OFF.
+      stabilizeDate: false,
       stickySession: true,
       // MiMo reasoning diagnostics are instrumentation only. Unlike GLM
       // preserved thinking, there is no evidence that MiMo prompt-cache reuse
@@ -446,6 +453,50 @@ function isOpenCodeEnvInterior(interior) {
   if (lines.length === 0) return false
   if (!lines[0].startsWith("Working directory:")) return false
   return lines.some((l) => l.startsWith("Platform:"))
+}
+
+// ---------------------------------------------------------------------------
+// Daily-date-line relocation
+// ---------------------------------------------------------------------------
+// The OpenCode 2.0.26 system prefix carries the daily date as a standalone line
+// ("Today's date: Wed Oct 14 2026") OUTSIDE the <env> block, immediately before
+// it -- the only per-day volatile byte in that part. For the families that opt
+// into system stabilization, move ONLY that date line to the end of the
+// containing system text, so a daily rollover invalidates the smallest possible
+// tail. This is content-preserving in the same sense as
+// relocateVolatileEnvBlock: the moved line's bytes and the non-empty line
+// multiset are preserved, all other bytes (including newlines/blank lines) are
+// byte-for-byte unchanged, and at most one separator "\n" is inserted when the
+// surviving text does not already end in a newline. It NEVER changes the date
+// value/format and NEVER pins it.
+//
+// Returns { text, changed }. Unchanged (no-op) unless there is EXACTLY ONE
+// well-formed, standalone date line that is NOT inside the <env> block. The
+// legacy 1.18.x shape keeps the date inside <env>, where the existing block
+// relocation already moves it to the tail; missing / duplicate / malformed /
+// ambiguous date lines are likewise a no-op.
+const RE_DATE_LINE = /^Today's date:\s*(\S.*)$/i
+const RE_DATE_VALUE = /^(?:\d{4}-\d{2}-\d{2}|[A-Za-z]{3,9}\s+[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})$/
+
+export function relocateVolatileDateLine(text) {
+  if (typeof text !== "string") return { text, changed: false }
+  const lines = text.split("\n")
+  let idx = -1
+  for (let i = 0; i < lines.length; i++) {
+    const m = RE_DATE_LINE.exec(lines[i])
+    if (!m) continue
+    if (!RE_DATE_VALUE.test(m[1].trim())) continue // malformed value -> ignore
+    if (idx !== -1) return { text, changed: false } // duplicate -> ambiguous
+    idx = i
+  }
+  if (idx === -1) return { text, changed: false } // absent or malformed
+  // The legacy shape keeps the date inside <env>; leave it to the block relocation.
+  const open = lines.findIndex((l) => l.includes("<env>"))
+  const close = lines.findIndex((l) => l.includes("</env>"))
+  if (open !== -1 && close !== -1 && open < idx && idx < close) return { text, changed: false }
+  let start = 0
+  for (let i = 0; i < idx; i++) start += lines[i].length + 1
+  return relocateRange(text, start, start + lines[idx].length)
 }
 
 // ---------------------------------------------------------------------------

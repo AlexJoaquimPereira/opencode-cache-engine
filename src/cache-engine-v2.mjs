@@ -43,6 +43,7 @@ import {
   mimoSessionIdFor,
   nextProcessedCursor,
   policyEnabled,
+  relocateVolatileDateLine,
   relocateVolatileEnvBlock,
   scanPage,
   shouldAggregate,
@@ -284,6 +285,26 @@ export const CacheEngineV2 = {
             const i = changedIdx[0]
             system[i].text = relocs[i].text
             log("debug", `${envVariant} system env block relocated`, { sid })
+          }
+        }
+
+        // Experimental (P2-T2): relocate the standalone daily date line to the
+        // tail of the single text part that contains it. On the 2.0.26 shape the
+        // date sits OUTSIDE <env>, so the <env> relocation above does not move
+        // it. Gated independently by `stabilizeDate` (default OFF). If zero or
+        // more than one part is eligible the shape is ambiguous and nothing
+        // changes.
+        const stabilizeDate =
+          envVariant !== null && policyEnabled(cfg, caps.policy) && cfg.policies?.[caps.policy]?.stabilizeDate === true
+        if (stabilizeDate && system) {
+          const relocs = system.map((p) =>
+            p && p.type === "text" && typeof p.text === "string" ? relocateVolatileDateLine(p.text) : { text: p?.text, changed: false },
+          )
+          const changedIdx = relocs.map((r, i) => (r.changed ? i : -1)).filter((i) => i >= 0)
+          if (changedIdx.length === 1) {
+            const i = changedIdx[0]
+            system[i].text = relocs[i].text
+            log("debug", `${envVariant} system date line relocated`, { sid })
           }
         }
 
