@@ -366,11 +366,13 @@ current task's gate is met.
 **Phase 1 — structural diagnostics + offline capture harness: COMPLETE**
 (2026-10-14; suite 362/0). Delivered `lintSystemVolatility`/`firstSystemDifference`,
 `systemStablePrefixLength` telemetry, V1/V2 diagnostic integration, and the
-offline/mock capture harness. **Phase 2 is in progress:** P2-T1 (date-relocation
-hook-shape research, `RF-OC-035`), P2-T2 (`stabilizeDate` date-line relocation;
-default off), and P2-T3 (serialized-request wire verification, `RF-OC-036`) are
-complete; P2-T4 (provider-side A/B) remains gated on provider-access authorization
-and P2-T5 decides promotion. See `TODO.md`.
+offline/mock capture harness. **Phase 2 is in progress:** P2-T1 (hook-shape
+research, `RF-OC-035`), P2-T2 (`stabilizeDate` date-line relocation; default off),
+and P2-T3 (serialized-request wire verification, `RF-OC-036`) are complete. P2-T4
+(provider A/B) is **inconclusive** — no reproducible benefit above the cache
+signal's noise (`RF-OC-037`/`RF-OC-038`); a real-calendar-rollover confirmation and
+the GLM `z-ai/fp8` re-pin remain open. P2-T5 keeps the transform experimental.
+See `TODO.md`.
 
 - **Diagnose before mutating.** Observe the rendered request, identify a specific
   avoidable instability, verify the hook can safely observe/change it, then make
