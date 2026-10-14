@@ -1,7 +1,7 @@
 # OpenCode Cache Engine — Post-1.0.0 Implementation Plan
 
 **Document type:** Harness implementation plan  
-**Status:** Phase 1 complete (2026-10-14); Phase 2 complete (P2-T1..P2-T5; P2-T4 real-rollover optional); Phase 3 P3-T1 complete (2026-10-15; P3-T2 next); further implementation requires explicit authorization
+**Status:** Phase 1 complete (2026-10-14); Phase 2 complete (P2-T1..P2-T5; P2-T4 real-rollover optional); Phase 3 P3-T1..P3-T2 complete (2026-10-15; P3-T2 no-op; P3-T3 next); further implementation requires explicit authorization
 **Baseline:** `opencode-cache-engine` 1.0.0; V1 and V2 entry points load  
 **Planning date:** 2026-10-13  
 **Primary objective:** Improve prompt-cache stability through conservative, provider-aware interventions that are structurally verified and, where possible, proven to improve provider-reported cache reuse.
@@ -329,9 +329,10 @@ Hook shape and wire behavior must be documented; invariants must pass; no stale 
 
 ## 7. Phase 3 — Investigate other volatility sources
 
-**Status: P3-T1 COMPLETE** (2026-10-15) — offline capture groundwork, fixtures, and
-go/no-go (`docs/phase3-p3t1-capture-groundwork.md`; `RF-OC-040`/`RF-OC-041`).
-P3-T2..P3-T7 pending.
+**Status: P3-T1..P3-T2 COMPLETE** (2026-10-15) — P3-T1: offline capture groundwork,
+fixtures, and go/no-go (`docs/phase3-p3t1-capture-groundwork.md`; `RF-OC-040`/`RF-OC-041`);
+P3-T2: tool ordering **no-op** (`docs/phase3-p3t2-tool-ordering.md`; `RF-OC-042`).
+P3-T3..P3-T7 pending.
 
 **Objective:** Rank additional causes based on actual captures rather than competitor feature lists.
 
