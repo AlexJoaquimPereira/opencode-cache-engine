@@ -1899,6 +1899,32 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   reflected in a later run (possible per-workspace instruction cache or watcher timing;
   observed/inferred, not verified).
 
+### RF-OC-046 — The verified offline OpenAI-compatible route carries no reasoning/thinking content in requests (assistant messages are `{role, content}` only); reasoning handling is route-specific
+
+- Status: current
+- Verified: 2026-10-15
+- Area: opencode-runtime
+- Fact:
+  - Across a capture (2 equivalent turns + a session-continue turn) on an OpenAI-compatible
+    mock provider, every request's `messages` entries are `{role, content}` only
+    (system/user/assistant); there are no `reasoning` / `reasoning_content` /
+    `reasoning_details` / `thinking` fields and no top-level reasoning keys.
+  - Reasoning/thinking handling is route-specific (inventory): GLM preserved thinking
+    (replay complete/unmodified/in-order), Grok (preserve `reasoning_content` / Responses
+    continuation), Muse (Chat cannot carry reasoning for external keys → Responses
+    `previous_response_id` / encrypted), Anthropic (thinking blocks with `signature` in
+    multi-turn tool use), GPT (`reasoning.effort` affects prefix matching), Kimi
+    (`reasoning_effort` switching invalidates prefix hits).
+- Evidence: [O] (offline capture) + [D] (inventory/docs).
+- Sources: `docs/phase3-p3t5-reasoning.md`; `docs/cache-policy-inventory.md`.
+- Justifies: the P3-T5 ranked entry (no-op / insufficient evidence offline).
+- Version context: OpenCode 2.0.26.
+- Re-verify when: OpenCode or a provider changes how reasoning is carried in requests.
+- Superseded by: null
+- Notes: No provider-measured reasoning effect. The GLM reasoning-integrity diagnostic
+  (`detectReasoningIssues`, V1-only, `thinkingIntegrity` + `preserveThinkingIntegrity`) is
+  the structural guard.
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
