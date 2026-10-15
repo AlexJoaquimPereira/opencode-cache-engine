@@ -65,7 +65,7 @@ breakpoint on a verified route) · **experimental** (default off until evidence 
 
 | Policy | Structural verification | Wire verification | Evidence | Gap |
 |---|---|---|---|---|
-| A1 GPT cache metadata | assigned in-hook | **NOT attributed** — the OpenAI-compatible schema strips the GPT cache fields (`RF-OC-030`/`RF-OC-031`, Gate 4 NOT PASS) | `[D]`/`[U]` | **P4-T2** |
+| A1 GPT cache metadata | assigned in-hook (verified) | **NOT attributed — verified (P4-T2)**: `prompt_cache_key` is OpenCode's session-derived value (present OFF==ON); `prompt_cache_options` is dropped by every inspected schema (`RF-OC-047`) | `[O]`/`[D]` | closed (not wire-effective) |
 | A2/A4 `<env>` relocation | tested (unit + corpus) | structural; not a provider-benefit claim | `[O]` | ok |
 | A3/A5 date relocation | tested (no-op conditions) | **wire-verified** (G3, `RF-OC-036`) | `[O]` | promotion still open (Phase 2) |
 | A6 OpenRouter affinity | logic tested (fake client) | **not proven** that OpenCode's adapter sends the header upstream | `[O]`/`[U]` | **P4-T3** |
@@ -73,8 +73,8 @@ breakpoint on a verified route) · **experimental** (default off until evidence 
 
 ## 6. Gaps / inconsistencies found (input to P4-T2..T5)
 
-1. **A1 wire carriage is unproven** on any route we can test offline; the OpenAI-compatible
-   schema strips the fields. P4-T2 must trace assignment → schema → serialization → route.
+1. **A1 wire carriage — closed by P4-T2:** the adapter assigns the fields, but there is **no
+   attributable wire effect** on the tested live route (`RF-OC-047`).
 2. **A6 header attachment is unproven** end-to-end; the affinity tests use a fake client.
    The harness mock records `x-session-id` **presence**, so P4-T3 can verify wire attachment
    offline on the `openrouter` route.

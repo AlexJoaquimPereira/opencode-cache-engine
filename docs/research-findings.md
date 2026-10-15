@@ -1933,6 +1933,36 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   (`detectReasoningIssues`, V1-only, `thinkingIntegrity` + `preserveThinkingIntegrity`) is
   the structural guard.
 
+### RF-OC-047 — The GPT-5.6 cache-option policy has no attributable wire effect on the tested live route: `prompt_cache_key` is OpenCode's session-derived value (present with and without the adapter) and `prompt_cache_options` is dropped by the provider-options schemas
+
+- Status: current
+- Verified: 2026-10-15
+- Area: opencode-runtime
+- Fact:
+  - **Assignment (direct V2 `context`-hook probe, offline):** for `gpt-5.6-sol` / provider
+    `openai`, the adapter writes `promptCacheKey` **only when absent** (preserving a
+    pre-existing value) and `promptCacheOptions {mode,ttl}` when absent; with **no `options`
+    object** it is a no-op; for a non-GPT model it writes nothing.
+  - **Wire (offline capture, `@ai-sdk/openai` → loopback mock, route `/v1/responses`):**
+    `prompt_cache_key` is present **both adapter-OFF and adapter-ON**, valued as OpenCode's
+    session-derived key (`ses_…`); `prompt_cache_options` is **absent in both**. The
+    adapter's distinct field never reaches the wire.
+  - Consistent with `RF-OC-030` (the `openai-compatible` schema strips the GPT fields; the
+    OpenAI/Responses schema accepts `promptCacheKey` only; no schema accepts
+    `promptCacheOptions`) and `RF-OC-031` (OpenCode pre-populates the OpenAI/Azure
+    `promptCacheKey`).
+- Evidence: [O] (offline hook probe + wire capture) + [D] (source: `RF-OC-030`).
+- Sources: `docs/phase4-p4t2-gpt-cache-options.md` (P4-T2); `RF-OC-030` / `RF-OC-031`.
+- Justifies: the P4-T2 verdict (GPT cache-option policy **not wire-attributed**; Gate 4 NOT
+  PASS); the P4-T1 inventory row A1.
+- Version context: OpenCode 2.0.26.
+- Re-verify when: OpenCode changes the OpenAI/Azure request build (pre-populated
+  `promptCacheKey`) or a provider-options schema accepts `prompt_cache_options`.
+- Superseded by: null
+- Notes: The only potential attributable GPT mutation is V1 **compaction isolation**
+  (`<root>:compact`) — a separate agent kind, not exercised offline and not implemented in
+  the V2 adapter. No adapter defect is claimed.
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
