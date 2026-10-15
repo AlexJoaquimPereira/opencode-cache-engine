@@ -355,6 +355,7 @@ export const CacheEngineV2 = {
               model: modelID,
               key: injectedKey,
               keyInjected: injectedKey !== null,
+              keyPreserved: injectedKey === null,
               transport: fieldNames.key,
             })
           }
@@ -465,6 +466,8 @@ export const CacheEngineV2 = {
           kind: "usage",
           sid,
           ts: Date.now(),
+          // Provider-reported tokens (the `*HitRate`/`promptTokens` fields are derived).
+          tokenSource: "provider",
           read: scanned.read,
           write: scanned.write,
           input: scanned.input,

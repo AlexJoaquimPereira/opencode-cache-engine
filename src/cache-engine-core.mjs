@@ -219,15 +219,78 @@ export function ensureMetricsDir(metricsFile) {
 
 // ---------------------------------------------------------------------------
 // Metrics writer (best-effort, must never throw)
+//
+// Phase 5 (P5-T2): every record is tagged with the *stage* it describes so a
+// consumer cannot read an applied hook-object change as a wire effect or a
+// provider outcome. Additive: existing kinds/fields are unchanged.
+//   observation — local/structural facts (hashes, prefix shape, anomalies)
+//   decision    — a classification/eligibility/choice (no change made)
+//   applied     — the adapter wrote something into the hook object (NOT the wire)
+//   outcome     — provider-reported usage
+//   error       — a swallowed telemetry/excursion error
+// `applied` records also carry `wireEffect: "not_observed"`: the serialized
+// request is not observed here, so an applied change is never a wire claim.
 // ---------------------------------------------------------------------------
+
+const STAGE_BY_KIND = Object.freeze({
+  usage: "outcome",
+  "policy-resolution": "decision",
+  "cache-options": "applied",
+  compaction: "observation",
+  "reasoning-integrity": "observation",
+  "prefix-observation": "observation",
+  "prefix-change": "observation",
+  "telemetry-error": "error",
+})
+
+const STAGE_BY_BOUNDARY_REASON = Object.freeze({
+  system_date_relocated: "applied",
+  mimo_system_env_relocated: "applied",
+  gpt_compaction: "applied",
+  system_volatility: "observation",
+  mimo_system_prefix_changed: "observation",
+  grok_affinity: "observation",
+  muse_affinity: "observation",
+  minimax_route: "observation",
+  mimo_provider_changed: "observation",
+  glm_provider_changed: "observation",
+  gpt_reasoning_effort_changed: "observation",
+  gpt_session_fork: "decision",
+})
+
+// Pure. The stage a telemetry line describes, or null when unknown.
+export function telemetryStage(line) {
+  if (!line || typeof line !== "object") return null
+  if (line.kind === "boundary") {
+    // The affinity record carries no `reason`; it is `applied` only when a header
+    // was actually attached to the hook headers.
+    if (typeof line.reason !== "string") return line.headerAttached === true ? "applied" : "decision"
+    return STAGE_BY_BOUNDARY_REASON[line.reason] ?? "observation"
+  }
+  return STAGE_BY_KIND[line.kind] ?? null
+}
+
+// Pure. A copy of the line with additive `stage` (and `wireEffect` for an applied
+// change). Never throws; an unknown kind is returned unchanged.
+export function withTelemetryStage(line) {
+  try {
+    if (!line || typeof line !== "object" || Array.isArray(line) || line.stage !== undefined) return line
+    const stage = telemetryStage(line)
+    if (!stage) return line
+    return stage === "applied" ? { ...line, stage, wireEffect: "not_observed" } : { ...line, stage }
+  } catch {
+    return line
+  }
+}
 
 export function createRecorder(metricsFile) {
   return {
     record(line) {
       try {
-        appendFileSync(metricsFile, JSON.stringify(line) + "\n")
+        appendFileSync(metricsFile, JSON.stringify(withTelemetryStage(line)) + "\n")
       } catch {
-        // Telemetry is best-effort; a failed write must not break a request.
+        // Telemetry is best-effort; a failed write must not break a request. A lost
+        // write yields no record at all (it can never be read as a false success).
       }
     },
   }

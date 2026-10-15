@@ -543,6 +543,9 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
           kind: "usage",
           sid,
           ts: Date.now(),
+          // `read`/`write`/`input` are provider-reported; the `*HitRate`/`promptTokens`
+          // fields below are DERIVED from them (never a provider guarantee).
+          tokenSource: "provider",
           read,
           write,
           input,
@@ -956,7 +959,8 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
         // share its namespace. Live requests with cacheRootKey disabled and no
         // root affinity still preserve an existing key.
         const already = output.options[fieldNames.key]
-        if ((applyRoot || isolated) && (already === undefined || already !== desiredKey)) {
+        const keyInjected = (applyRoot || isolated) && (already === undefined || already !== desiredKey)
+        if (keyInjected) {
           output.options[fieldNames.key] = desiredKey
         }
         const optsDelta = gptCacheOptionsDelta(output.options, {
@@ -993,7 +997,12 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
             ...cacheCtxExtra,
             compaction,
             namespace: isolated ? "compact" : "live",
+            // `key` is the DESIRED key; `keyInjected` says whether the adapter
+            // actually wrote it into the hook options (a live request with
+            // cacheRootKey disabled preserves an existing key instead).
             key: desiredKey,
+            keyInjected,
+            keyPreserved: !keyInjected,
             options: { ...(output.options[fieldNames.options] ?? {}) },
           })
 
