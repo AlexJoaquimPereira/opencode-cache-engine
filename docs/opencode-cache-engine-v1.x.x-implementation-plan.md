@@ -355,7 +355,7 @@ Produce a ranked volatility inventory with observed/inferred status, frequency, 
 
 ## 8. Phase 4 — Provider-policy and transport verification
 
-**Status: IN PROGRESS** (2026-10-15) — P4-T1 (policy inventory + metadata) complete;
+**Status: COMPLETE** (2026-10-15) — P4-T1 (policy inventory + metadata) complete;
 P4-T2 complete — **not wire-attributed** (`RF-OC-047`); P4-T3 complete — **not
 wire-attributed** (`RF-OC-048`); P4-T4 complete (route-specific test scaffolding); P4-T5
 complete (acceptance decision — **no promotion**; `docs/phase4-acceptance-decision.md`).
