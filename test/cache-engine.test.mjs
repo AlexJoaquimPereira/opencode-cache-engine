@@ -7341,3 +7341,47 @@ test("phase5/p5t3: a restart recounts history (cursor is not durable) while repe
     else process.env.CACHE_ENGINE_METRICS_FILE = prev
   }
 })
+
+// ---------------------------------------------------------------------------
+// Phase 5 / P5-T4 — telemetry stays outside prompt content
+// ---------------------------------------------------------------------------
+
+test("phase5/p5t4: telemetry never carries prompt content, reasoning, or credentials", async () => {
+  const mod = await import("../src/cache-engine-v2.mjs")
+  const dir = mkdtempSync(join(tmpdir(), "ce-p5t4-"))
+  const metrics = join(dir, "v2.jsonl")
+  const prev = process.env.CACHE_ENGINE_METRICS_FILE
+  process.env.CACHE_ENGINE_METRICS_FILE = metrics
+  const SENTINEL = "PINEAPPLE_SENTINEL_9f3a" // must never appear in a record
+  const history = {
+    ses_p5t4: [
+      { id: "u1", type: "user", time: { created: 1000 }, content: SENTINEL },
+      { id: "a1", type: "assistant", time: { created: 2000 }, content: SENTINEL, tokens: { input: 1000, output: 10, reasoning: 7, cache: { read: 3000, write: 500 } } },
+    ],
+  }
+  let cleanup
+  try {
+    const { ctx, handlers, pushEvent } = makeV2Ctx(history)
+    cleanup = await mod.default.setup(ctx)
+    const model = { providerID: "openrouter", id: "glm-5.3-flash" }
+    // Every record-producing path: the system/context hook, the affinity hook, and usage.
+    await handlers["context"]({ sessionID: "ses_p5t4", model, system: [{ type: "text", text: SENTINEL }], options: {} })
+    await handlers["model.request"]({ sessionID: "ses_p5t4", model, headers: {} })
+    pushEvent({ type: "session.idle", data: { sessionID: "ses_p5t4" } })
+    await new Promise((r) => setTimeout(r, 40))
+  } finally {
+    try {
+      await cleanup?.()
+    } catch {
+      /* ignore */
+    }
+  }
+  const raw = readFileSync(metrics, "utf8")
+  assert.ok(raw.length > 0, "records were written")
+  assert.equal(raw.includes(SENTINEL), false, "prompt content must never appear in a record")
+  assert.equal(/authorization|api[-_]?key|bearer\s/i.test(raw), false, "no credential-shaped fields")
+  assert.ok(JSON.parse(raw.trim().split("\n")[0]).kind, "records are still valid JSONL")
+  rmSync(dir, { recursive: true, force: true })
+  if (prev === undefined) delete process.env.CACHE_ENGINE_METRICS_FILE
+  else process.env.CACHE_ENGINE_METRICS_FILE = prev
+})
