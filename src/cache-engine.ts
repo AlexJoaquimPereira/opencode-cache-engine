@@ -969,7 +969,8 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
           ttl: gpol?.ttl,
           fieldNames,
         })
-        if (Object.keys(optsDelta).length > 0) Object.assign(output.options, optsDelta)
+        const optionsInjected = Object.keys(optsDelta).length > 0
+        if (optionsInjected) Object.assign(output.options, optsDelta)
 
         const s = get(input.sessionID)
         const cacheCtxExtra = applyRoot
@@ -997,12 +998,15 @@ export const CacheEngine: Plugin = async ({ client, directory }) => {
             ...cacheCtxExtra,
             compaction,
             namespace: isolated ? "compact" : "live",
-            // `key` is the DESIRED key; `keyInjected` says whether the adapter
-            // actually wrote it into the hook options (a live request with
-            // cacheRootKey disabled preserves an existing key instead).
+            // `key` is the DESIRED key; `keyInjected` is true iff the adapter actually
+            // wrote it, and `keyPreserved` (its complement) means the adapter did not
+            // write the key (whether a pre-existing key was left in place or there was
+            // nothing to write). `optionsInjected` is the analogous flag for
+            // `promptCacheOptions`.
             key: desiredKey,
             keyInjected,
             keyPreserved: !keyInjected,
+            optionsInjected,
             options: { ...(output.options[fieldNames.options] ?? {}) },
           })
 

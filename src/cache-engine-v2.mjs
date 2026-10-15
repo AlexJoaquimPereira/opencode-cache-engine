@@ -354,8 +354,12 @@ export const CacheEngineV2 = {
               provider: providerID,
               model: modelID,
               key: injectedKey,
+              // `keyInjected` is true iff the adapter wrote the key; `keyPreserved`
+              // (its complement) means the adapter left the key untouched.
+              // `optionsInjected` is the analogous flag for `promptCacheOptions`.
               keyInjected: injectedKey !== null,
               keyPreserved: injectedKey === null,
+              optionsInjected: injectedOptions,
               transport: fieldNames.key,
             })
           }

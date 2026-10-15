@@ -235,7 +235,6 @@ export function ensureMetricsDir(metricsFile) {
 const STAGE_BY_KIND = Object.freeze({
   usage: "outcome",
   "policy-resolution": "decision",
-  "cache-options": "applied",
   compaction: "observation",
   "reasoning-integrity": "observation",
   "prefix-observation": "observation",
@@ -261,13 +260,26 @@ const STAGE_BY_BOUNDARY_REASON = Object.freeze({
 // Pure. The stage a telemetry line describes, or null when unknown.
 export function telemetryStage(line) {
   if (!line || typeof line !== "object") return null
-  if (line.kind === "boundary") {
-    // The affinity record carries no `reason`; it is `applied` only when a header
-    // was actually attached to the hook headers.
-    if (typeof line.reason !== "string") return line.headerAttached === true ? "applied" : "decision"
-    return STAGE_BY_BOUNDARY_REASON[line.reason] ?? "observation"
+  // `cache-options` is conditional: V1 emits it once per session even when it wrote
+  // nothing, so it is `applied` only when the key or the options were actually written.
+  if (line.kind === "cache-options") {
+    return line.keyInjected === true || line.optionsInjected === true ? "applied" : "decision"
   }
-  return STAGE_BY_KIND[line.kind] ?? null
+  if (line.kind === "boundary") {
+    // Affinity records carry `reason: "openrouter_affinity_*"`; they describe an
+    // applied change only when a header was actually attached to the hook headers
+    // (V1 `chat.headers` / V2 `model.request`).
+    if (typeof line.reason === "string" && line.reason.startsWith("openrouter_affinity_")) {
+      return line.headerAttached === true ? "applied" : "decision"
+    }
+    // A boundary record without a reason has no current emitter; treat it as an
+    // observation rather than guessing at an applied change.
+    if (typeof line.reason !== "string") return "observation"
+    const stage = STAGE_BY_BOUNDARY_REASON[line.reason]
+    return typeof stage === "string" ? stage : "observation"
+  }
+  const stage = STAGE_BY_KIND[line.kind]
+  return typeof stage === "string" ? stage : null
 }
 
 // Pure. A copy of the line with additive `stage` (and `wireEffect` for an applied
