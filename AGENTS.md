@@ -385,8 +385,11 @@ in-session; cross-root differs only in `<env>`; project instructions are intenti
 COMPLETE** (2026-10-15) — **no-op / insufficient evidence** (the verified route carries no
 reasoning; route matrix documented — `RF-OC-046`; `docs/phase3-p3t5-reasoning.md`). **P3-T6 (ranked inventory + go/no-go)
 COMPLETE** (2026-10-15) — **NO-GO on P3-T7** (no recurring + avoidable + safely-correctable
-cause; `docs/phase3-volatility-inventory.md`). **Phase 3 COMPLETE** (P3-T1..P3-T6); Phase 4
-(provider-policy and transport verification) is next. See `TODO.md`.
+cause; `docs/phase3-volatility-inventory.md`). **Phase 3 COMPLETE** (P3-T1..P3-T6). **Phase 4
+(provider-policy and transport verification) COMPLETE** (P4-T1..P4-T5, 2026-10-15) —
+**verification-only, no promotion** (GPT cache options and OpenRouter affinity are not
+wire-effective on the tested routes; `docs/phase4-acceptance-decision.md`); Phase 5 (usage
+accounting and telemetry) is next. See `TODO.md`.
 
 - **Diagnose before mutating.** Observe the rendered request, identify a specific
   avoidable instability, verify the hook can safely observe/change it, then make
