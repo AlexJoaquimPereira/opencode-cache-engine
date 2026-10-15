@@ -124,9 +124,10 @@ export const CacheEngineV2 = {
     //     (under-count) instead of recounting it (double-count). This avoids
     //     suppressing an active session for a TTL while never double-counting.
     //   * Both mark maps are bounded (TTL + cap) so memory stays bounded.
-    // The unavoidable limitation: cursor state is not durable across restarts,
-    // and a same-millisecond boundary or a failure after cursor advancement can
-    // still undercount. Exactly-once accounting is not claimed.
+    // The unavoidable limitation: cursor state is not durable across restarts — a
+    // restart re-scans the session's history (a recount) — and a same-millisecond
+    // boundary or a failure after cursor advancement can still undercount.
+    // Exactly-once accounting is not claimed.
     const sessions = new Map()
     const tombstones = new Map()
     const evicted = new Map()
