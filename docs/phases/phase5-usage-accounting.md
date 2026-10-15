@@ -178,3 +178,26 @@ wire/provider effect; ✔ V1 `cache-options` distinguishes desired vs applied; �
 existing test expectation updated for the new `stage`); ✔ V1/V2 parity; ✔ a write failure
 cannot claim success. The failure-mode matrix (duplicate/missing events, restart, compaction,
 eviction) is **P5-T3**.
+
+---
+
+## P5-T3 — failure-mode matrix
+
+Plan §9 task 3: test duplicate/missing events, restarts, compaction, same-timestamp records,
+eviction, and telemetry-write failures. Most were already pinned by pre-existing tests; the
+**restart** case was untested. Each failure mode maps to its test(s) or documented behavior:
+
+| Failure mode | Coverage | Expected outcome (direction) |
+|---|---|---|
+| Duplicate events (repeated / concurrent `idle`) | `same assistant message counted once across idle events`; `v0.4.8: repeated idles after a pruned cursor never duplicate`; `v0.4.13 N1: concurrent idle collections count each message once` | **no double-count** |
+| Missing events (a dropped idle) | `only messages newer than the cursor are aggregated`; `v0.4.8: cursor missing with no watermark counts nothing (safe undercount)` | next scan catches up; a missing boundary ⇒ **safe undercount** |
+| **Restart** (cursor is not durable) | **NEW** `phase5/p5t3: a restart recounts history (cursor is not durable) while repeat idles never double-count` | within-run no double-count; across-restart **recount** (documented limitation) |
+| Compaction | `v0.4.8: compaction does not duplicate usage; only new messages are added`; `…missing cursor + multiple new messages after compaction counted once`; `…empty post-compaction history is safe` | **no double-count**; empty history ⇒ no fabricated record |
+| Same-timestamp records | `v0.4.8: watermark is strictly-greater so timestamp ties undercount, never double-count` | **undercount** (never double-count) |
+| Eviction / deletion | `v2 adapter: the session map is bounded — eviction undercounts, never recounts`; `…capacity eviction skips the backlog on re-entry`; `pruneMarks honors its explicit TTL and capacity`; the `session.deleted` tombstone tests | **undercount** on re-entry; a deleted session is never recounted |
+| Telemetry-write failure | `recorder swallows write failures`; P5-T2 `createRecorder … a failed write is silent` | **no record** (never a false success) |
+| Hook-level error | `v0.4.12 F4: compaction records one error without changing output or throwing` | one `telemetry-error`; the request is unaffected |
+
+**Invariant:** every failure mode errs toward **undercount or no record**, never toward a
+fabricated or double-counted cache event — **except** the documented across-restart recount,
+whose remedy (a durable cursor) is out of scope. `npm test` **377/0** (1 new test).
