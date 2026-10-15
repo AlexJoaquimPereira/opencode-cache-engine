@@ -1939,10 +1939,12 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Verified: 2026-10-15
 - Area: opencode-runtime
 - Fact:
-  - **Assignment (direct V2 `context`-hook probe, offline):** for `gpt-5.6-sol` / provider
+  - **Assignment — V2 `context` hook (direct probe, offline):** for `gpt-5.6-sol` / provider
     `openai`, the adapter writes `promptCacheKey` **only when absent** (preserving a
     pre-existing value) and `promptCacheOptions {mode,ttl}` when absent; with **no `options`
-    object** it is a no-op; for a non-GPT model it writes nothing.
+    object** it is a no-op; for a non-GPT model it writes nothing. **V1 adds one exception:**
+    on a **compaction** request with `compactionCacheIsolation` on (default), V1 **overwrites**
+    the key with `<root>:compact` (V1-only; V2 has no compaction branch).
   - **Wire (offline capture, `@ai-sdk/openai` → loopback mock, route `/v1/responses`):**
     `prompt_cache_key` is present **both adapter-OFF and adapter-ON**, valued as OpenCode's
     session-derived key (`ses_…`); `prompt_cache_options` is **absent in both**. The
@@ -1959,9 +1961,10 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Re-verify when: OpenCode changes the OpenAI/Azure request build (pre-populated
   `promptCacheKey`) or a provider-options schema accepts `prompt_cache_options`.
 - Superseded by: null
-- Notes: The only potential attributable GPT mutation is V1 **compaction isolation**
-  (`<root>:compact`) — a separate agent kind, not exercised offline and not implemented in
-  the V2 adapter. No adapter defect is claimed.
+- Notes: The only potentially attributable GPT mutation is V1 **compaction isolation**: for
+  a compaction request with `compactionCacheIsolation` on, V1 **overwrites** the key with
+  `<root>:compact` (an attributable change); V2 has **no** such branch and always preserves.
+  Not exercised offline (a separate agent kind). No adapter defect is claimed.
 
 ### RF-OC-048 — OpenCode sets `x-session-id = <sessionID>` natively on requests (openai-compatible route), so CacheEngine's OpenRouter affinity header is not wire-attributable; the adapter preserves the pre-existing header (`headerSource:"preexisting"`)
 
