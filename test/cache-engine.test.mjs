@@ -7054,3 +7054,90 @@ test("dual entry: ./v2 remains a standalone entry and ./tui is unchanged", async
   const tui = await import("../src/tui.mjs")
   assert.equal(tui.default.id, "opencode-cache-engine")
 })
+
+// ---------------------------------------------------------------------------
+// Phase 4 / P4-T4 — route-specific policy dispositions (assignment != wire)
+// ---------------------------------------------------------------------------
+
+test("phase4/p4t4: GPT cache field names are route-correct (camel vs snake)", async () => {
+  const { MUTATION_POLICIES } = await import("./fixtures/policy-routes.mjs")
+  const gpt = MUTATION_POLICIES.find((p) => p.policy === "gpt56.cache-options")
+  assert.deepEqual(gptCacheOptionFieldNames({ providerID: "openrouter" }), gpt.fieldNames.openrouter)
+  assert.deepEqual(gptCacheOptionFieldNames({ providerID: "openai" }), gpt.fieldNames.default)
+  assert.deepEqual(gptCacheOptionFieldNames({ providerID: "azure" }), gpt.fieldNames.default)
+  // OpenRouter selected via the SDK npm still maps to the snake_case wire names.
+  assert.deepEqual(gptCacheOptionFieldNames({ providerID: "x", npm: "@openrouter/ai-sdk-provider" }), gpt.fieldNames.openrouter)
+})
+
+test("phase4/p4t4: every mutation policy declares a disable path + route evidence; passive families expose no mutation capability", async () => {
+  const { MUTATION_POLICIES, PASSIVE_FAMILIES, MUTATION_CAPABILITY_KEYS } = await import("./fixtures/policy-routes.mjs")
+  for (const p of MUTATION_POLICIES) {
+    assert.ok(p.disable && p.disable.length > 0, `${p.policy} declares a disable path`)
+    assert.ok(p.routes.length > 0 && p.routes.every((r) => r.wire && r.evidence), `${p.policy} routes carry wire+evidence`)
+  }
+  const ids = { deepseek: "deepseek-v4-pro", kimi: "kimi-k3", claude: "claude-sonnet-4-5", gemini: "gemini-2.5-pro", qwen: "qwen3-max", grok: "grok-4.7", muse: "muse-spark-1.3", minimax: "minimax-m3" }
+  assert.deepEqual(Object.keys(ids).sort(), [...PASSIVE_FAMILIES].sort())
+  for (const [fam, id] of Object.entries(ids)) {
+    const caps = resolveRuntimePolicy(M(fam, id))
+    assert.equal(caps.isNeutral, false, `${fam} resolves to a policy`)
+    for (const k of MUTATION_CAPABILITY_KEYS) {
+      assert.ok(!caps[k], `${fam} must have no mutation capability ${k}`)
+    }
+    for (const k of ["grokCacheAffinity", "museCacheAffinity", "minimaxRouteAware", "grokRouteAware", "museRouteAware"]) {
+      assert.equal(typeof caps[k], "boolean") // descriptive flags only exist as booleans
+    }
+  }
+  assert.equal(resolveRuntimePolicy(M("acme", "mystery-1")).isNeutral, true, "unknown provider fails closed")
+})
+
+test("phase4/p4t4: V2 hooks assign route-correct fields, preserve pre-existing values, and no-op otherwise", async () => {
+  const home = mkdtempSync(join(tmpdir(), "ce-p4t4-"))
+  const cfg = JSON.stringify({ policies: { gpt56: { enabled: true }, glm53: { enabled: true } } })
+  const script = `
+    import { mkdirSync, writeFileSync } from "node:fs"
+    mkdirSync(process.env.HOME + "/.config/opencode", { recursive: true })
+    writeFileSync(process.env.HOME + "/.config/opencode/cache-engine.json", process.env.CE_CFG)
+    const { CacheEngineV2 } = await import(process.env.CE_V2)
+    const handlers = {}
+    const ctx = { session: { hook: async (n, cb) => { handlers[n] = cb; return { dispose: async () => {} } }, context: async () => ({ data: [] }) }, event: { subscribe: () => ({ [Symbol.asyncIterator]: async function* () { await new Promise(() => {}) } }) } }
+    const cleanup = await CacheEngineV2.setup(ctx)
+    const ev = (sid, providerID, id, options) => ({ sessionID: sid, model: { providerID, id }, system: [], ...(options === undefined ? {} : { options }) })
+    const out = {}
+    const g1 = ev("ses_g1", "openai", "gpt-5.6-sol", {}); await handlers["context"](g1); out.gptEmpty = g1.options
+    const g2 = ev("ses_g2", "openai", "gpt-5.6-sol", { promptCacheKey: "pre" }); await handlers["context"](g2); out.gptExisting = g2.options
+    const g3 = ev("ses_g3", "openai", "gpt-5.6-sol", undefined); await handlers["context"](g3); out.gptNoOptions = g3.options === undefined
+    const m1 = { sessionID: "ses_m1", model: { providerID: "openrouter", id: "glm-5.3-flash" }, headers: {} }; await handlers["model.request"](m1); out.affAbsent = m1.headers
+    const m2 = { sessionID: "ses_m2", model: { providerID: "openrouter", id: "glm-5.3-flash" }, headers: { "x-session-id": "user" } }; await handlers["model.request"](m2); out.affExisting = m2.headers
+    const m3 = { sessionID: "ses_m3", model: { providerID: "go", id: "glm-5.3-flash" }, headers: {} }; await handlers["model.request"](m3); out.affGo = m3.headers
+    const m4 = { sessionID: "ses_m4", model: { providerID: "openrouter", id: "deepseek-v4-pro" }, headers: {} }; await handlers["model.request"](m4); out.affDeep = m4.headers
+    const p1 = ev("ses_p1", "deepseek", "deepseek-v4-pro", { keep: 1 }); await handlers["context"](p1); out.passive = p1.options
+    await cleanup()
+    process.stdout.write(JSON.stringify(out))
+  `
+  const out = JSON.parse(
+    execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        HOME: home,
+        CE_CFG: cfg,
+        CE_V2: fileURLToPath(new URL("../src/cache-engine-v2.mjs", import.meta.url)),
+      },
+    }),
+  )
+  // GPT assignment: adds the key only when absent, preserves a pre-existing key, and no-ops without an options object.
+  assert.equal(out.gptEmpty.promptCacheKey, "ses_g1")
+  assert.deepEqual(out.gptEmpty.promptCacheOptions, { mode: "implicit", ttl: "30m" })
+  assert.equal(out.gptExisting.promptCacheKey, "pre", "a pre-existing promptCacheKey is preserved")
+  assert.deepEqual(out.gptExisting.promptCacheOptions, { mode: "implicit", ttl: "30m" })
+  assert.equal(out.gptNoOptions, true, "no options object -> no mutation")
+  // Affinity: attaches only when absent, preserves a user header, never for ineligible routes.
+  assert.equal(typeof out.affAbsent["x-session-id"], "string")
+  assert.ok(out.affAbsent["x-session-id"].startsWith("mimo-ses-"), "adapter value is mimo-ses-<hash>")
+  assert.equal(out.affExisting["x-session-id"], "user", "a user-supplied x-session-id is preserved")
+  assert.equal(out.affGo["x-session-id"], undefined, "non-openrouter provider -> no header")
+  assert.equal(out.affDeep["x-session-id"], undefined, "non-affinity family -> no header")
+  // Passive families mutate nothing.
+  assert.deepEqual(out.passive, { keep: 1 })
+})
