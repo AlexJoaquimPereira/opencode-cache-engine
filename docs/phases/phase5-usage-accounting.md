@@ -87,15 +87,19 @@ consumer cannot read an applied hook-object change as a wire effect or a provide
 |---|---|---|
 | `observation` | local/structural facts (observed bytes, hashes, anomalies) | `prefix-observation`, `prefix-change`, `reasoning-integrity`, `compaction`, `system_volatility`, `*_provider_changed`, `grok`/`muse`/`minimax` flags |
 | `decision` | a classification/eligibility/choice with no change made | `policy-resolution`, `gpt_session_fork`, an affinity record with `headerAttached:false` |
-| `applied` | the adapter wrote into the **hook object** (never the wire) | `cache-options`, `system_date_relocated`, `mimo_system_env_relocated`, `gpt_compaction`, an affinity record with `headerAttached:true` |
+| `applied` | the adapter wrote into the **hook object** (never the wire) | `cache-options` (only when `keyInjected`/`optionsInjected`), `system_date_relocated`, `mimo_system_env_relocated`, `gpt_compaction`, an affinity record with `headerAttached:true` |
 | `outcome` | provider-reported usage | `usage` |
 | `error` | a swallowed telemetry/excursion error | `telemetry-error` |
 
 `applied` records **also** carry `wireEffect: "not_observed"` — the serialized request is not
 observed here, so an applied change is never a wire claim (P4-T2/T3). An unknown kind is
-written unchanged (no `stage`). **V1 `cache-options`** now distinguishes desired vs applied:
-`key` is the **desired** key while `keyInjected`/`keyPreserved` say whether the adapter
-actually wrote it (`cache-engine.ts`); V2 exposes the same `keyInjected`/`keyPreserved`.
+written unchanged (no `stage`). **`cache-options`** distinguishes desired vs applied: V1 `key`
+is the **desired** key, `keyInjected`/`optionsInjected` are true iff the adapter actually wrote
+the key/options, and `keyPreserved` (its complement) means the adapter did not write the key.
+The record is `applied` **only when `keyInjected` or `optionsInjected`** is true — a
+once-per-session V1 record that wrote nothing is a `decision`. V2 exposes the same flags (V2's
+`key` stays the injected value or null — see §6). An **affinity** `boundary` record is `applied`
+when `headerAttached` is true, else `decision`.
 
 ## 5. V1 / V2 parity map
 
