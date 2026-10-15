@@ -24,11 +24,11 @@ export const MUTATION_POLICIES = [
       default: { key: "promptCacheKey", options: "promptCacheOptions" },
     },
     preserves: "promptCacheKey",
-    disable: "policies.gpt56.enabled=false | policies.gpt56.promptCacheKey=false",
+    disable: "policies.gpt56.enabled=false (full) | policies.gpt56.promptCacheKey=false (key only; promptCacheOptions is still injected)",
     routes: [
       { route: "openai-compatible", wire: "stripped", evidence: "RF-OC-030" },
       { route: "openai/azure (Responses)", wire: "harness-owned", evidence: "RF-OC-047" },
-      { route: "openrouter (openai/* slug)", wire: "unsupported", evidence: "RF-OC-030" },
+      { route: "openrouter (openai/* slug)", wire: "unknown", evidence: "RF-OC-030 (absence: no inspected schema; the OpenRouter provider schema was not directly inspected)" },
     ],
   },
   {
@@ -77,8 +77,11 @@ export const MUTATION_POLICIES = [
 // Every other family is passive: classification + accounting only, NO request mutation.
 export const PASSIVE_FAMILIES = ["deepseek", "kimi", "claude", "gemini", "qwen", "grok", "muse", "minimax"]
 
-// Capability keys that, if ever true for a passive family, would mean a mutation
-// (a regression). Grok/Muse/MiniMax expose *descriptive* route flags, listed
+// Capability keys that, if ever true for a passive family, would mean a request
+// mutation (a regression). These are the *mutation-implying request* capabilities;
+// `thinkingIntegrity` / `cacheRatio` / `providerChange` / `prefixDiagnostics` are
+// diagnostics only (`thinkingIntegrity` gates a V1 diagnostic path that never
+// rewrites content). Grok/Muse/MiniMax expose *descriptive* route flags, listed
 // separately so they are not mistaken for mutations.
 export const MUTATION_CAPABILITY_KEYS = [
   "gptCacheMetadata",

@@ -7073,6 +7073,7 @@ test("phase4/p4t4: every mutation policy declares a disable path + route evidenc
   const { MUTATION_POLICIES, PASSIVE_FAMILIES, MUTATION_CAPABILITY_KEYS } = await import("./fixtures/policy-routes.mjs")
   for (const p of MUTATION_POLICIES) {
     assert.ok(p.disable && p.disable.length > 0, `${p.policy} declares a disable path`)
+    assert.ok(typeof p.preserves === "string" && p.preserves.length > 0, `${p.policy} documents what it preserves (identity != prefix stability)`)
     assert.ok(p.routes.length > 0 && p.routes.every((r) => r.wire && r.evidence), `${p.policy} routes carry wire+evidence`)
   }
   const ids = { deepseek: "deepseek-v4-pro", kimi: "kimi-k3", claude: "claude-sonnet-4-5", gemini: "gemini-2.5-pro", qwen: "qwen3-max", grok: "grok-4.7", muse: "muse-spark-1.3", minimax: "minimax-m3" }
@@ -7080,6 +7081,7 @@ test("phase4/p4t4: every mutation policy declares a disable path + route evidenc
   for (const [fam, id] of Object.entries(ids)) {
     const caps = resolveRuntimePolicy(M(fam, id))
     assert.equal(caps.isNeutral, false, `${fam} resolves to a policy`)
+    assert.equal(caps.policy, fam, `${fam} resolves to its own policy family`)
     for (const k of MUTATION_CAPABILITY_KEYS) {
       assert.ok(!caps[k], `${fam} must have no mutation capability ${k}`)
     }
