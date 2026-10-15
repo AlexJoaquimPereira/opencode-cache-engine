@@ -60,8 +60,10 @@ import {
   stableSessionIdFor,
   systemShapeHashes,
   toolFingerprint,
+  telemetryStage,
   toolWireFingerprint,
   volatilityTransition,
+  withTelemetryStage,
 } from "../src/cache-engine-core.mjs"
 import {
   BASELINES,
@@ -317,7 +319,7 @@ test("recorder writes valid JSONL to a real file", () => {
   rec.record({ kind: "usage", sid: "s", read: 5, write: 1 })
   const lines = readFileSync(file, "utf8").trim().split("\n")
   assert.equal(lines.length, 2)
-  assert.deepEqual(JSON.parse(lines[0]), { kind: "prefix-change", sid: "s", dimensions: ["system"] })
+  assert.deepEqual(JSON.parse(lines[0]), { kind: "prefix-change", sid: "s", dimensions: ["system"], stage: "observation" })
 })
 
 // --- 14. TUI target test -----------------------------------------------------
@@ -7142,4 +7144,88 @@ test("phase4/p4t4: V2 hooks assign route-correct fields, preserve pre-existing v
   assert.equal(out.affDeep["x-session-id"], undefined, "non-affinity family -> no header")
   // Passive families mutate nothing.
   assert.deepEqual(out.passive, { keep: 1 })
+})
+
+// ---------------------------------------------------------------------------
+// Phase 5 / P5-T2 — telemetry layer separation (assignment != wire != outcome)
+// ---------------------------------------------------------------------------
+
+test("phase5/p5t2: telemetryStage classifies each kind/reason; applied records carry a wire caveat", () => {
+  assert.equal(telemetryStage({ kind: "usage" }), "outcome")
+  assert.equal(telemetryStage({ kind: "policy-resolution" }), "decision")
+  assert.equal(telemetryStage({ kind: "cache-options" }), "applied")
+  assert.equal(telemetryStage({ kind: "compaction" }), "observation")
+  assert.equal(telemetryStage({ kind: "reasoning-integrity" }), "observation")
+  assert.equal(telemetryStage({ kind: "prefix-observation" }), "observation")
+  assert.equal(telemetryStage({ kind: "prefix-change" }), "observation")
+  assert.equal(telemetryStage({ kind: "telemetry-error" }), "error")
+  assert.equal(telemetryStage({ kind: "boundary", reason: "system_volatility" }), "observation")
+  assert.equal(telemetryStage({ kind: "boundary", reason: "system_date_relocated" }), "applied")
+  assert.equal(telemetryStage({ kind: "boundary", reason: "mimo_system_env_relocated" }), "applied")
+  assert.equal(telemetryStage({ kind: "boundary", reason: "gpt_compaction" }), "applied")
+  // Affinity carries no `reason`: applied only when a header was actually attached.
+  assert.equal(telemetryStage({ kind: "boundary", headerAttached: true }), "applied")
+  assert.equal(telemetryStage({ kind: "boundary", headerAttached: false }), "decision")
+  // Unknown kind / non-object.
+  assert.equal(telemetryStage({ kind: "mystery" }), null)
+  assert.equal(telemetryStage(null), null)
+  // Enrichment is additive and idempotent; it never overrides an explicit stage.
+  assert.deepEqual(withTelemetryStage({ kind: "cache-options", sid: "s" }), {
+    kind: "cache-options",
+    sid: "s",
+    stage: "applied",
+    wireEffect: "not_observed",
+  })
+  assert.deepEqual(withTelemetryStage({ kind: "usage" }), { kind: "usage", stage: "outcome" })
+  assert.equal(withTelemetryStage(null), null)
+  assert.deepEqual(withTelemetryStage({ kind: "usage", stage: "custom" }), { kind: "usage", stage: "custom" })
+})
+
+test("phase5/p5t2: createRecorder writes the stage; an observation never claims a wire effect; a failed write is silent", () => {
+  const file = join(mkdtempSync(join(tmpdir(), "ce-stage-")), "m.jsonl")
+  const rec = createRecorder(file)
+  rec.record({ kind: "cache-options", sid: "s" })
+  rec.record({ kind: "usage", sid: "s", read: 1, write: 0 })
+  const lines = readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l))
+  assert.equal(lines[0].stage, "applied")
+  assert.equal(lines[0].wireEffect, "not_observed")
+  assert.equal(lines[1].stage, "outcome")
+  assert.equal("wireEffect" in lines[1], false)
+  const bad = createRecorder("/nonexistent-dir-xyz/out.jsonl")
+  assert.doesNotThrow(() => bad.record({ kind: "cache-options", sid: "s" }))
+})
+
+test("phase5/p5t2: V1 cache-options distinguishes desired vs applied (no false success)", () => {
+  const home = mkdtempSync(join(tmpdir(), "ce-p5t2-"))
+  const script = `
+    import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs"
+    mkdirSync(process.env.HOME + "/.config/opencode", { recursive: true })
+    writeFileSync(process.env.HOME + "/.config/opencode/cache-engine.json", JSON.stringify({ policies: { gpt56: { enabled: true } } }))
+    process.env.CACHE_ENGINE_METRICS_FILE = process.env.HOME + "/m.jsonl"
+    const { CacheEngine } = await import(process.env.CE_V1)
+    const fake = { app: { log: async () => ({}) }, session: { get: async () => ({ data: { parentID: null } }), messages: async () => ({ data: [] }) }, tool: { list: async () => ({ data: [] }) } }
+    const v1 = await CacheEngine({ client: fake, directory: process.env.HOME })
+    const gpt = { providerID: "openai", id: "gpt-5.6-sol", api: { id: "gpt-5.6-sol", npm: "@ai-sdk/openai" } }
+    const provider = { source: "config", info: { id: "openai" }, options: {} }
+    const out = { options: { promptCacheKey: "pre-existing" } }
+    await v1["chat.params"]({ sessionID: "ses_p5t2", agent: "build", model: gpt, provider, message: { id: "m1", sessionID: "ses_p5t2", role: "user", content: "x" } }, out)
+    let recs = []
+    const mf = process.env.CACHE_ENGINE_METRICS_FILE
+    if (existsSync(mf)) recs = readFileSync(mf, "utf8").trim().split("\\n").filter(Boolean).map((l) => JSON.parse(l))
+    process.stdout.write(JSON.stringify({ co: recs.find((r) => r.kind === "cache-options") ?? null, outOptions: out.options }))
+  `
+  const out = JSON.parse(
+    execFileSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: { ...process.env, HOME: home, CE_V1: fileURLToPath(new URL("../src/cache-engine.ts", import.meta.url)) },
+    }),
+  )
+  assert.ok(out.co, "a cache-options record was emitted")
+  assert.equal(out.co.key, "ses_p5t2", "key is the DESIRED key")
+  assert.equal(out.co.keyInjected, false, "the adapter did NOT write the key (live request, cacheRootKey default false)")
+  assert.equal(out.co.keyPreserved, true)
+  assert.equal(out.co.stage, "applied")
+  assert.equal(out.co.wireEffect, "not_observed")
+  assert.equal(out.outOptions.promptCacheKey, "pre-existing", "the pre-existing key is preserved in the hook object")
 })
