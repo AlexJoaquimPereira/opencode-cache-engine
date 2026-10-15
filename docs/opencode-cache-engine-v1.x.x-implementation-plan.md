@@ -1,7 +1,7 @@
 # OpenCode Cache Engine — Post-1.0.0 Implementation Plan
 
 **Document type:** Harness implementation plan  
-**Status:** Phase 1 complete (2026-10-14); Phase 2 complete (P2-T1..P2-T5; P2-T4 real-rollover optional); Phase 3 complete (P3-T1..P3-T6, 2026-10-15; P3-T6 NO-GO on P3-T7; Phase 4 next); further implementation requires explicit authorization
+**Status:** Phase 1 complete (2026-10-14); Phase 2 complete (P2-T1..P2-T5; P2-T4 real-rollover optional); Phase 3 complete (P3-T1..P3-T6, 2026-10-15; P3-T6 NO-GO on P3-T7); Phase 4 in progress (P4-T1 complete); further implementation requires explicit authorization
 **Baseline:** `opencode-cache-engine` 1.0.0; V1 and V2 entry points load  
 **Planning date:** 2026-10-13  
 **Primary objective:** Improve prompt-cache stability through conservative, provider-aware interventions that are structurally verified and, where possible, proven to improve provider-reported cache reuse.
@@ -354,6 +354,9 @@ Investigate route-specific interaction with cache boundaries. Do not generalize 
 Produce a ranked volatility inventory with observed/inferred status, frequency, expected impact, risk, and next experiment. Only recurring, avoidable, safely correctable causes advance.
 
 ## 8. Phase 4 — Provider-policy and transport verification
+
+**Status: IN PROGRESS** (2026-10-15) — P4-T1 (policy inventory + metadata) complete
+(`docs/phase4-policy-inventory.md`); P4-T2..P4-T5 pending. See `TODO.md`.
 
 **Objective:** Make every policy route-aware and independently testable.
 
