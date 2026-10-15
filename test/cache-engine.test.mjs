@@ -7153,7 +7153,11 @@ test("phase4/p4t4: V2 hooks assign route-correct fields, preserve pre-existing v
 test("phase5/p5t2: telemetryStage classifies each kind/reason; applied records carry a wire caveat", () => {
   assert.equal(telemetryStage({ kind: "usage" }), "outcome")
   assert.equal(telemetryStage({ kind: "policy-resolution" }), "decision")
-  assert.equal(telemetryStage({ kind: "cache-options" }), "applied")
+  // `cache-options` is conditional: `applied` only when something was written.
+  assert.equal(telemetryStage({ kind: "cache-options", keyInjected: false, optionsInjected: false }), "decision")
+  assert.equal(telemetryStage({ kind: "cache-options", keyInjected: true }), "applied")
+  assert.equal(telemetryStage({ kind: "cache-options", optionsInjected: true }), "applied")
+  assert.equal(telemetryStage({ kind: "cache-options" }), "decision")
   assert.equal(telemetryStage({ kind: "compaction" }), "observation")
   assert.equal(telemetryStage({ kind: "reasoning-integrity" }), "observation")
   assert.equal(telemetryStage({ kind: "prefix-observation" }), "observation")
@@ -7163,18 +7167,48 @@ test("phase5/p5t2: telemetryStage classifies each kind/reason; applied records c
   assert.equal(telemetryStage({ kind: "boundary", reason: "system_date_relocated" }), "applied")
   assert.equal(telemetryStage({ kind: "boundary", reason: "mimo_system_env_relocated" }), "applied")
   assert.equal(telemetryStage({ kind: "boundary", reason: "gpt_compaction" }), "applied")
-  // Affinity carries no `reason`: applied only when a header was actually attached.
-  assert.equal(telemetryStage({ kind: "boundary", headerAttached: true }), "applied")
-  assert.equal(telemetryStage({ kind: "boundary", headerAttached: false }), "decision")
+  // Affinity records (real shape) are `applied` only when a header was attached.
+  assert.equal(
+    telemetryStage({ kind: "boundary", reason: "openrouter_affinity_eligible", eligible: true, headerAttached: true, headerSource: "cache_engine" }),
+    "applied",
+  )
+  assert.equal(
+    telemetryStage({ kind: "boundary", reason: "openrouter_affinity_eligible", eligible: true, headerAttached: false, headerSource: "preexisting" }),
+    "decision",
+  )
+  assert.equal(
+    telemetryStage({ kind: "boundary", reason: "openrouter_affinity_bypassed_non_openrouter", eligible: false, headerAttached: false }),
+    "decision",
+  )
+  // Helper integration: the classifier agrees with the real affinity-helper output
+  // (so a future reason rename cannot silently desync the test from the emitters).
+  assert.equal(telemetryStage({ kind: "boundary", ...affinityTelemetryFields(POLICY_MIMO26, "openrouter", "cache_engine") }), "applied")
+  assert.equal(telemetryStage({ kind: "boundary", ...affinityTelemetryFields(POLICY_GLM53, "openrouter", "cache_engine") }), "applied")
+  assert.equal(telemetryStage({ kind: "boundary", ...affinityTelemetryFields(POLICY_MIMO26, "openrouter", "preexisting") }), "decision")
+  assert.equal(telemetryStage({ kind: "boundary", ...affinityTelemetryFields(POLICY_MIMO26, "xiaomi", "not_applicable") }), "decision")
+  assert.equal(telemetryStage({ kind: "boundary", ...affinityTelemetryFields(POLICY_MIMO26, "", "not_applicable") }), "decision")
+  // An attached affinity record also carries the wire caveat.
+  assert.equal(
+    withTelemetryStage({ kind: "boundary", reason: "openrouter_affinity_eligible", headerAttached: true }).wireEffect,
+    "not_observed",
+  )
+  // Defensive: a reason-less boundary record (no current emitter) is an observation.
+  assert.equal(telemetryStage({ kind: "boundary", headerAttached: true }), "observation")
   // Unknown kind / non-object.
   assert.equal(telemetryStage({ kind: "mystery" }), null)
   assert.equal(telemetryStage(null), null)
   // Enrichment is additive and idempotent; it never overrides an explicit stage.
+  assert.deepEqual(withTelemetryStage({ kind: "cache-options", sid: "s", optionsInjected: true }), {
+    kind: "cache-options",
+    sid: "s",
+    optionsInjected: true,
+    stage: "applied",
+    wireEffect: "not_observed",
+  })
   assert.deepEqual(withTelemetryStage({ kind: "cache-options", sid: "s" }), {
     kind: "cache-options",
     sid: "s",
-    stage: "applied",
-    wireEffect: "not_observed",
+    stage: "decision",
   })
   assert.deepEqual(withTelemetryStage({ kind: "usage" }), { kind: "usage", stage: "outcome" })
   assert.equal(withTelemetryStage(null), null)
@@ -7184,7 +7218,7 @@ test("phase5/p5t2: telemetryStage classifies each kind/reason; applied records c
 test("phase5/p5t2: createRecorder writes the stage; an observation never claims a wire effect; a failed write is silent", () => {
   const file = join(mkdtempSync(join(tmpdir(), "ce-stage-")), "m.jsonl")
   const rec = createRecorder(file)
-  rec.record({ kind: "cache-options", sid: "s" })
+  rec.record({ kind: "cache-options", sid: "s", optionsInjected: true })
   rec.record({ kind: "usage", sid: "s", read: 1, write: 0 })
   const lines = readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l))
   assert.equal(lines[0].stage, "applied")
@@ -7207,12 +7241,22 @@ test("phase5/p5t2: V1 cache-options distinguishes desired vs applied (no false s
     const v1 = await CacheEngine({ client: fake, directory: process.env.HOME })
     const gpt = { providerID: "openai", id: "gpt-5.6-sol", api: { id: "gpt-5.6-sol", npm: "@ai-sdk/openai" } }
     const provider = { source: "config", info: { id: "openai" }, options: {} }
-    const out = { options: { promptCacheKey: "pre-existing" } }
-    await v1["chat.params"]({ sessionID: "ses_p5t2", agent: "build", model: gpt, provider, message: { id: "m1", sessionID: "ses_p5t2", role: "user", content: "x" } }, out)
+    const call = async (sid, options) => {
+      const out = { options }
+      await v1["chat.params"]({ sessionID: sid, agent: "build", model: gpt, provider, message: { id: "m-" + sid, sessionID: sid, role: "user", content: "x" } }, out)
+      return out
+    }
+    const injected = await call("ses_p5t2", { promptCacheKey: "pre-existing" })
+    const noop = await call("ses_p5t2b", { promptCacheKey: "pre-existing", promptCacheOptions: { mode: "explicit", ttl: "1h" } })
     let recs = []
     const mf = process.env.CACHE_ENGINE_METRICS_FILE
     if (existsSync(mf)) recs = readFileSync(mf, "utf8").trim().split("\\n").filter(Boolean).map((l) => JSON.parse(l))
-    process.stdout.write(JSON.stringify({ co: recs.find((r) => r.kind === "cache-options") ?? null, outOptions: out.options }))
+    process.stdout.write(JSON.stringify({
+      co: recs.find((r) => r.kind === "cache-options" && r.sid === "ses_p5t2") ?? null,
+      coNoop: recs.find((r) => r.kind === "cache-options" && r.sid === "ses_p5t2b") ?? null,
+      injectedOptions: injected.options,
+      noopOptions: noop.options,
+    }))
   `
   const out = JSON.parse(
     execFileSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], {
@@ -7225,7 +7269,14 @@ test("phase5/p5t2: V1 cache-options distinguishes desired vs applied (no false s
   assert.equal(out.co.key, "ses_p5t2", "key is the DESIRED key")
   assert.equal(out.co.keyInjected, false, "the adapter did NOT write the key (live request, cacheRootKey default false)")
   assert.equal(out.co.keyPreserved, true)
+  assert.equal(out.co.optionsInjected, true, "the adapter DID add promptCacheOptions")
   assert.equal(out.co.stage, "applied")
   assert.equal(out.co.wireEffect, "not_observed")
-  assert.equal(out.outOptions.promptCacheKey, "pre-existing", "the pre-existing key is preserved in the hook object")
+  assert.equal(out.injectedOptions.promptCacheKey, "pre-existing", "the pre-existing key is preserved in the hook object")
+  // A record where the adapter wrote NOTHING is a decision, never `applied`.
+  assert.ok(out.coNoop, "a second cache-options record was emitted")
+  assert.equal(out.coNoop.keyInjected, false)
+  assert.equal(out.coNoop.optionsInjected, false)
+  assert.equal(out.coNoop.stage, "decision")
+  assert.equal("wireEffect" in out.coNoop, false)
 })
