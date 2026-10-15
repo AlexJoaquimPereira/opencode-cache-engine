@@ -1,7 +1,7 @@
 # OpenCode Cache Engine — Post-1.0.0 Implementation Plan
 
 **Document type:** Harness implementation plan  
-**Status:** Phase 1 complete (2026-10-14); Phase 2 complete (P2-T1..P2-T5; P2-T4 real-rollover optional); Phase 3 P3-T1..P3-T4 complete (2026-10-15; P3-T2 no-op; P3-T3 no-op/watch; P3-T4 no-op; P3-T5 next); further implementation requires explicit authorization
+**Status:** Phase 1 complete (2026-10-14); Phase 2 complete (P2-T1..P2-T5; P2-T4 real-rollover optional); Phase 3 P3-T1..P3-T5 complete (2026-10-15; P3-T2 no-op; P3-T3 no-op/watch; P3-T4 no-op; P3-T5 no-op/insufficient; P3-T6 next); further implementation requires explicit authorization
 **Baseline:** `opencode-cache-engine` 1.0.0; V1 and V2 entry points load  
 **Planning date:** 2026-10-13  
 **Primary objective:** Improve prompt-cache stability through conservative, provider-aware interventions that are structurally verified and, where possible, proven to improve provider-reported cache reuse.
@@ -332,8 +332,9 @@ Hook shape and wire behavior must be documented; invariants must pass; no stale 
 **Status: P3-T1..P3-T3 COMPLETE** (2026-10-15) — P3-T1: offline capture groundwork,
 fixtures, go/no-go (`RF-OC-040`/`RF-OC-041`); P3-T2: tool ordering **no-op**
 (`RF-OC-042`); P3-T3: startup/MCP **no-op/watch item** (`RF-OC-044`, superseding `RF-OC-043`); P3-T4:
-dynamic instructions/project context **no-op** (`RF-OC-045`). Reports in
-`docs/phase3-p3t*.md`. P3-T5..P3-T7 pending.
+dynamic instructions/project context **no-op** (`RF-OC-045`); P3-T5: reasoning/thinking
+**no-op / insufficient evidence** (`RF-OC-046`). Reports in `docs/phase3-p3t*.md`.
+P3-T6..P3-T7 pending.
 
 **Objective:** Rank additional causes based on actual captures rather than competitor feature lists.
 

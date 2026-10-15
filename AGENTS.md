@@ -381,8 +381,10 @@ MCP tools are Code-Mode by default and the first request can precede MCP registr
 `RF-OC-044` supersedes `RF-OC-043`; `docs/phase3-p3t3-startup-mcp.md`). **P3-T4 (dynamic
 instructions/project context) COMPLETE** (2026-10-15) — **no-op** (system byte-stable
 in-session; cross-root differs only in `<env>`; project instructions are intentional —
-`RF-OC-045`; `docs/phase3-p3t4-dynamic-instructions.md`); P3-T5 (reasoning/thinking) is
-next. See `TODO.md`.
+`RF-OC-045`; `docs/phase3-p3t4-dynamic-instructions.md`). **P3-T5 (reasoning/thinking)
+COMPLETE** (2026-10-15) — **no-op / insufficient evidence** (the verified route carries no
+reasoning; route matrix documented — `RF-OC-046`; `docs/phase3-p3t5-reasoning.md`); P3-T6
+(ranked inventory + go/no-go) is next. See `TODO.md`.
 
 - **Diagnose before mutating.** Observe the rendered request, identify a specific
   avoidable instability, verify the hook can safely observe/change it, then make
