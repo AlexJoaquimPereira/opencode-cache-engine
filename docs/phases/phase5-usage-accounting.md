@@ -261,3 +261,30 @@ request bodies. Records hold ids, counts, hashes, policy/metadata, and provider-
 only. Guarded by `phase5/p5t4: telemetry never carries prompt content, reasoning, or
 credentials` (a sentinel string placed in the system prompt and the history never appears in
 the metrics file; no credential-shaped fields).
+
+---
+
+## P5-T5 — acceptance decision
+
+**Criteria (plan §9):**
+
+| Criterion | Result | Basis |
+|---|---|---|
+| Metric definitions are documented | **MET** | the P5-T1 catalogue — every record kind + field with source, meaning, presence |
+| Failure modes are tested **or** explicitly documented | **MET** | the P5-T3 matrix — 1 new test (restart) + 13 pre-existing tests mapped, each with its direction |
+| Telemetry does **not** alter requests | **MET** | P5-T2's markers are additive record fields; `createRecorder` only appends; no request-path code changed, so the Phase-1 §3C "diagnostics leave the serialized request byte-identical" property still holds |
+| Estimates are **not** presented as actual savings | **MET** | no cost/pricing fields exist; `estimated_cost_delta` is explicitly **not produced** (P5-T4) |
+
+**Phase-5 outcome:** the phase delivered **additive telemetry + tests + documentation**. No
+request behavior changed; accounting remains **best-effort, never exactly-once**. Five new
+tests (`phase5/p5t2:` ×3, `phase5/p5t3:` ×1, `phase5/p5t4:` ×1).
+
+**Residual (out of scope, recorded):**
+
+1. A **durable cursor** would remove the across-restart recount (P5-T3).
+2. **V1/V2 parity gaps:** V2 omits V1's diagnostics and the `usage.provider`/`model` fields.
+3. The `cache-options.key` split (V1 = *desired*, V2 = *injected-or-null*) is documented
+   (§4) but not unified.
+
+**Acceptance:** Phase 5 closes with the criteria met. No version bump is required — the change
+is additive telemetry and tests; runtime request behavior is unchanged.

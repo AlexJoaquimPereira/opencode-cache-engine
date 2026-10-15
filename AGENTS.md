@@ -388,8 +388,10 @@ COMPLETE** (2026-10-15) — **NO-GO on P3-T7** (no recurring + avoidable + safel
 cause; `docs/phases/phase3-other-volatility.md`). **Phase 3 COMPLETE** (P3-T1..P3-T6). **Phase 4
 (provider-policy and transport verification) COMPLETE** (P4-T1..P4-T5, 2026-10-15) —
 **verification-only, no promotion** (GPT cache options and OpenRouter affinity are not
-wire-effective on the tested routes; `docs/phases/phase4-provider-policy-verification.md`); Phase 5 (usage
-accounting and telemetry) is next. See `TODO.md`.
+wire-effective on the tested routes; `docs/phases/phase4-provider-policy-verification.md`). **Phase 5
+(usage accounting and telemetry) COMPLETE** (P5-T1..P5-T5, 2026-10-15) — **additive telemetry +
+tests + docs; no request behavior change** (`docs/phases/phase5-usage-accounting.md`); Phase 6
+(compaction/memory-boundary research) is next. See `TODO.md`.
 
 - **Diagnose before mutating.** Observe the rendered request, identify a specific
   avoidable instability, verify the hook can safely observe/change it, then make
