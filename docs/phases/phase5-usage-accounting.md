@@ -201,3 +201,63 @@ eviction, and telemetry-write failures. Most were already pinned by pre-existing
 **Invariant:** every failure mode errs toward **undercount or no record**, never toward a
 fabricated or double-counted cache event — **except** the documented across-restart recount,
 whose remedy (a durable cursor) is out of scope. `npm test` **377/0** (1 new test).
+
+---
+
+## P5-T4 — terminology, under/recount scenarios, provider formulas, privacy
+
+Plan §9 tasks 4/6/7 + its terminology note. Consumer guidance for reading every record honestly.
+
+### Precise terminology
+
+Prefer these terms; a record field's name is not a claim about provider semantics.
+
+| Record field | Term | Meaning | Caveat |
+|---|---|---|---|
+| `read` | `cache_read_tokens` | provider-reported tokens served from cache | provider-reported only |
+| `write` | `cache_write_tokens` | provider-reported cache-write tokens | never fabricated; absent where the provider has no write field (Grok/Muse/Gemini) |
+| `input` | `input_tokens` | provider-reported **non-cached** prompt input | — |
+| `sampleHitRate` / `cumulativeHitRate` | `observed_cache_read_ratio` (generic) | `read/(read+write)`, rounded | **observed**, never a provider guarantee |
+| `glmHitRate` | `observed_cache_read_ratio` (GLM) | `read/(read+write+input)` | GLM only |
+| `cacheHitRate` | `observed_cache_read_ratio` (MiMo) | `cachedTokens/(read+input)` | MiMo only |
+| — | `estimated_cost_delta` | **not produced** — pricing is out of scope | never present one as actual savings |
+
+**Missing means unavailable, not zero.** A record that is absent (e.g. no cache data observed
+during a scan) is *unknown*, not a zero-value cache event; the plugin never emits a zero-usage
+record on idle.
+
+### Provider-specific formulas (never universalised)
+
+| Family | Ratio | Denominator | Emitted as |
+|---|---|---|---|
+| generic (DeepSeek · Kimi · Claude · Gemini · Qwen · Grok · Muse · MiniMax) | `read/(read+write)` | cached + written | `sampleHitRate`, `cumulativeHitRate` |
+| GLM-5.3 | `read/(read+write+input)` | cached + written + non-cached input | `glmHitRate` |
+| MiMo-V2.6 | `cachedTokens/(read+input)` | cached + non-cached input (`write` excluded) | `cacheHitRate` |
+
+⚠ `promptTokens` / `cachedTokens` / `cacheHitRate` are **overloaded** between GLM and MiMo with
+different formulas — read them only under the record's `policy` / `cacheRatio`.
+
+### Expected under/recount scenarios
+
+| Scenario | Direction | Why |
+|---|---|---|
+| Duplicate / concurrent `idle` | no double-count | cursor + watermark |
+| Missing `idle` (dropped event) | **under-count** | the next scan counts only what is after the cursor; nothing is recounted, but a scan that never runs counts nothing |
+| Same-millisecond boundary | **under-count** | the watermark is a strictly-greater floor |
+| Cursor pruned/reverted (compaction) | **no double-count** | the watermark bounds the scan |
+| Capacity eviction / re-entry | **under-count** | the backlog is skipped, never recounted |
+| `session.deleted` + late event | suppressed | tombstone (a late event after the tombstone TTL re-accounts — documented) |
+| **Restart** (cursor not durable) | **recount** | a fresh process re-scans the session history (P5-T3) |
+| Telemetry-write failure | **no record** | a lost write can never be read as success |
+
+**Consumer guidance:** these are *best-effort* counts. Sum `cumulative` within a process; do
+not compare across restarts. Missing metrics mean unavailable, not zero, and no record is a
+provider-savings claim.
+
+### Privacy — telemetry outside prompt content
+
+No record carries prompt text, reasoning content, credentials, authorization headers, or full
+request bodies. Records hold ids, counts, hashes, policy/metadata, and provider-reported tokens
+only. Guarded by `phase5/p5t4: telemetry never carries prompt content, reasoning, or
+credentials` (a sentinel string placed in the system prompt and the history never appears in
+the metrics file; no credential-shaped fields).
