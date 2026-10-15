@@ -9,11 +9,11 @@ provider-reported usage.
 (`./server`) and V2 (`./v2`), with `./tui` for registration, atop the v0.5.x
 provider line (DeepSeek, GPT‑5.6+, GLM‑5.3, MiMo‑V2.6, Kimi, Claude, Gemini,
 Qwen, xAI/Grok, Meta Muse, MiniMax) and the v0.6.0 shared-core consolidation.
-`docs/implementation-plan-v2.md` is the **shipped record** of the V2 milestone
+`docs/plans/v0-v2-implementation-plan.md` is the **shipped record** of the V2 milestone
 (Phases A–D below; capability matrix; release gates). The **current, post-1.0.0
-phase** is planned in `docs/opencode-cache-engine-v1.x.x-implementation-plan.md`
+phase** is planned in `docs/plans/v1.x.x-implementation-plan.md`
 (see the phase section at the end of this file), derived from
-`docs/competitor-prompt-cache-plugins-research-report.md`; read the new plan
+`docs/research/competitor-prompt-cache-plugins-research-report.md`; read the new plan
 before starting work — it is **proposed** and requires explicit authorization.
 Keep runtime claims narrow: V2 discovery, `setup(ctx)`, and
 `context`/`model.request` dispatch are verified for the tested project-local shim
@@ -187,7 +187,7 @@ stores:
 - `docs/research-findings.md` — cross-model findings about the harness and
   transports: OpenCode runtime/SDK/plugin API, OpenRouter routing, AI-SDK and
   provider-package serialization, and provider API mechanics.
-- `docs/competitor-prompt-cache-plugins-research-report.md` — competitor/ecosystem
+- `docs/research/competitor-prompt-cache-plugins-research-report.md` — competitor/ecosystem
   landscape and the input to the post-1.0.0 plan (**gitignored/local-only**; the
   tracked distillation is the plan). Its third-party claims are **author-reported,
   not verified**; never promote one to `[D]`/`[O]` without our own reproduction.
@@ -275,9 +275,9 @@ actually resolved before assuming anything about it.
 
 ## Roadmap and current phase
 
-`docs/opencode-cache-engine-v1.x.x-implementation-plan.md` is the authoritative
+`docs/plans/v1.x.x-implementation-plan.md` is the authoritative
 plan for the **post-1.0.0** phase (diagnostics-first; details in the phase
-section at the end of this file). `docs/implementation-plan-v2.md` is retained as
+section at the end of this file). `docs/plans/v0-v2-implementation-plan.md` is retained as
 the **shipped record** of the V1→V2 milestone (Phases A–D below); its gates are
 closed per §2D.13 (Gate 4 **NOT PASS**; accounting best-effort). Read the current
 plan before starting work, and treat every plan as a milestone checklist rather
@@ -352,8 +352,8 @@ Binding constraints on roadmap work — these override the plan:
 
 ## Post-1.0.0 phase — diagnostics-first cache-stability program
 
-`docs/opencode-cache-engine-v1.x.x-implementation-plan.md` is the authoritative
-post-1.0.0 plan; `docs/competitor-prompt-cache-plugins-research-report.md` is its
+`docs/plans/v1.x.x-implementation-plan.md` is the authoritative
+post-1.0.0 plan; `docs/research/competitor-prompt-cache-plugins-research-report.md` is its
 input (competitor/ecosystem research — its third-party claims are
 **author-reported, not verified**). The plan is **proposed**: nothing in it is
 authorization to implement. Use its §17 task-result template for phase reports.
@@ -370,25 +370,25 @@ offline/mock capture harness. **Phase 2 — date relocation: COMPLETE** (P2-T1..
 `stabilizeDate` date-line relocation is implemented for V1/V2 (**default off**),
 wire-verified (G3, `RF-OC-036`); the provider A/B showed **directional support**
 (`RF-OC-038`) but not a clean benefit (G4, simulated rollover). **P2-T5 keeps it
-experimental** (`docs/phase2-p2t5-acceptance-decision.md`); a real-calendar rollover
+experimental** (`docs/phases/phase2-date-relocation.md`); a real-calendar rollover
 confirmation is optional. **Phase 3 — other volatility sources: P3-T1 (offline
 capture groundwork) COMPLETE** (2026-10-15) — both pair types reproduce offline
-(`RF-OC-040`/`RF-OC-041`; `docs/phase3-p3t1-capture-groundwork.md`). **P3-T2 (tool
+(`RF-OC-040`/`RF-OC-041`; `docs/phases/phase3-other-volatility.md`). **P3-T2 (tool
 ordering) COMPLETE** (2026-10-15) — **no-op** (deterministic order/definitions;
-`RF-OC-042`; `docs/phase3-p3t2-tool-ordering.md`). **P3-T3 (startup/MCP readiness)
+`RF-OC-042`; `docs/phases/phase3-other-volatility.md`). **P3-T3 (startup/MCP readiness)
 COMPLETE** (2026-10-15) — **no-op / watch item** (the MCP-readiness race is real:
 MCP tools are Code-Mode by default and the first request can precede MCP registration;
-`RF-OC-044` supersedes `RF-OC-043`; `docs/phase3-p3t3-startup-mcp.md`). **P3-T4 (dynamic
+`RF-OC-044` supersedes `RF-OC-043`; `docs/phases/phase3-other-volatility.md`). **P3-T4 (dynamic
 instructions/project context) COMPLETE** (2026-10-15) — **no-op** (system byte-stable
 in-session; cross-root differs only in `<env>`; project instructions are intentional —
-`RF-OC-045`; `docs/phase3-p3t4-dynamic-instructions.md`). **P3-T5 (reasoning/thinking)
+`RF-OC-045`; `docs/phases/phase3-other-volatility.md`). **P3-T5 (reasoning/thinking)
 COMPLETE** (2026-10-15) — **no-op / insufficient evidence** (the verified route carries no
-reasoning; route matrix documented — `RF-OC-046`; `docs/phase3-p3t5-reasoning.md`). **P3-T6 (ranked inventory + go/no-go)
+reasoning; route matrix documented — `RF-OC-046`; `docs/phases/phase3-other-volatility.md`). **P3-T6 (ranked inventory + go/no-go)
 COMPLETE** (2026-10-15) — **NO-GO on P3-T7** (no recurring + avoidable + safely-correctable
-cause; `docs/phase3-volatility-inventory.md`). **Phase 3 COMPLETE** (P3-T1..P3-T6). **Phase 4
+cause; `docs/phases/phase3-other-volatility.md`). **Phase 3 COMPLETE** (P3-T1..P3-T6). **Phase 4
 (provider-policy and transport verification) COMPLETE** (P4-T1..P4-T5, 2026-10-15) —
 **verification-only, no promotion** (GPT cache options and OpenRouter affinity are not
-wire-effective on the tested routes; `docs/phase4-acceptance-decision.md`); Phase 5 (usage
+wire-effective on the tested routes; `docs/phases/phase4-provider-policy-verification.md`); Phase 5 (usage
 accounting and telemetry) is next. See `TODO.md`.
 
 - **Diagnose before mutating.** Observe the rendered request, identify a specific

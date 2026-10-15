@@ -4,7 +4,7 @@
 // them. P2-T3 consumes them to verify a content-preserving date relocation and its
 // no-op conditions. No transform is implemented here.
 //
-// Evidence basis — see docs/phase2-date-relocation-hook-shape.md:
+// Evidence basis — see docs/phases/phase2-date-relocation.md:
 //   - origin "2.0.26": verified by offline capture of an OpenCode v2.0.26 primary
 //     request (mock provider, `bwrap --unshare-net`). The daily date is a STANDALONE
 //     line `Today's date: <EEE MMM D YYYY>` OUTSIDE and immediately BEFORE the

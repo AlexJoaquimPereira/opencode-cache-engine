@@ -5,7 +5,7 @@
 // `bwrap --unshare-net`). P3-T2..P3-T5 rank volatility against this baseline.
 // No transform is implemented here.
 //
-// Evidence: docs/phase3-p3t1-capture-groundwork.md; RF-OC-040.
+// Evidence: docs/phases/phase3-other-volatility.md; RF-OC-040.
 // Reproduce both pair types:
 //   OC_CAPTURE_TURNS=3 OC_CAPTURE_CONTINUE=1 test/harness/capture/run.sh
 //

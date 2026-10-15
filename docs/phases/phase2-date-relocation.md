@@ -1,3 +1,11 @@
+# Phase 2 — date relocation (P2-T1 … P2-T5)
+
+Consolidated Phase 2 record: P2-T1 hook-shape research, P2-T4 provider A/B, and P2-T5
+acceptance decision. (P2-T2 implementation and P2-T3 wire verification live in `src/` and
+`test/`.)
+
+---
+
 # Phase 2 — P2-T1 report: date-relocation hook shape
 
 **Task:** P2-T1 (see `TODO.md`) — verify the date-relocation hook shape, per route.
@@ -229,3 +237,184 @@ single eligible text part; ambiguous anchor; part boundary not as captured.
    decision for P2-T2.
 3. Whether the date line ever appears inside `<env>` on **1.18.x** — needs a 1.18.x
    capture (that binary is not installed); the legacy fixtures assume it does.
+
+
+---
+
+## P2-T4 — provider A/B report
+
+# Phase 2 — P2-T4 report: provider-side A/B for the date-line relocation
+
+**Task:** P2-T4 (see `TODO.md`) — measure whether the `stabilizeDate` date-line
+relocation improves provider-reported prefix-cache reuse across a date change.
+**Type:** measurement (authorized). **Evidence label:** *Provider measured*.
+**Status:** **directional support** (on the pinned route, every nonce-isolated trial
+showed ON >= OFF), but **G4 not cleanly passed** — the rollover was simulated and the
+magnitude is variable. **Still open:** a real-calendar >=2-rollover confirmation.
+
+## Objective
+From provider-reported usage, determine whether relocating the daily date line to
+the system-prompt tail (candidate) yields a larger reused cached prefix than
+leaving it before `<env>` (baseline) when the date changes (§6, §3C).
+
+## Measurement machinery
+- **Route:** OpenRouter with the user's pinned providers — GLM `z-ai/fp8` -> **Z.AI**,
+  MiMo `xiaomi/fp8` -> **Xiaomi** (observed via the response `provider` field).
+- **Capture/rewrite:** a disposable project overrides the endpoint
+  (`provider.openrouter.options.baseURL` -> local proxy); the proxy captures routing
+  metadata and rewrites the `Today's date: ...` value to **simulate** a rollover.
+- **Plugin:** the project `.opencode/plugins/<shim>.ts` loads only under
+  `opencode run --standalone`; `stabilizeDate` is enabled by pointing `HOME` at a
+  temp dir holding `~/.config/opencode/cache-engine.json` while `XDG_CONFIG_HOME`
+  stays **real** (so the pins load). No managed config was modified.
+- **Isolation:** each trial uses a **unique stable prefix** (nonce) so prior runs'
+  caches cannot carry over.
+- **Usage:** OpenCode session DB `session_message.data.tokens.cache.{read,write}`
+  (the plugin's own telemetry does not fire headless).
+
+## Findings — provider measured (pinned route, nonce-isolated, simulated rollover "Wed 14" -> "Thu 15" Oct 2026)
+| model | trial | OFF `cache.read` | ON `cache.read` | delta |
+|---|---|---:|---:|---:|
+| GLM-5.3 Flash (Z.AI) | A | 8128 | 10240 | +2112 |
+| GLM-5.3 Flash (Z.AI) | B | 10240 | 10304 | +64 |
+| GLM-5.3 Flash (Z.AI) | C | 10240 | 10304 | +64 |
+| MiMo v2.6 Flash (Xiaomi) | A | 4096 | 10240 | +6144 |
+| MiMo v2.6 Flash (Xiaomi) | B | 8192 | 10240 | +2048 |
+| MiMo v2.6 Flash (Xiaomi) | C | 10240 | 10240 | 0 |
+
+- **ON >= OFF in 6/6** (no sign flip): directionally consistent with the mechanism
+  (date at the tail -> a longer surviving prefix after the rollover).
+- Magnitude varies (0..+6144) and values cluster near ~10240, suggesting a provider
+  cached-prefix **cap** can saturate the difference (when the baseline already hits
+  the cap, the delta is 0).
+
+## Corrections to earlier statements (this session)
+- The **first A/B pass was invalid**: it used a *temp* `XDG_CONFIG_HOME` (no pins),
+  so the requests carried `provider: null` and OpenRouter load-balanced (GLM was
+  served by "Near AI", not Z.AI). Those numbers are discarded.
+- "GLM reports no caching" was measured on the **old pin** (streamlake/novita) / an
+  unpinned route. With the pin binding to Z.AI, GLM **does** report reads (e.g.
+  23616 of 23673 cached on an identical repeat).
+- The provider pins are sent verbatim and honored (GLM -> z-ai, MiMo -> xiaomi);
+  the earlier novita/makora sighting was the pre-binding state.
+
+## Changes
+- **Files changed:** none in the repository (disposable projects + a local proxy
+  under `/tmp/opencode`). **Behavior changed:** none (`stabilizeDate` stays off by default).
+
+## Validation
+- **Provider requests made: yes** (OpenRouter; small spend). **Credentials accessed: no**
+  (used by OpenCode from its store; never read or logged).
+- No offline/structural change (G2/G3 unchanged from P2-T2/P2-T3).
+
+## Acceptance criteria
+- [ ] Reproducible `cache.read` increase, directionally consistent, across >=2
+      **real** rollovers — **partial**: directionally consistent on the pinned route
+      (6/6, no sign flip), but **simulated** rollovers and a variable magnitude.
+- [x] Measurement machinery established and reproducible.
+
+## Risks and limitations
+- **Simulated** rollover (proxy date rewrite), not a real calendar rollover (§6).
+- Variable magnitude; a possible provider cached-prefix cap saturates the delta.
+- n=3 per model; OpenRouter routing/TTL remain confounders.
+
+## Cleanup and integrity
+- Temporary artifacts: `/tmp/opencode/{t4proxy.mjs,t4ab.sh,t4route,t4home,phase2-p2t4-*}`
+  (plus the disposable experiment project).
+- Worktree status: repository unchanged by this task.
+- Managed config/services untouched.
+
+## Recommendation
+**Directional support, not a clean provider-measured benefit.** Keep `stabilizeDate`
+**experimental (default off)**; the signal justifies a **real-calendar >=2-rollover
+confirmation** before any promotion (G4). The structural work (G2/G3) stands.
+
+## Reproduction (measurement procedure)
+1. **Route/pins:** OpenRouter with the pinned providers (GLM `z-ai/fp8` -> Z.AI,
+   MiMo `xiaomi/fp8` -> Xiaomi). Real `XDG_CONFIG_HOME` must be used so the pins load.
+2. **Disposable project:** `.opencode/plugins/<shim>.ts` ->
+   `export { default } from "<repo>/src/cache-engine-v2.mjs"`, and
+   `.opencode/opencode.json` with
+   `provider.openrouter.options.baseURL = http://127.0.0.1:<port>/api/v1`.
+3. **Proxy:** a loopback proxy forwards to `https://openrouter.ai`, captures routing
+   metadata, and (for the simulated rollover) rewrites the `Today's date: ...` value.
+4. **Candidate toggle:** run `opencode run --standalone -m <model> "<prompt>"`; enable
+   `stabilizeDate` by pointing `HOME` at a temp dir holding
+   `.config/opencode/cache-engine.json` (`{"policies":{"<family>":{"stabilizeDate":true}}}`)
+   while `XDG_CONFIG_HOME` stays real.
+5. **Per trial:** prime (no rewrite) then measure (rewrite the date), with a **unique
+   nonce** in the stable prompt so prior runs' caches cannot carry over. Read
+   `cache.read`/`write` from the session DB
+   (`session_message.data.tokens.cache.{read,write}`) or the OpenRouter usage.
+6. **Threshold (§3C):** a reproducible `cache.read` increase vs baseline, directionally
+   consistent (no sign flip), across >=2 rollovers.
+
+
+
+---
+
+## P2-T5 — acceptance decision
+
+# Phase 2 — P2-T5: acceptance decision (date relocation)
+
+**Task:** P2-T5 (see `TODO.md`) — decide **promote / keep experimental / revise /
+reject** for the `stabilizeDate` date-line relocation, and satisfy the operations and
+publication gates.
+**Decision:** **Keep experimental (default off). Do not promote.** Phase 2 closes
+with the transform available but disabled; a real-calendar rollover confirmation is
+optional follow-up, not a precondition for closure.
+
+## Basis (release gates, plan §15)
+| Gate | Requirement | Result |
+|---|---|---|
+| G2 — Safety | Invariants and no-op conditions pass. | **PASS** — P2-T2 + audit (guard, ambiguity, already-at-tail, byte preservation). |
+| G3 — Wire | Serialized request contains the intended change only. | **PASS** — P2-T3 (`RF-OC-036`): the date line moves past `<env>` in the serialized request for GLM-5.3/MiMo-V2.6; neutral unchanged. |
+| G4 — Outcome | Provider evidence supports claimed benefit. | **NOT cleanly passed** — P2-T4 (`RF-OC-038`): directional support (ON >= OFF in 6/6 nonce-isolated trials on the pinned OpenRouter route) but the rollover was **simulated**, the magnitude varied, and a provider cached-prefix cap can saturate it. |
+| G5 — Operations | Privacy, failure handling, rollback, limits documented. | **PASS** — see below. |
+| G6 — Publication | Docs and claims match tested routes/evidence. | **PASS** — claims stay structural/*directional*; no provider-benefit claim. |
+
+Per §3C a non-clean `cache.read` result is **inconclusive for promotion**; per §15
+completion is not a promotion criterion.
+
+## Operations (G5)
+- **Disable path:** `policies.<family>.stabilizeDate = false` (the default). The
+  transform is additive and independently controllable.
+- **Staleness window:** none introduced — the daily date line is **relocated**, never
+  **pinned**; the date value/format is unchanged and stays current.
+- **Privacy / failure handling:** the transform is content-preserving and read-free of
+  prompt content beyond the anchored date line; diagnostics/telemetry never carry
+  prompt text; a failure is fail-closed (no-op).
+- **Limits:** the anchor is intentionally narrow (OpenCode's `Today's date:` template);
+  a format change makes it a safe no-op.
+
+## Residual / optional follow-up
+- A **real-calendar >=2-rollover** confirmation (not run) could upgrade G4; until then
+  the transform stays off.
+- A materially larger (non-date) volatile-region move would be a separate,
+  safety-cased investigation (deferred, plan §13).
+
+## Status
+- **Phase 2: complete** (P2-T1..P2-T5). P2-T4's real-rollover confirmation remains
+  optional/open (tracked in `TODO.md`).
+- `stabilizeDate` ships **off**; the shipped structural capabilities are the `<env>`
+  relocation (`stabilizeSystem`) and the (off-by-default) date-line relocation.
+
+## Phase 2 completion record (2026-10-14)
+Verified complete at HEAD `70f8e93` (package **1.1.2**; `npm test` **368/0**; all four
+capture-harness suites pass; worktree clean apart from the local `TODO.md` and the
+preserved untracked `package-lock.json`).
+
+| Task | Deliverable | Artifact(s) | Status |
+|---|---|---|---|
+| P2-T1 | Hook-shape research (per route) | `docs/phases/phase2-date-relocation.md`; `RF-OC-035`; `test/fixtures/date-relocation-shapes.mjs` | done |
+| P2-T2 | Content-preserving date relocation | `relocateVolatileDateLine` + `stabilizeDate` (V1/V2); tests + audit hardening | done |
+| P2-T3 | Offline wire verification (gate G3) | `test/harness/capture/{verify-date-relocation.mjs,date-relocation.test.sh,run.sh}`; `RF-OC-036` | done |
+| P2-T4 | Provider-side A/B | `docs/phases/phase2-date-relocation.md`; `RF-OC-038`; `RF-OR-006` | performed (directional support) |
+| P2-T5 | Acceptance decision | this document | done |
+
+**Plan §6 acceptance:** hook shape and wire behavior documented; invariants pass; no
+stale date introduced; **provider-benefit threshold not met** → keep experimental
+(explicitly accepted).
+
+**§3C thresholds:** transform invariants **met**; provider benefit **not met** →
+`stabilizeDate` default **off**.

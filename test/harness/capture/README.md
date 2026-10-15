@@ -62,7 +62,7 @@ OC_CAPTURE_TURNS=3 OC_CAPTURE_CONTINUE=1 test/harness/capture/run.sh
 A fresh `opencode run` emits two requests — an auxiliary (title/summary) request
 with **no tools**, then the main agent request — so `diff-requests.mjs` pairs them
 by kind. Shape findings and the go/no-go are in
-`docs/phase3-p3t1-capture-groundwork.md`; consumable fixture data is in
+`docs/phases/phase3-other-volatility.md`; consumable fixture data is in
 `test/fixtures/volatility-shapes.mjs`.
 
 ## Exit contract

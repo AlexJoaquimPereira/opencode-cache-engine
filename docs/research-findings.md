@@ -35,8 +35,8 @@ Evidence tags are the same legend the inventory uses:
 `docs/audit-report-*.md` and `session-*.md` are gitignored, so anything durable
 found in them is lost on a fresh clone. Promote it here.
 
-The post-1.0.0 plan `docs/opencode-cache-engine-v1.x.x-implementation-plan.md` is
-the tracked distillation of `docs/competitor-prompt-cache-plugins-research-report.md`
+The post-1.0.0 plan `docs/plans/v1.x.x-implementation-plan.md` is
+the tracked distillation of `docs/research/competitor-prompt-cache-plugins-research-report.md`
 (gitignored/local-only). The report's competitor claims are author-reported, never
 first-party facts; cite the plan for the distilled conclusions and keep the `RF-*`
 entries here for first-party runtime/API facts.
@@ -965,7 +965,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   v2.0.26 binary; env-var names grepped from the binary; installed
   `@opencode/plugin`/`@opencode/client` `package.json` (2.0.16). Accessed
   2026-10-12.
-- Justifies: `docs/implementation-plan-v2.md` §2D.0 (verified command surface)
+- Justifies: `docs/plans/v0-v2-implementation-plan.md` §2D.0 (verified command surface)
   and §2D.2 (Gate 0 isolation); the prohibition on `plugin add/remove/update`
   during an isolated V2 loader test.
 - Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16.
@@ -1018,7 +1018,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   HOME/XDG, OpenCode 2.0.26 `serve`; tarball `opencode-cache-engine-0.7.1.tgz`
   from the checkpoint worktree; offline `npm install`; direct config entry; no
   shim; server-log lines; no adapter side effect.
-- Justifies: `docs/implementation-plan-v2.md` §2D.3 (Gate 1 result) and the §2D.4
+- Justifies: `docs/plans/v0-v2-implementation-plan.md` §2D.3 (Gate 1 result) and the §2D.4
   (Gate 1b) fallback.
 - Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
   adapter checkpoint `bc01c6b`.
@@ -1064,7 +1064,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   HOME/XDG, OpenCode 2.0.26 `serve`; tarball `opencode-cache-engine-0.7.1.tgz`
   from the checkpoint worktree; offline `npm install`; one local shim file;
   loader log line; adapter metrics-dir side effect.
-- Justifies: `docs/implementation-plan-v2.md` §2D.4 (Gate 1b) result and its
+- Justifies: `docs/plans/v0-v2-implementation-plan.md` §2D.4 (Gate 1b) result and its
   PARTIAL classification of the shim route.
 - Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
   adapter checkpoint `bc01c6b`.
@@ -1111,7 +1111,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   private HOME/XDG, OpenCode 2.0.26; tarball `opencode-cache-engine-0.7.1.tgz`
   from the checkpoint worktree; offline `npm install`; one local
   shim/counting-wrapper file; loader log; wrapper marker; mock request log.
-- Justifies: `docs/implementation-plan-v2.md` §2D.5/§2D.6 results and the plan's
+- Justifies: `docs/plans/v0-v2-implementation-plan.md` §2D.5/§2D.6 results and the plan's
   Gate 2/Gate 3 verdicts on the shim route.
 - Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
   adapter checkpoint `bc01c6b`.
@@ -1164,7 +1164,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   session, `prompt_cache_key`/`prompt_cache_options` serialization, model catalog
   `duo-chat-gpt-6-luna`). Read-only source inspection 2026-10-12; **no runtime
   executed**.
-- Justifies: `docs/implementation-plan-v2.md` §2D.7 Gate 4 criteria (corrected
+- Justifies: `docs/plans/v0-v2-implementation-plan.md` §2D.7 Gate 4 criteria (corrected
   wire fields + adapter-off/on controls) and the Gate 4 INCONCLUSIVE verdict.
 - Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
   adapter checkpoint `bc01c6b`.
@@ -1214,7 +1214,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   OpenCode 2.0.26; offline tarball; mock recording presence-only snake_case body
   fields and case-sensitive raw header names; ON adapter telemetry to
   `CACHE_ENGINE_METRICS_FILE`). No runtime in this documentation task.
-- Justifies: `docs/implementation-plan-v2.md` §2D.7 corrected Gate 4 outcomes;
+- Justifies: `docs/plans/v0-v2-implementation-plan.md` §2D.7 corrected Gate 4 outcomes;
   corrects `RF-OC-026`'s header interpretation.
 - Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
   adapter checkpoint `d5bd3ab`.
@@ -1260,7 +1260,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   embedded OpenCode 2.0.26 binary (`openaiApiType` selector, npm→SDK mapping,
   `prompt_cache_key`/`prompt_cache_options` serialization);
   `test/cache-engine.test.mjs` existing affinity unit test.
-- Justifies: `docs/implementation-plan-v2.md` §2D.7 finalized criteria; keeps
+- Justifies: `docs/plans/v0-v2-implementation-plan.md` §2D.7 finalized criteria; keeps
   Gate 4 **NOT PASS**.
 - Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
   adapter checkpoint `d5bd3ab`.
@@ -1322,7 +1322,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   request **path** + presence-only snake_case body fields + case-sensitive raw
   header names; adapter telemetry to `CACHE_ENGINE_METRICS_FILE`);
   `test/cache-engine.test.mjs`.
-- Justifies: `docs/implementation-plan-v2.md` §2D.7 route correction and Gate 4
+- Justifies: `docs/plans/v0-v2-implementation-plan.md` §2D.7 route correction and Gate 4
   outcomes; Gate 4 remains **NOT PASS**.
 - Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
   adapter checkpoint `d5bd3ab`.
@@ -1373,7 +1373,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   `function KI({provider,providerOptions,schema})`, and
   `var A=Le({user,reasoningEffort,textVerbosity,strictJsonSchema})`. Read-only
   inspection 2026-10-12; no runtime executed.
-- Justifies: `docs/implementation-plan-v2.md` §2D.7 corrected GPT criterion
+- Justifies: `docs/plans/v0-v2-implementation-plan.md` §2D.7 corrected GPT criterion
   (OpenAI/Azure route; drop `promptCacheOptions`; wire-level adapter-off/on).
 - Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
   adapter checkpoint `d5bd3ab`.
@@ -1420,7 +1420,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   `promptCacheKey`; OpenAI provider-options schema; wire serialization
   `prompt_cache_key`); prior isolated run evidence; `RF-OC-030`. Read-only
   inspection/analysis 2026-10-12.
-- Justifies: `docs/implementation-plan-v2.md` §2D.7 result and §2D.13
+- Justifies: `docs/plans/v0-v2-implementation-plan.md` §2D.7 result and §2D.13
   (Gate 4 closure / next phase).
 - Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
   adapter checkpoint `d5bd3ab`.
@@ -1462,7 +1462,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Sources: embedded OpenCode 2.0.26 binary (`@opencode/PluginHooks`
   `register`/`trigger`; `SessionModelRequest.prepare` `options` split). Read-only
   inspection 2026-10-12; no runtime executed.
-- Justifies: `docs/implementation-plan-v2.md` §2D.7 (forwarding boundary) and
+- Justifies: `docs/plans/v0-v2-implementation-plan.md` §2D.7 (forwarding boundary) and
   §2D.13.
 - Version context: OpenCode 2.0.26; adapter checkpoint `d5bd3ab`.
 - Re-verify when: OpenCode changes the plugin hook registry/dispatch or the
@@ -1502,7 +1502,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   `test/cache-engine.test.mjs` (V1 marker-bearing fixtures L688/L1136, edge cases
   L1195–1216); isolated offline wire capture 2026-10-13 (OpenCode 2.0.26, mock,
   netns). No provider requests; no live runtime.
-- Justifies: `docs/implementation-plan-v2.md` §2C (V2 preview compatibility note)
+- Justifies: `docs/plans/v0-v2-implementation-plan.md` §2C (V2 preview compatibility note)
   and `docs/cache-policy-inventory.md` (GLM/MiMo relocation note).
 - Version context: OpenCode 2.0.26; `@opencode/plugin`/`@opencode/client` 2.0.16;
   adapter checkpoint `2a00607`.
@@ -1541,7 +1541,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   `relocateRange`); `src/cache-engine-v2.mjs` (`onContext`); `test/cache-engine.test.mjs`
   (`core: relocateVolatileEnvBlock inserts exactly one separator newline …`).
 - Justifies: the corrected relocation comments; the C1 regression test; the plan's
-  shared-transform description (`docs/implementation-plan-v2.md`).
+  shared-transform description (`docs/plans/v0-v2-implementation-plan.md`).
 - Version context: OpenCode 2.0.26; adapter checkpoint `af154f0`.
 - Re-verify when: the relocation helper's newline/separator handling changes.
 - Superseded by: null
@@ -1582,7 +1582,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Sources: offline captures for `mock/synthetic` / `mock/glm-5.3-flash` /
   `mock/mimo-v2.6-flash` via `test/harness/capture`; `src/cache-engine-v2.mjs`
   (`onContext`); `src/cache-engine-core.mjs` (`relocateVolatileEnvBlock`);
-  `docs/phase2-date-relocation-hook-shape.md`.
+  `docs/phases/phase2-date-relocation.md`.
 - Justifies: the Phase 2 date-relocation design and P2-T1's go/no-go.
 - Version context: OpenCode 2.0.26; `@opencode/plugin` 2.0.16; adapter at v1.1.0.
 - Re-verify when: OpenCode changes the number or boundaries of the `event.system`
@@ -1620,7 +1620,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   `bwrap --unshare-net`; no provider requests)
 - Sources: `test/harness/capture/run.sh` + `verify-date-relocation.mjs` +
   `date-relocation.test.sh`; `src/cache-engine-v2.mjs` (`onContext`);
-  `docs/phase2-date-relocation-hook-shape.md` (P2-T3 section).
+  `docs/phases/phase2-date-relocation.md` (P2-T3 section).
 - Justifies: P2-T3 gate G3 (wire) and the Phase 2 report.
 - Version context: OpenCode 2.0.26; `@opencode/plugin` 2.0.16; adapter at v1.1.1.
 - Re-verify when: OpenCode changes how `event.system` parts are serialized, or the
@@ -1652,7 +1652,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Sources: `test/harness/capture/run.sh` (shim pattern); `~/.config/opencode/opencode.jsonc`
   (pinned providers); OpenCode config schema `provider.<id>.options.baseURL`;
   `~/.local/share/opencode/opencode.db`.
-- Justifies: the P2-T4 measurement machinery (`docs/phase2-p2t4-provider-ab-report.md`).
+- Justifies: the P2-T4 measurement machinery (`docs/phases/phase2-date-relocation.md`).
 - Version context: OpenCode 2.0.26; `@opencode/plugin` 2.0.16.
 - Re-verify when: OpenCode changes plugin discovery, the provider-options schema, or
   the headless usage-events behavior.
@@ -1684,7 +1684,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
     "Near AI"); those numbers are invalid for the pinned-route question.
 - Evidence: [O] with a provider-measured component (real OpenRouter requests;
   authorized; small spend; credentials used by OpenCode, never read or logged)
-- Sources: local P2-T4 experiment (`/tmp/opencode/t4*`); `docs/phase2-p2t4-provider-ab-report.md`.
+- Sources: local P2-T4 experiment (`/tmp/opencode/t4*`); `docs/phases/phase2-date-relocation.md`.
 - Justifies: the P2-T4 verdict and the P2-T5 decision (keep experimental).
 - Version context: OpenRouter, `z-ai/glm-5.3-flash` and `xiaomi/mimo-v2.6-flash`;
   OpenCode 2.0.26.
@@ -1721,7 +1721,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
     message) — `model`, `tools`, and the system message stay byte-identical.
 - Evidence: [O] (offline capture, OpenCode 2.0.26, mock provider + `bwrap --unshare-net`;
   harness `OC_CAPTURE_TURNS=3 OC_CAPTURE_CONTINUE=1`).
-- Sources: `docs/phase3-p3t1-capture-groundwork.md` (P3-T1); the Phase 1 capture harness.
+- Sources: `docs/phases/phase3-other-volatility.md` (P3-T1); the Phase 1 capture harness.
 - Justifies: P3-T2..P3-T5 volatility ranking, and the caveat that system-prompt drift is
   invisible to the current `messages`-based diff (P3-T4 must compare `messages[0].content`
   explicitly).
@@ -1747,7 +1747,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
     repeated runs (>=3) — i.e. deterministic for a fixed tool set.
 - Evidence: [O] (offline capture, OpenCode 2.0.26; `test/fixtures/volatility-shapes.mjs`
   asserts the sorted-core + appended-`execute` invariant).
-- Sources: `docs/phase3-p3t1-capture-groundwork.md` (P3-T1); `RF-OC-040`.
+- Sources: `docs/phases/phase3-other-volatility.md` (P3-T1); `RF-OC-040`.
 - Justifies: P3-T2 (tool-ordering investigation) has a concrete observed order baseline
   and a candidate source of avoidable order instability (a separately-registered tool
   appended after the sort).
@@ -1779,7 +1779,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   - `toolFingerprint` (order-insensitive) and `toolWireFingerprint` (order-sensitive) are
     equal and stable across every captured main request for a fixed tool set.
 - Evidence: [O] (offline capture, OpenCode 2.0.26; harness + a `tools:{}` project config).
-- Sources: `docs/phase3-p3t2-tool-ordering.md` (P3-T2); `RF-OC-040`/`RF-OC-041`.
+- Sources: `docs/phases/phase3-other-volatility.md` (P3-T2); `RF-OC-040`/`RF-OC-041`.
 - Justifies: the P3-T2 ranked entry (tool ordering = no-op), and supports **not** adding
   tool sorting/normalization.
 - Version context: OpenCode 2.0.26.
@@ -1808,7 +1808,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
     (`RF-OC-040` notes).
 - Evidence: [O] (offline capture; minimal local stdio MCP server; `--print-logs` shows
   `mcp connected`).
-- Sources: `docs/phase3-p3t3-startup-mcp.md` (P3-T3).
+- Sources: `docs/phases/phase3-other-volatility.md` (P3-T3).
 - Justifies: the P3-T3 ranked entry (no observed avoidable startup variance; watch item).
 - Version context: OpenCode 2.0.26.
 - Re-verify when: OpenCode changes MCP tool admission/registration, or a same-process
@@ -1862,7 +1862,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
     from `snapshot.definitions`), not the full registry: Code-Mode/MCP tools are absent
     from it (they live in the `execute` catalog).
 - Evidence: [D] (first-party v2.0.26 source) + [O] (our offline capture + log timing).
-- Sources: `docs/phase3-p3t3-startup-mcp.md`; librarian source packet (session
+- Sources: `docs/phases/phase3-other-volatility.md`; librarian source packet (session
   `ses_ec437c21effeSjcSIJA0cO7kDa`); OpenCode `v2.0.26` source `packages/{core,schema,cli,plugin}/**`;
   docs `opencode.ai/docs/{mcp-servers,agents,tools,config}`.
 - Justifies: the P3-T3 ranked entry (startup/MCP readiness = real, structurally-verified
@@ -1897,7 +1897,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   - `lintSystemVolatility` flags exactly `VOL-CWD-PATH` and `VOL-DATE` (both `info`) on
     these systems.
 - Evidence: [O] (offline captures; mock provider + disposable projects).
-- Sources: `docs/phase3-p3t4-dynamic-instructions.md` (P3-T4).
+- Sources: `docs/phases/phase3-other-volatility.md` (P3-T4).
 - Justifies: the P3-T4 ranked entry (no-op; project instructions are intentional and must
   not be frozen); the explicit `messages[0].content` comparison.
 - Version context: OpenCode 2.0.26.
@@ -1924,7 +1924,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
     multi-turn tool use), GPT (`reasoning.effort` affects prefix matching), Kimi
     (`reasoning_effort` switching invalidates prefix hits).
 - Evidence: [O] (offline capture) + [D] (inventory/docs).
-- Sources: `docs/phase3-p3t5-reasoning.md`; `docs/cache-policy-inventory.md`.
+- Sources: `docs/phases/phase3-other-volatility.md`; `docs/cache-policy-inventory.md`.
 - Justifies: the P3-T5 ranked entry (no-op / insufficient evidence offline).
 - Version context: OpenCode 2.0.26.
 - Re-verify when: OpenCode or a provider changes how reasoning is carried in requests.
@@ -1954,7 +1954,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
     `promptCacheOptions`) and `RF-OC-031` (OpenCode pre-populates the OpenAI/Azure
     `promptCacheKey`).
 - Evidence: [O] (offline hook probe + wire capture) + [D] (source: `RF-OC-030`).
-- Sources: `docs/phase4-p4t2-gpt-cache-options.md` (P4-T2); `RF-OC-030` / `RF-OC-031`.
+- Sources: `docs/phases/phase4-provider-policy-verification.md` (P4-T2); `RF-OC-030` / `RF-OC-031`.
 - Justifies: the P4-T2 verdict (GPT cache-option policy **not wire-attributed**; Gate 4 NOT
   PASS); the P4-T1 inventory row A1.
 - Version context: OpenCode 2.0.26.
@@ -1983,7 +1983,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   - The adapter's derived value (`mimo-ses-<shorthash(sessionID)>`, from `mimoSessionIdFor`)
     was **never** observed on the wire.
 - Evidence: [O] (offline wire capture + adapter telemetry).
-- Sources: `docs/phase4-p4t3-openrouter-affinity.md` (P4-T3); `RF-OR-006`.
+- Sources: `docs/phases/phase4-provider-policy-verification.md` (P4-T3); `RF-OR-006`.
 - Justifies: the P4-T3 verdict (OpenRouter affinity **not wire-attributed** on the tested
   route); the P4-T1 inventory row A6.
 - Version context: OpenCode 2.0.26.
@@ -2241,7 +2241,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Evidence: [O] (real OpenRouter requests, 2026-10-14; OpenCode 2.0.26; loopback
   capture proxy; no credentials logged)
 - Sources: local P2-T4 experiment (`/tmp/opencode/t4*`);
-  `docs/phase2-p2t4-provider-ab-report.md`; OpenRouter "Provider Routing" docs
+  `docs/phases/phase2-date-relocation.md`; OpenRouter "Provider Routing" docs
   (`openrouter.ai/docs/guides/routing/provider-selection`).
 - Justifies: interpreting OpenRouter activity logs and the P2-T4 routing setup.
 - Version context: OpenRouter; OpenCode 2.0.26.

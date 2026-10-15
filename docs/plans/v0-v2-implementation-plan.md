@@ -541,7 +541,7 @@ commitment); and explicit exclusions.
      mutations. Mark every V2 API name *unverified* until WP4.
   6. Add conformance tests for observable contracts (WP3); where a contract is
      currently implicit, prefer documenting it over adding code.
-- **Files expected to change (provisional):** `docs/implementation-plan-v2.md`
+- **Files expected to change (provisional):** `docs/plans/v0-v2-implementation-plan.md`
   and/or a new `docs/architecture-core-contract.md`; `test/cache-engine.test.mjs`.
   **No source change is expected**; a source change is justified only if the audit
   finds a real shared behavior the current exports cannot express.
@@ -594,7 +594,7 @@ commitment); and explicit exclusions.
      pruned/reverted cursors, compacted histories, session isolation.
   6. Only if the audit proves the existing helpers cannot express a required
      contract, specify (do not implement) a minimal new abstraction and its tests.
-- **Files expected to change (provisional):** `docs/implementation-plan-v2.md`
+- **Files expected to change (provisional):** `docs/plans/v0-v2-implementation-plan.md`
   and/or a session-state spec doc; `test/cache-engine.test.mjs`. Source changes
   only if the audit proves necessity.
 - **Dependencies / sequencing:** after WP0; may proceed in parallel with WP1; feeds
@@ -662,7 +662,7 @@ commitment); and explicit exclusions.
      a live runtime.
   6. If the runtime contract cannot be verified, document the blocker and defer
      the affected implementation.
-- **Files expected to change (provisional):** `docs/implementation-plan-v2.md`
+- **Files expected to change (provisional):** `docs/plans/v0-v2-implementation-plan.md`
   and/or a V2 contract doc; test fixtures/mocks.
 - **Dependencies / sequencing:** needs WP1/WP2 outputs; must not touch
   `feature/v2-adapter`.
@@ -683,7 +683,7 @@ commitment); and explicit exclusions.
 
 - **Objective / rationale:** Keep docs and packaging consistent, and make release a
   separate, authorized step.
-- **Current-state evidence / inspect:** `docs/implementation-plan-v2.md`,
+- **Current-state evidence / inspect:** `docs/plans/v0-v2-implementation-plan.md`,
   `AGENTS.md`, `README.md`, `package.json` (`files` = `src/`, README, LICENSE;
   exports `./server`, `./tui`).
 - **Ordered steps:** update this plan and any contract/session docs; confirm
@@ -1004,7 +1004,7 @@ a **compatibility finding for the captured runtime/prompt shape** (not universal
 and the provider **cache benefit remains unverified**. The marker's safety
 rationale is preserved (it scopes relocation to OpenCode's own `<env>` preamble);
 removing it or adding a broad `<env>`-only trigger is **not currently justified**.
-See `RF-OC-033`. No implementation behavior is changed by this note. **Superseded (2026-10-14, P2-T1):** the *reason* stated here (absent START marker) is stale — the helper now accepts the structural 2.0.26 shape, and the wire no-op is the **part boundary** (`<env>` is terminal in the eligible system part); see `RF-OC-035` and `docs/phase2-date-relocation-hook-shape.md`.
+See `RF-OC-033`. No implementation behavior is changed by this note. **Superseded (2026-10-14, P2-T1):** the *reason* stated here (absent START marker) is stale — the helper now accepts the structural 2.0.26 shape, and the wire no-op is the **part boundary** (`<env>` is terminal in the eligible system part); see `RF-OC-035` and `docs/phases/phase2-date-relocation.md`.
 
 **Status: preview.** The adapter imports and passes offline contract tests
 (including a declaration-level `SessionContext` contract check and a V1-adapter
