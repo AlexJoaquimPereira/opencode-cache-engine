@@ -19,7 +19,7 @@ Evidence labels: *Observed* / *Structurally verified* / *Offline-verified*.
 |---|---|
 | Cause | Startup / MCP readiness (first request after process start vs subsequent) |
 | Status | **Observed + structurally verified → a real race, but no safe correction now (no-op / watch item)** |
-| Frequency | MCP connects **after** the first request is assembled (~403 ms in our capture) on every process start (0/≥5 probes put an MCP tool on the wire) |
+| Frequency | MCP connects around/after the request's tool snapshot (~0.6 s after spawn; log `http.span=403`) on every process start (0/≥5 probes put an MCP tool on the wire) |
 | Expected impact | a first request that omits MCP-provided tools can differ from later requests (a prefix invalidator) — **mechanism confirmed**, wire effect not directly observed (one-shot `run`) |
 | Risk of intervention | high — blocking on MCP readiness adds latency/hang risk; plan §13 defers "Blocking on MCP readiness" |
 | Next experiment | a **same-process second request** (tool-loop) to wire-observe a pending→connected transition; confirm whether a `codemode:false` tool reaches the wire |
@@ -35,8 +35,8 @@ Evidence labels: *Observed* / *Structurally verified* / *Offline-verified*.
   `tools: {"*": true}`, under a per-agent `agents.<name>.tools` enable (both are **v1
   legacy** keys here), and even with `codemode: false`. The cause is now explained: (a)
   MCP tools default to **Code Mode** (folded into `execute`, absent from the `tools`
-  array), and (b) the first request **races** the forked MCP connect (`mcp connected` at
-  ~403 ms, *after* the request was answered). See `RF-OC-044` (which supersedes
+  array), and (b) the first request **races** the forked MCP connect (`mcp connected`
+  ≈0.6 s after spawn, around/after the tool snapshot). See `RF-OC-044` (which supersedes
   `RF-OC-043`).
 - **Q3 — hook visibility.** The V2 `context` hook payload **includes `tools`**, and it
   **is the on-wire list** (`direct` tools + `execute`), not the full registry — Code-Mode

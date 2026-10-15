@@ -63,11 +63,14 @@ harness's own synthetic prompt ever appears) and are never committed.
   `messages` (conversation growth); `model`, `tools`, and the system message are
   byte-identical (first differing canonical byte ≈ immediately after the system
   message).
-- **Q4 — startup tool readiness.** No pending/connected/missing tool difference was
-  observable on the local warm route (tools byte-identical across all requests).
-  Whether the plugin hook can *see* readiness is out of P3-T1's scope (P3-T3).
-- **Q5 — determinism.** Three equivalent turns in one capture were **byte-identical**
-  (and matched a second, independent capture run) → deterministic ≥3 repeats.
+- **Q4 — startup tool readiness.** With no MCP configured, no pending/connected/missing
+  tool difference was observable on the local warm route (tools byte-identical across all
+  requests). The MCP case was investigated in P3-T3 (`RF-OC-044`): a connected MCP server's
+  tool never entered the request on this route (Code-Mode default + a readiness race).
+- **Q5 — determinism.** Three equivalent turns in one capture were **byte-identical** →
+  deterministic ≥3 repeats; a second independent capture reproduced the same structural
+  result (same kinds/tools — the `<env>` path differs by capture root, so full bodies are
+  **not** cross-root byte-equal).
 - **Q6 — non-mutation.** The V2 adapter shim is loaded during capture and the
   requests are byte-identical across repeats; the Phase 1 §3C "diagnostics-only
   leaves the serialized request byte-identical" threshold is met by the existing
