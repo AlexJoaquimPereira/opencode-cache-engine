@@ -1872,6 +1872,33 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   timing-observed, not wire-observed. Whether a `codemode:false` tool reaches the wire was
   not confirmed offline (the first request raced the connect).
 
+### RF-OC-045 — OpenCode 2.0.26 injects a project instruction file (`AGENTS.md`) into the system prompt as `<absolute path>\n<contents>` immediately before the daily date line; the system is otherwise byte-stable within a session and differs across project roots only in the `<env>` block
+
+- Status: current
+- Verified: 2026-10-15
+- Area: opencode-runtime
+- Fact:
+  - A project-level `AGENTS.md` is injected into the serialized system content
+    (`messages[0].content`) as `<absolute path>\n<contents>`, positioned immediately
+    **before** the daily date line (`Today's date: …`). Observed in both a git repo and a
+    **non-git** directory.
+  - Within a capture (equivalent turns + a session-continue turn) the system content is
+    **byte-identical**.
+  - Across two project roots the system differs **only** inside the `<env>` block
+    (`Working directory:` / `Workspace root folder:`); no other region varies.
+  - `lintSystemVolatility` flags exactly `VOL-CWD-PATH` and `VOL-DATE` (both `info`) on
+    these systems.
+- Evidence: [O] (offline captures; mock provider + disposable projects).
+- Sources: `docs/phase3-p3t4-dynamic-instructions.md` (P3-T4).
+- Justifies: the P3-T4 ranked entry (no-op; project instructions are intentional and must
+  not be frozen); the explicit `messages[0].content` comparison.
+- Version context: OpenCode 2.0.26.
+- Re-verify when: OpenCode changes instruction loading or system assembly.
+- Superseded by: null
+- Notes: In one probe, an `AGENTS.md` created *after* the project was first opened was not
+  reflected in a later run (possible per-workspace instruction cache or watcher timing;
+  observed/inferred, not verified).
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
