@@ -68,16 +68,15 @@ breakpoint on a verified route) · **experimental** (default off until evidence 
 | A1 GPT cache metadata | assigned in-hook (verified) | **NOT attributed — verified (P4-T2)**: `prompt_cache_key` is OpenCode's session-derived value (present OFF==ON); `prompt_cache_options` is dropped by every inspected schema (`RF-OC-047`) | `[O]`/`[D]` | closed (not wire-effective) |
 | A2/A4 `<env>` relocation | tested (unit + corpus) | structural; not a provider-benefit claim | `[O]` | ok |
 | A3/A5 date relocation | tested (no-op conditions) | **wire-verified** (G3, `RF-OC-036`) | `[O]` | promotion still open (Phase 2) |
-| A6 OpenRouter affinity | logic tested (fake client) | **not proven** that OpenCode's adapter sends the header upstream | `[O]`/`[U]` | **P4-T3** |
+| A6 OpenRouter affinity | logic verified (unit + telemetry) | **NOT attributed — verified (P4-T3)**: OpenCode already sets `x-session-id`; the adapter preserves it (`headerSource:"preexisting"`) and never attaches its own (`RF-OC-048`) | `[O]` | closed (not wire-effective) |
 | B1..B9 passive | n/a (no mutation) | must stay passive | `[D]`/`[O]` | confirm none mutate |
 
 ## 6. Gaps / inconsistencies found (input to P4-T2..T5)
 
 1. **A1 wire carriage — closed by P4-T2:** the adapter assigns the fields, but there is **no
    attributable wire effect** on the tested live route (`RF-OC-047`).
-2. **A6 header attachment is unproven** end-to-end; the affinity tests use a fake client.
-   The harness mock records `x-session-id` **presence**, so P4-T3 can verify wire attachment
-   offline on the `openrouter` route.
+2. **A6 header attachment — closed by P4-T3:** the wire header is OpenCode's native
+   `x-session-id`, not the adapter's (`RF-OC-048`).
 3. **The date relocation (A3/A5) is a policy flag, not a registered `OVERLAYS` entry** — it
    shares the system-transform hook. Recorded so the inventory is complete.
 4. **V2 parity:** V2 does not port `detectReasoningIssues`, tool fingerprints, or

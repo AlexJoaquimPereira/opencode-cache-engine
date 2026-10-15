@@ -1963,6 +1963,34 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   (`<root>:compact`) — a separate agent kind, not exercised offline and not implemented in
   the V2 adapter. No adapter defect is claimed.
 
+### RF-OC-048 — OpenCode sets `x-session-id = <sessionID>` natively on requests (openai-compatible route), so CacheEngine's OpenRouter affinity header is not wire-attributable; the adapter preserves the pre-existing header (`headerSource:"preexisting"`)
+
+- Status: current
+- Verified: 2026-10-15
+- Area: opencode-runtime
+- Fact:
+  - On the offline openai-compatible route (`@ai-sdk/openai-compatible` → loopback mock),
+    every request carries `x-session-id: <sessionID>` (a `ses_…` value) — present **with the
+    CacheEngine adapter disabled** (`enabled:false`) and on a **neutral** model
+    (`mock/synthetic`). So OpenCode sets the header natively, independent of any plugin.
+  - The CacheEngine affinity hook still runs and classifies correctly: telemetry
+    `reason:"openrouter_affinity_eligible", eligible:true, provider:"openrouter",
+    headerPresent:true, headerAttached:false, headerSource:"preexisting"` — it sees the
+    existing header and **does not attach** its own.
+  - The adapter's derived value (`mimo-ses-<shorthash(sessionID)>`, from `mimoSessionIdFor`)
+    was **never** observed on the wire.
+- Evidence: [O] (offline wire capture + adapter telemetry).
+- Sources: `docs/phase4-p4t3-openrouter-affinity.md` (P4-T3); `RF-OR-006`.
+- Justifies: the P4-T3 verdict (OpenRouter affinity **not wire-attributed** on the tested
+  route); the P4-T1 inventory row A6.
+- Version context: OpenCode 2.0.26.
+- Re-verify when: OpenCode changes request headers / session-affinity handling, or a route is
+  found where it does not set `x-session-id`.
+- Superseded by: null
+- Notes: Scope is the tested openai-compatible route; whether OpenCode sets `x-session-id` on
+  other routes was not established. The adapter logic (eligibility + preservation) is
+  unit-verified; only the wire attribution is nil.
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
