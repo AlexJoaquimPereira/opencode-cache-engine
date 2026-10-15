@@ -23,12 +23,12 @@ breakpoint on a verified route) · **experimental** (default off until evidence 
 
 | # | Policy | Class | Hook / mechanism | Mutation (exact) | Eligible route | No-op / preconditions | Disable path |
 |---|---|---|---|---|---|---|---|
-| A1 | **GPT-5.6+ cache metadata** (`gpt56`) | **transport-specific** | V1 `chat.params` / V2 `context` (`options`) | add **missing** `promptCacheKey` + `promptCacheOptions` (default `implicit`, `30m`); preserves runtime values | OpenAI/Azure-compatible (`requiresOpenAIish`); GPT-5.6-and-later boundary | no-op if `options` absent/malformed; never overwrites an existing key; compaction uses the `<root>:compact` namespace | `policies.gpt56.enabled=false`; `policies.gpt56.promptCacheKey=false` |
+| A1 | **GPT-5.6+ cache metadata** (`gpt56`) | **transport-specific** (**not wire-effective** on tested routes) | V1 `chat.params` / V2 `context` (`options`) | add **missing** `promptCacheKey` + `promptCacheOptions` (default `implicit`, `30m`) on **live** requests (preserve an existing key); **on a V1 compaction request with `compactionCacheIsolation` on (default) it overwrites the key with `<root>:compact`** (V1-only; V2 has no such branch) | OpenAI/Azure-compatible (`requiresOpenAIish`); GPT-5.6-and-later boundary | no-op if `options` absent/malformed | `policies.gpt56.enabled=false` (**full**); `policies.gpt56.promptCacheKey=false` (**key only** — `promptCacheOptions` is still injected) |
 | A2 | **GLM-5.3 `<env>` relocation** (`glm53`) | **structural** | `experimental.chat.system.transform` | relocate the identifiable `<env>` block to the system tail (content-preserving) | GLM-5.3 family (overlay **not** inherited by `glm-5.3-plus`) | exactly one eligible text part, else **no-op**; `<env>` marker guard intact | `policies.glm53.enabled/stabilizeSystem=false` |
 | A3 | **GLM-5.3 daily-date relocation** (`glm53`) | **experimental** (default **off**) | same system transform | relocate the standalone `Today's date: …` line to the system tail | GLM-5.3 | missing/duplicate/malformed/ambiguous ⇒ **no-op**; never pins the date | `policies.glm53.stabilizeDate=false` (default) |
 | A4 | **MiMo `<env>` relocation** (`mimo26`) | **structural** | system transform | as A2 | MiMo-V2.6 Flash/Pro (overlay **not** inherited by `-plus`/Ultraspeed) | as A2 | `policies.mimo26.enabled/stabilizeSystem=false` |
 | A5 | **MiMo daily-date relocation** (`mimo26`) | **experimental** (default **off**) | system transform | as A3 | MiMo-V2.6 | as A3 | `policies.mimo26.stabilizeDate=false` |
-| A6 | **OpenRouter session affinity** (GLM-5.3 + MiMo-V2.6) | **transport-specific** | V1 `chat.headers` / V2 `model.request` | add deterministic `x-session-id` **only** when the actual `providerID` is exactly `openrouter`; preserves a case-insensitive pre-existing header | OpenRouter transport only | not `openrouter` ⇒ never add; header present ⇒ preserve | inherent (only fires for those families + `openrouter`); `mimo26.stickySession` gates only the telemetry id, not injection |
+| A6 | **OpenRouter session affinity** (GLM-5.3 + MiMo-V2.6) | **transport-specific** | V1 `chat.headers` / V2 `model.request` | add deterministic `x-session-id` **only** when the actual `providerID` is exactly `openrouter`; preserves a case-insensitive pre-existing header | OpenRouter transport only — **not wire-effective** (harness-owned; `RF-OC-048`) | not `openrouter` ⇒ never add; header present ⇒ preserve | inherent (only fires for those families + `openrouter`); `mimo26.stickySession` gates only the telemetry id, not injection |
 
 ## 2. Passive policies (classification + accounting only; **no** request mutation)
 
@@ -83,6 +83,14 @@ breakpoint on a verified route) · **experimental** (default off until evidence 
    `lintSystemVolatility(tools)`; V1-only diagnostics are noted to avoid claiming V2 parity.
 5. **Operations:** every mutation-bearing policy already declares a disable path + no-op
    condition (`O-9`) — none lacks one.
+6. **V2 field-name npm branch is dead code:** V2 calls
+   `gptCacheOptionFieldNames({ providerID, npm: undefined })`, so the npm-based snake_case
+   branch is V1-only; V2 selects snake_case only via `providerID === "openrouter"`. Latent —
+   no evidenced route differs (no change made).
+7. **`PASSIVE_FAMILIES` means "zero mutation capabilities".** The `glm-5.3-plus` /
+   `mimo-v2.6-plus` / `mimo-v2.6-pro-ultraspeed` entries share the `glm53` / `mimo26` family
+   names and carry `openRouterAffinity` but **no** `envRelocation`; they are correctly absent
+   from the passive list, and P4-T4 test 2 does not iterate them.
 
 ---
 

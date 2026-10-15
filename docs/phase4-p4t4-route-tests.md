@@ -35,7 +35,7 @@ silently regress (plan §8 acceptance).
 | Every active policy has route-specific tests | fixture rows + tests 1–3 |
 | **Stripped/unsupported fields are not reported as wire success** | fixture `wire` dispositions (`stripped`/`harness-owned`/`unsupported`) + the assignment-only assertions (no test claims wire success) |
 | Passive policies remain passive | test 2 (no mutation capability per family) + test 3 (passive mutation-free) |
-| Identity and prefix stability remain distinct | pre-existing policy-matching tests + the fixture's separate `preserves` field |
+| Identity and prefix stability remain distinct | the P4-T4 test asserts every mutation policy documents a non-empty `preserves` value, separately from policy matching |
 | No promotion on attempted mutation alone | the fixture records disposition per route; the tests pin **preservation**, not injection, on the tested routes |
 
 ## Not covered (documented, not silently assumed)
@@ -46,12 +46,13 @@ silently regress (plan §8 acceptance).
   preservation, no-op) which is what can regress locally.
 - **Provider-supported semantics / measured outcome** (does the cache actually hit) is out of
   scope offline.
-- The V1 `chat.headers`/`chat.params` paths are covered indirectly (pure helpers + existing
-  V1 tests); the new hook probe drives the **V2** adapter.
+- The V1 `chat.headers`/`chat.params` paths are covered **at the logic level only** (pure
+  helpers + existing V1 tests); the new hook probe drives the **V2** adapter, and there is
+  no V1 wire capture.
 
 ## Result
 
-`npm test` → **373/0** (3 new tests). No runtime source changed. The route-specific
+`npm test` → **373/0 at time of writing** (3 new tests). No runtime source changed. The route-specific
 dispositions and the negative (not-wire-effective) results are now pinned in-repo.
 
 ## Integrity

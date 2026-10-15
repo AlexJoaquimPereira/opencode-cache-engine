@@ -14,7 +14,7 @@ route disposition, and state the Phase-4 outcome.
 | Every **active** policy has **route-specific tests** | **MET** | P4-T4 fixture rows + 3 tests; per-policy/route dispositions pinned |
 | **Stripped / unsupported** fields are **not** reported as wire success | **MET** | the fixture records `stripped`/`harness-owned`/`unsupported` per route; tests assert **preservation/no-op**, never a wire-success claim |
 | **Passive** policies remain passive | **MET** | P4-T4 test 2 (no mutation capability per passive family) + test 3 (mutation-free) |
-| **Identity** and **prefix stability** remain distinct | **MET** | policy-matching tests vs the fixture's separate `preserves` field; no conflation |
+| **Identity** and **prefix stability** remain distinct | **MET** | the P4-T4 test asserts every mutation policy documents a non-empty `preserves` value, separately from policy matching |
 | No policy **promoted** on attempted mutation alone | **MET** | **no promotion** (see below); two overlays explicitly recorded as **not wire-effective** |
 
 ## Per-policy disposition (Phase-4 outcome)
@@ -25,12 +25,12 @@ route disposition, and state the Phase-4 outcome.
 |---|---|---|---|
 | **GPT-5.6 cache options** (`gpt56`) | `openai-compatible` | **stripped** (`RF-OC-030`) | **not wire-effective** |
 | | `openai`/`azure` (Responses) | key **harness-owned**; options **unsupported** (`RF-OC-047`) | **not wire-effective** |
-| | `openrouter` (`openai/*` slug) | options **unsupported**; key harness-owned | **not wire-effective** |
+| | `openrouter` (`openai/*` slug) | options **unknown** (no inspected schema; not directly inspected); key harness-owned | **not wire-effective** |
 | **GLM-5.3 `<env>` relocation** | `zai.glm-5.3` | **structural** (content-preserving) | unchanged (shipped) |
 | **GLM-5.3 date relocation** | `zai.glm-5.3` | **structural**, **experimental (default off)** | unchanged (Phase 2) |
 | **MiMo `<env>` relocation** | `xiaomi.mimo-v2.6` | **structural** | unchanged (shipped) |
 | **MiMo date relocation** | `xiaomi.mimo-v2.6` | **structural**, **experimental (default off)** | unchanged (Phase 2) |
-| **OpenRouter affinity** (`x-session-id`) | `openrouter` + GLM-5.3/MiMo-V2.6 | **harness-owned** — OpenCode sets the header; adapter preserves (`RF-OC-048`) | **not wire-effective** |
+| **OpenRouter affinity** (`x-session-id`) | `openrouter` + GLM-5.3/MiMo-V2.6 | **harness-owned** — on the tested openai-compatible route (capture-only) the harness sets the header; adapter preserves (`RF-OC-048`) | **not wire-effective** |
 
 ### Passive (classification + accounting only)
 
@@ -41,8 +41,9 @@ route disposition, and state the Phase-4 outcome.
 
 **NONE.** No policy is newly enabled or promoted. Phase 4 made **no runtime code change**:
 its outcome is that two *transport-specific* overlays (GPT cache options, OpenRouter affinity)
-are **not wire-effective on the tested routes** — the OpenCode harness already provides the
-session affinity (the GPT `prompt_cache_key` and the OpenRouter `x-session-id`), and the
+are **not wire-effective on the tested routes** — the harness already provides the session
+affinity there (the GPT `prompt_cache_key` and the OpenRouter `x-session-id`, both
+capture-observed), and the
 provider-options schemas do not carry the adapter's fields. Per plan §8, "enabled" is **not**
 claimed from assignment.
 

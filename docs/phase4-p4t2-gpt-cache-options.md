@@ -47,8 +47,11 @@ sessions); it is **present regardless of the adapter**. The adapter's distinct f
 **The GPT-5.6 cache-option policy is NOT wire-attributed on the tested live route.** Its
 request mutation has **no observable wire effect**:
 - `promptCacheKey`: OpenCode pre-populates the key on the OpenAI/Azure route (`RF-OC-031`),
-  and the adapter deliberately **preserves** it (write only when absent; and with
-  `cacheRootKey` default `false` the desired value equals the session id anyway).
+  and the adapter deliberately **preserves** it on **live** requests (write only when
+  absent; with `cacheRootKey` default `false` the desired value equals the session id
+  anyway). **V1 exception:** on a **compaction** request with `compactionCacheIsolation` on
+  (default), V1 **overwrites** the key with `<root>:compact` — a V1-only branch (V2 has
+  none), not exercised offline.
 - `promptCacheOptions`: **no inspected schema carries it** — dropped on both the
   openai-compatible and the OpenAI/Responses routes.
 
@@ -56,11 +59,11 @@ request mutation has **no observable wire effect**:
 
 ## Residual / next
 
-- The **only** potential attributable GPT mutation is V1 **compaction isolation**
-  (`compactionCacheIsolation`, `<root>:compact` for compaction requests) — a *different*
-  agent kind, **not exercised offline**, and **not implemented in the V2 adapter**
-  (V2 has no compaction branch). This is a candidate for a future, separately-authorized
-  experiment; it does not change the live-route verdict.
+- The **only** potential attributable GPT mutation is V1 **compaction isolation**: for a
+  compaction request with `compactionCacheIsolation` on, V1 **overwrites** the key with
+  `<root>:compact` (an *attributable* change); V2 has **no** compaction branch and always
+  preserves. Not exercised offline (a separate agent kind). Candidate for a future,
+  separately-authorized experiment; it does not change the live-route verdict.
 - A genuinely discriminating measurement still requires a route where OpenCode does **not**
   pre-populate `promptCacheKey` **and** a provider-options schema that accepts
   `promptCacheOptions` (none found) — see `RF-OC-031`.

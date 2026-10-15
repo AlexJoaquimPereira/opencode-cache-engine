@@ -51,11 +51,13 @@ adapter's own value shape `mimo-ses-…` was **never** observed.)
 
 ## Verdict
 
-**The OpenRouter affinity header is NOT wire-attributable on the tested route.** OpenCode
-already sets `x-session-id = <sessionID>` natively, so the adapter's eligibility-gated
-injection has **no observable wire effect** (it preserves the pre-existing header and stays
-silent). **No adapter defect is claimed** — the logic is correct; the harness simply
-provides the header itself.
+**The OpenRouter affinity header is NOT wire-attributable on the tested route.** On the
+**tested openai-compatible route** (offline capture only; **no source confirmation**),
+`x-session-id = <sessionID>` is set by the **harness**, not the adapter, so the adapter's
+eligibility-gated injection has **no observable wire effect** (it preserves the pre-existing
+header and stays silent). **No adapter defect is claimed** — the logic is correct; the
+harness simply provides the header itself. Scope: the V1 `chat.headers` path was **not**
+wire-captured (logic only).
 
 > This mirrors P4-T2: on the routes we can test, **OpenCode's harness already supplies the
 > session affinity** (the GPT `prompt_cache_key` and the OpenRouter `x-session-id`). The
