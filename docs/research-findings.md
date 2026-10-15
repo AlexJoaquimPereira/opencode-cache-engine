@@ -1755,8 +1755,9 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Re-verify when: OpenCode changes tool registration or tool-list ordering.
 - Superseded by: null
 - Notes: `toolWireFingerprint` is order-sensitive; this entry is the observed order for
-  the Chat Completions route with the default tool set. Whether the appended `execute`
-  can reorder when other tools are added is open (P3-T2).
+  the Chat Completions route with the default tool set. P3-T2 (see `RF-OC-042`) then showed
+  that changing the tool set keeps the core sorted and `execute` last; only one non-core
+  appended tool was observable.
 
 ### RF-OC-042 — OpenCode 2.0.26 tool definitions are static (no cwd/path interpolation; byte-identical across project roots), and the tool list is re-sorted when the set changes, with `execute` appended last
 
@@ -1773,7 +1774,8 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   - Disabling built-in tools via a project config `tools: { "<name>": false }` removes
     them and the remaining core tools stay ASCII-sorted, with the appended `execute`
     staying last (12 tools -> 10 tools: `edit, glob, grep, question, read, shell, skill,
-    subagent, write, execute`).
+    subagent, write, execute`). (This `tools` map is the **v1 legacy** key in 2.0.26 — it
+    migrates into the native `permissions` ruleset; see `RF-OC-044`.)
   - `toolFingerprint` (order-insensitive) and `toolWireFingerprint` (order-sensitive) are
     equal and stable across every captured main request for a fixed tool set.
 - Evidence: [O] (offline capture, OpenCode 2.0.26; harness + a `tools:{}` project config).
@@ -1826,10 +1828,12 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
     the request `tools` array; they are folded into the single `execute` tool and exposed
     via the Code-Mode instructions/catalog. A tool id is
     `<sanitized server>_<sanitized tool>` (server `slow` + tool `slowtool` →
-    `slow_slowtool`). Putting an MCP tool on the native wire list requires the server
-    config key `codemode: false` (undocumented on the public MCP page).
+    `slow_slowtool`). Per source, putting an MCP tool on the native wire list requires the
+    server config key `codemode: false` (undocumented on the public MCP page) — **not**
+    reproduced in our offline probe (see Notes).
   - **Observed (our capture).** With a local stdio MCP server, OpenCode logs
-    `mcp connected server=<name> tools=1` ~0.4 s into the run; the request `tools` array
+    `mcp connected server=<name> tools=1` a few hundred ms into the run (log `http.span=403`;
+    ~0.6 s after process spawn); the request `tools` array
     stayed at the 12 built-ins (last = `execute`) across repeated one-shot runs —
     including with global `tools: {"*": true}`, a per-agent `agents.<name>.tools` enable
     (both **v1 legacy keys** here), and `codemode: false`.
@@ -1838,8 +1842,9 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
     which is `Effect.forkScoped` against a still-connecting server; `mcp.tools()` "reads
     what is connected now". MCP connect is forked; completion is signalled by
     `McpEvent.ToolsChanged` (+ `mcp.status.changed`) → a **100 ms debounced** registry
-    reconcile/reload. Our log shows `mcp connected` (~403 ms) landing *after* the first
-    request was assembled/answered, i.e. the first request can omit MCP-provided tools. A
+    reconcile/reload. Our log shows `mcp connected` at ~0.6 s after spawn (log
+    `http.span=403`), around/after the request's tool snapshot, i.e. the first request can
+    omit MCP-provided tools. A
     plugin can observe readiness only indirectly (the per-request `context` hook `tools`
     map + MCP bus events); there is no "tools ready" signal.
   - **Config keys (v2 native vs legacy).** Native top-level: `permissions`
@@ -1870,7 +1875,10 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Notes: A same-process second request (to wire-observe a pending→connected transition)
   was not producible offline; the race is *structurally verified* (source) +
   timing-observed, not wire-observed. Whether a `codemode:false` tool reaches the wire was
-  not confirmed offline (the first request raced the connect).
+  not confirmed offline (the first request raced the connect). **Verification basis:** the
+  config-key/assembly specifics rest on a single first-party **source review** (subagent
+  packet, session `ses_ec437c21effeSjcSIJA0cO7kDa`), not independently reproduced here;
+  re-verify against the tree before relying on any single one.
 
 ### RF-OC-045 — OpenCode 2.0.26 injects a project instruction file (`AGENTS.md`) into the system prompt as `<absolute path>\n<contents>` immediately before the daily date line; the system is otherwise byte-stable within a session and differs across project roots only in the `<env>` block
 
