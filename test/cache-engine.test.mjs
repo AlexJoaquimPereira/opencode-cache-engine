@@ -7280,3 +7280,64 @@ test("phase5/p5t2: V1 cache-options distinguishes desired vs applied (no false s
   assert.equal(out.coNoop.stage, "decision")
   assert.equal("wireEffect" in out.coNoop, false)
 })
+
+// ---------------------------------------------------------------------------
+// Phase 5 / P5-T3 — failure modes (restart / non-durable cursor)
+// ---------------------------------------------------------------------------
+
+test("phase5/p5t3: a restart recounts history (cursor is not durable) while repeat idles never double-count", async () => {
+  const mod = await import("../src/cache-engine-v2.mjs")
+  const dir = mkdtempSync(join(tmpdir(), "ce-p5t3-"))
+  const metrics = join(dir, "v2.jsonl")
+  const prev = process.env.CACHE_ENGINE_METRICS_FILE
+  process.env.CACHE_ENGINE_METRICS_FILE = metrics
+  const history = {
+    ses_p5t3: [
+      { id: "u1", type: "user", time: { created: 1000 } },
+      { id: "a1", type: "assistant", time: { created: 2000 }, tokens: { input: 1000, output: 10, reasoning: 0, cache: { read: 3000, write: 500 } } },
+    ],
+  }
+  const readUsage = () =>
+    readFileSync(metrics, "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l))
+      .filter((r) => r.kind === "usage")
+  let c1
+  let c2
+  try {
+    // Process 1 — counts the assistant message once; a repeat idle must not double-count.
+    const p1 = makeV2Ctx(history)
+    c1 = await mod.default.setup(p1.ctx)
+    p1.pushEvent({ type: "session.idle", data: { sessionID: "ses_p5t3" } })
+    await new Promise((r) => setTimeout(r, 40))
+    p1.pushEvent({ type: "session.idle", data: { sessionID: "ses_p5t3" } })
+    await new Promise((r) => setTimeout(r, 40))
+    const afterFirst = readUsage().length
+    // Process 2 — a restart with the same history has no durable cursor, so it recounts
+    // the history once more (the documented, accepted non-durability limitation).
+    const p2 = makeV2Ctx(history)
+    c2 = await mod.default.setup(p2.ctx)
+    p2.pushEvent({ type: "session.idle", data: { sessionID: "ses_p5t3" } })
+    await new Promise((r) => setTimeout(r, 40))
+    const afterRestart = readUsage().length
+    assert.equal(afterFirst, 1, "within one process, a repeated idle must not double-count")
+    assert.equal(afterRestart, 2, "a restart recounts (cursor state is not durable) — documented limitation")
+  } finally {
+    // Dispose both consumers even if an assertion throws, then clean up.
+    try {
+      await c1?.()
+    } catch {
+      /* ignore */
+    }
+    try {
+      await c2?.()
+    } catch {
+      /* ignore */
+    }
+    rmSync(dir, { recursive: true, force: true })
+    if (prev === undefined) delete process.env.CACHE_ENGINE_METRICS_FILE
+    else process.env.CACHE_ENGINE_METRICS_FILE = prev
+  }
+})
