@@ -16,8 +16,8 @@
 // `./server`, `./v2`, or `./tui` imports it (see the `phase7/p7t4:` isolation
 // test); the plugin runtime never calls it.
 
-import { readFileSync } from "node:fs"
-import { pathToFileURL } from "node:url"
+import { readFileSync, realpathSync } from "node:fs"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import { DEFAULT_METRICS_FILE, expandHome } from "./cache-engine-core.mjs"
 import { parseReportInput, renderReport } from "./cache-report-core.mjs"
 
@@ -92,6 +92,18 @@ export function run(argv, env = process.env, out = process.stdout, err = process
   return 0
 }
 
-const invokedDirectly =
-  typeof process.argv[1] === "string" && import.meta.url === pathToFileURL(process.argv[1]).href
-if (invokedDirectly) process.exit(run(process.argv.slice(2)))
+// Symlink-safe entry detection. `import.meta.url` is the *realpath* of this
+// module while `process.argv[1]` keeps the path as given, so compare real paths
+// — a symlinked invocation (`npm link`, a `~/bin` symlink, pnpm's symlinked
+// `node_modules`) would otherwise silently print nothing and exit 0.
+function invokedDirectly(argv1) {
+  if (typeof argv1 !== "string" || argv1.length === 0) return false
+  try {
+    return realpathSync(argv1) === realpathSync(fileURLToPath(import.meta.url))
+  } catch {
+    return import.meta.url === pathToFileURL(argv1).href
+  }
+}
+
+// `process.exitCode` (not `process.exit`) so a piped stdout is flushed first.
+if (invokedDirectly(process.argv[1])) process.exitCode = run(process.argv.slice(2))

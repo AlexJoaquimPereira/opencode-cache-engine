@@ -10,7 +10,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync, spawnSync } from "node:child_process"
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -7614,9 +7614,9 @@ test("phase7/p7t4: report modules stay off the request path (isolation)", async 
   // except the two report modules themselves (a transitive import via a core
   // module would otherwise slip through).
   const reportModules = new Set(["cache-report-core.mjs", "cache-report.mjs"])
-  for (const name of readdirSync(srcDir)) {
-    if (reportModules.has(name)) continue
-    assert.equal(/cache-report/.test(read(name)), false, `src/${name} must not reference the report module`)
+  for (const entry of readdirSync(srcDir, { withFileTypes: true })) {
+    if (!entry.isFile() || reportModules.has(entry.name)) continue
+    assert.equal(/cache-report/.test(read(entry.name)), false, `src/${entry.name} must not reference the report module`)
   }
   // The report imports only node builtins + the pure core modules.
   for (const report of ["cache-report-core.mjs", "cache-report.mjs"]) {
@@ -7626,5 +7626,20 @@ test("phase7/p7t4: report modules stay off the request path (isolation)", async 
         `${report} must import only node builtins + the report/core modules (got ${spec})`,
       )
     }
+  }
+})
+
+test("phase7/p7t4: the CLI runs through a symlinked path (symlink-safe entry detection)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ce-p7link-"))
+  try {
+    const metrics = join(dir, "m.jsonl")
+    writeFileSync(metrics, '{"kind":"usage","ts":1,"read":2,"write":2}\n')
+    const link = join(dir, "report-link.mjs")
+    symlinkSync(fileURLToPath(new URL("../src/cache-report.mjs", import.meta.url)), link)
+    const r = spawnSync(process.execPath, [link, "--file", metrics], { encoding: "utf8" })
+    assert.equal(r.status, 0, "a symlinked invocation exits 0")
+    assert.match(r.stdout, /OPENCODE CACHE ENGINE — cache report/, "and still prints the report")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
   }
 })
