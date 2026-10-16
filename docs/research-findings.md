@@ -2043,7 +2043,14 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   statements are structural/modelled, never provider-measured; (3) the forced tiny limit makes
   every turn compact, so this configuration yields a full-history→checkpoint boundary but **no
   accumulating pre-compaction agent request** (`session.context`, `RF-OC-021`, remains the only
-  post-hoc history source).
+  post-hoc history source). **Structural reuse (P6-T4):** (4) within a session the serialized
+  request is **append-only** — a later request's `messages` array is a byte-identical
+  prefix-extension of the earlier one (verified `req-009` ⊂ `req-010` ⊂ `req-011`), and the system
+  message + `tools` are byte-identical across turns and sessions, so the cache prefix is
+  reuse-eligible on the **very next request** (structural only). (5) The `--continue`
+  re-compaction uses a **different** user instruction (`Update the existing checkpoint in the
+  conversation above into one consolidated summary.`) and **preserves** the prior checkpoint
+  message instead of replacing the history.
 
 ## RF-OR — OpenRouter transport and routing
 
