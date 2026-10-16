@@ -201,7 +201,7 @@ P7-T3 is complete when the renderer produces the report from records under the i
   `CACHE_ENGINE_METRICS_FILE` else `~/.cache/opencode/cache-metrics.jsonl`; stdout-only; exit `0`
   ok / `2` usage or unreadable file. Invoked by path (`node src/cache-report.mjs [--file <path>]`)
   or `npm run report`. **No `bin`, no new `exports` entry** (P7-T2 decision).
-- Tests (`npm test`, **388/0**): parse tolerance; renderer purity/determinism + no input mutation;
+- Tests (`npm test`, **389/0**; 10 new): parse tolerance; renderer purity/determinism + no input mutation;
   per-element rendering; unavailable ≠ zero; no ratio on a zero/partial denominator; privacy
   (content-shaped fields never appear); `stage:"applied"` never a wire claim; CLI arg/path
   resolution; CLI render + skipped-line note + exit codes; **isolation** (the plugin runtime does
@@ -217,7 +217,7 @@ P7-T3 is complete when the renderer produces the report from records under the i
 ### Independent review (post-implementation)
 
 `@oracle` reviewed the P7-T2/T3/T4 change set (`ses_ebb439dbaffesZaWDqxOt47xap`): **safe to push, no
-blocking issues**; `npm test` 388/0 and `npm pack --dry-run` (11 files) reproduced independently.
+blocking issues**; `npm test` (388/0 at review time) and `npm pack --dry-run` (11 files) reproduced independently.
 Two Low hardening items were applied:
 
 - **L1 — `wireSection` selection order.** It used `find` (file order) while every other section is
