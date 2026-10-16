@@ -5,6 +5,11 @@
 // replies with a minimal OpenAI-compatible response (SSE when the request asks
 // for streaming). It never contacts a real provider. Authorization header
 // VALUES are never recorded — only their presence.
+//
+// Optional env: OC_CAPTURE_SUMMARY_OK=1 makes a compaction-summarizer request
+// (a body containing "You MUST summarize the conversation") receive a valid
+// template summary instead of the default "ok", so the compaction can succeed
+// and the post-compaction request can be captured. Unset preserves "ok".
 
 import http from "node:http"
 import { mkdirSync, writeFileSync } from "node:fs"
@@ -17,6 +22,34 @@ if (!OUT) {
   process.exit(2)
 }
 mkdirSync(OUT, { recursive: true })
+
+const SUMMARY_OK = process.env.OC_CAPTURE_SUMMARY_OK === "1"
+
+// A summary that satisfies OpenCode's compaction template check. Only used when
+// OC_CAPTURE_SUMMARY_OK=1; benign synthetic content (no real session data).
+const TEMPLATE_SUMMARY = [
+  "## Objective",
+  "- Acknowledge a synthetic filler message from the user.",
+  "",
+  "## Requirements",
+  "- (none)",
+  "",
+  "## Decisions",
+  "- (none)",
+  "",
+  "## Work State",
+  "### Completed",
+  "- (none)",
+  "",
+  "### Active",
+  "- Acknowledge the filler message.",
+  "",
+  "### Blocked",
+  "- (none)",
+  "",
+  "## Next Move",
+  "1. Acknowledge the filler message.",
+].join("\n")
 
 let seq = 0
 
@@ -37,10 +70,10 @@ function parse(body) {
   }
 }
 
-function sse(res, model) {
+function sse(res, model, content) {
   const base = { id: "mock-1", object: "chat.completion.chunk", created: 1, model }
   res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" })
-  res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: "ok" }, finish_reason: null }] })}\n\n`)
+  res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: { role: "assistant", content }, finish_reason: null }] })}\n\n`)
   res.write(
     `data: ${JSON.stringify({
       ...base,
@@ -73,7 +106,8 @@ const server = http.createServer((req, res) => {
       return
     }
     if (parsed && parsed.stream === true) {
-      sse(res, parsed.model ?? "synthetic")
+      const content = SUMMARY_OK && body.includes("You MUST summarize the conversation") ? TEMPLATE_SUMMARY : "ok"
+      sse(res, parsed.model ?? "synthetic", content)
       return
     }
     res.writeHead(200, { "content-type": "application/json" })
@@ -83,7 +117,7 @@ const server = http.createServer((req, res) => {
         object: "chat.completion",
         created: 1,
         model: parsed?.model ?? "synthetic",
-        choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+        choices: [{ index: 0, message: { role: "assistant", content: SUMMARY_OK && body.includes("You MUST summarize the conversation") ? TEMPLATE_SUMMARY : "ok" }, finish_reason: "stop" }],
         usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 },
       }),
     )

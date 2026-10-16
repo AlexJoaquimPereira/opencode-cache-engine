@@ -4,6 +4,10 @@
 # OC_CAPTURE_TURNS) plus an optional session-continue turn (OC_CAPTURE_CONTINUE),
 # each bounded by a per-turn timeout), and stops. A failed or timed-out turn is
 # recorded in $CE/status as `turn_failed=1` so the orchestrator refuses to compare.
+#
+# Env (optional):
+#   OC_CAPTURE_PROMPT   turn message (default exactly `say hi`). Set to a large
+#                       synthetic prompt to force a session-context overflow.
 set -uo pipefail
 
 : "${CE:?CE (disposable root) required}"
@@ -49,7 +53,7 @@ cd "$CE/proj" || exit 3
 # Extra args (e.g. --continue) precede the message.
 run_turn() {
   local n="$1"; shift
-  timeout --kill-after=5 "$TURN_TIMEOUT" "$OC_BIN" run --standalone --print-logs --log-level info -m "$CAPTURE_MODEL" "$@" "say hi" >"$CE/run${n}.log" 2>&1
+  timeout --kill-after=5 "$TURN_TIMEOUT" "$OC_BIN" run --standalone --print-logs --log-level info -m "$CAPTURE_MODEL" "$@" "${OC_CAPTURE_PROMPT:-say hi}" >"$CE/run${n}.log" 2>&1
   local rc=$?
   echo "run${n}_rc=$rc" >>"$CE/status"
   if [ "$rc" -ne 0 ]; then

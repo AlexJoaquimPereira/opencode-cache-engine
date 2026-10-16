@@ -27,6 +27,23 @@
 #   OC_CAPTURE_DRY_RUN=1            (debug/test: write the project for the
 #                                    configured port and print resolved values;
 #                                    performs no capture and touches no provider)
+#   OC_CAPTURE_CONTEXT_LIMIT=N      (optional positive integer; when set, the
+#                                    mock model entry gains
+#                                    `"limit": { "context": N, "output": 4096 }`
+#                                    so a small context can be forced. Leading
+#                                    zeros are canonicalized; non-integer / <= 0
+#                                    fails closed as a blocker. Unset preserves
+#                                    today's config. Ignored by only-diff mode.)
+#   OC_CAPTURE_PROMPT="say hi"      (turn message; default preserves today's
+#                                    byte-identical `say hi`. Set a large benign
+#                                    synthetic prompt to force a context overflow.
+#                                    Must not begin with '-' — it is parsed
+#                                    positionally, so a leading dash fails closed.)
+#   OC_CAPTURE_SUMMARY_OK=1         (0/1; default 0. When 1, the mock provider
+#                                    answers a compaction-summarizer request with
+#                                    a valid template summary so compaction can
+#                                    succeed and the post-compaction request is
+#                                    captured. Requires a context-limit overflow.)
 #
 # Exit contract:
 #   0  captures completed and every paired difference was identical/expected
@@ -58,6 +75,10 @@ if [ -z "${NODE_BIN:-}" ]; then echo "BLOCKER: node not found" >&2; exit 2; fi
 # so the host-side base URL and the sandbox MOCK_PORT share a single source.
 write_project() {
   local proj="$1" port="$2"
+  local model_extra=""
+  if [ -n "${CAPTURE_CONTEXT_LIMIT:-}" ]; then
+    model_extra=", \"limit\": { \"context\": ${CAPTURE_CONTEXT_LIMIT}, \"output\": 4096 }"
+  fi
   mkdir -p "$proj/.opencode/plugins"
   cat >"$proj/.opencode/opencode.json" <<JSON
 {
@@ -67,7 +88,7 @@ write_project() {
       "npm": "@ai-sdk/openai-compatible",
       "name": "Mock",
       "options": { "baseURL": "http://127.0.0.1:${port}/v1", "apiKey": "not-a-real-key" },
-      "models": { "$CAPTURE_MODEL_ID": { "name": "$CAPTURE_MODEL_ID" } }
+      "models": { "$CAPTURE_MODEL_ID": { "name": "$CAPTURE_MODEL_ID"$model_extra } }
     }
   },
   "model": "$CAPTURE_MODEL"
@@ -85,6 +106,35 @@ if [ -n "${OC_CAPTURE_ONLY_DIFF:-}" ]; then
   node "$SCRIPT_DIR/diff-requests.mjs" "$OC_CAPTURE_ONLY_DIFF"
   exit $?
 fi
+
+# Optional capture inputs — validated only on the capture/dry-run paths, so the
+# only-diff debug path above ignores them (as it does OC_CAPTURE_ENGINE_CONFIG).
+
+# Forced context limit on the mock model entry. Unset -> unchanged config (no
+# `limit` key). Fail closed on anything but a positive integer, and canonicalize
+# away leading zeros (JSON forbids `0200`) so the written JSON is always valid.
+CAPTURE_CONTEXT_LIMIT="${OC_CAPTURE_CONTEXT_LIMIT:-}"
+if [ -n "$CAPTURE_CONTEXT_LIMIT" ]; then
+  case "$CAPTURE_CONTEXT_LIMIT" in
+    *[!0-9]*) echo "BLOCKER: OC_CAPTURE_CONTEXT_LIMIT must be a positive integer (got '$CAPTURE_CONTEXT_LIMIT')" >&2; exit 2 ;;
+  esac
+  # Strip leading zeros with string expansion only (no arithmetic, so a very large
+  # value cannot overflow a shell integer). "0"/"00"/... strip to empty => invalid.
+  CAPTURE_CONTEXT_LIMIT="${CAPTURE_CONTEXT_LIMIT#"${CAPTURE_CONTEXT_LIMIT%%[!0]*}"}"
+  if [ -z "$CAPTURE_CONTEXT_LIMIT" ]; then echo "BLOCKER: OC_CAPTURE_CONTEXT_LIMIT must be > 0 (got '$OC_CAPTURE_CONTEXT_LIMIT')" >&2; exit 2; fi
+fi
+
+# The turn message is parsed positionally by `opencode run`, so a leading '-' would
+# be read as a flag. Fail closed rather than guess the CLI's `--` handling.
+CAPTURE_PROMPT="${OC_CAPTURE_PROMPT:-say hi}"
+case "$CAPTURE_PROMPT" in
+  -*) echo "BLOCKER: OC_CAPTURE_PROMPT must not begin with '-' (got '$CAPTURE_PROMPT')" >&2; exit 2 ;;
+esac
+
+# Optional: let the mock answer compaction-summarizer requests with a valid
+# template summary (0/1; default 0 preserves "ok").
+CAPTURE_SUMMARY_OK="${OC_CAPTURE_SUMMARY_OK:-0}"
+case "$CAPTURE_SUMMARY_OK" in 0|1) : ;; *) echo "BLOCKER: invalid OC_CAPTURE_SUMMARY_OK='$CAPTURE_SUMMARY_OK' (want 0 or 1)" >&2; exit 2 ;; esac
 
 # Temporary root: create it first and fail closed, so an empty TMP can never lead
 # to writes outside the intended temp root (e.g. /home/.config).
@@ -151,6 +201,8 @@ bwrap --unshare-net --unshare-pid --unshare-uts --unshare-ipc \
   --setenv OC_CAPTURE_TURNS "${OC_CAPTURE_TURNS:-2}" \
   --setenv OC_CAPTURE_CONTINUE "${OC_CAPTURE_CONTINUE:-0}" \
   --setenv OC_CAPTURE_MODEL "$CAPTURE_MODEL" \
+  --setenv OC_CAPTURE_PROMPT "$CAPTURE_PROMPT" \
+  --setenv OC_CAPTURE_SUMMARY_OK "$CAPTURE_SUMMARY_OK" \
   --setenv MOCK_PORT "$MOCK_PORT" \
   /bin/bash "$REPO/test/harness/capture/inner.sh"
 

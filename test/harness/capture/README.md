@@ -65,6 +65,45 @@ by kind. Shape findings and the go/no-go are in
 `docs/phases/phase3-other-volatility.md`; consumable fixture data is in
 `test/fixtures/volatility-shapes.mjs`.
 
+## Compaction capture (P6-T2)
+
+The harness can force an **offline compaction** by giving the mock model a tiny
+context limit and sending an overflowing user message; OpenCode then runs its
+compaction/summarizer step **before** the agent request:
+
+```sh
+OC_CAPTURE_CONTEXT_LIMIT=2000 OC_CAPTURE_SUMMARY_OK=1 \
+OC_CAPTURE_TURNS=3 OC_CAPTURE_CONTINUE=1 \
+OC_CAPTURE_PROMPT="$(head -c 8192 /dev/zero | tr '\0' x)" \
+test/harness/capture/run.sh
+```
+
+- `OC_CAPTURE_CONTEXT_LIMIT=<n>` — positive integer; the mock model entry gains
+  `"limit": { "context": n, "output": 4096 }`. Unset ⇒ unchanged config; a
+  non-integer/`<=0` value fails closed (exit 2); leading zeros are canonicalized.
+  Ignored by only-diff mode.
+- `OC_CAPTURE_PROMPT="…"` — the turn message (default exactly `say hi`). Use a
+  large **benign synthetic** prompt to force the overflow; never real content. It
+  is parsed positionally, so a prompt beginning with `-` fails closed.
+- `OC_CAPTURE_SUMMARY_OK=1` — the mock answers a compaction-summarizer request
+  (a body containing `You MUST summarize the conversation`) with a valid template
+  summary, so the compaction succeeds and the post-compaction request is captured.
+  Unset ⇒ the previous `ok` (compaction then fails OpenCode's template check and
+  the turn errors with `Session.StepFailedError: Compaction summary did not match
+  the required template`). Only the first-turn summarizer phrasing is matched; the
+  `--continue` re-compaction uses a different instruction (`Update the existing
+  checkpoint …`) and is not covered.
+
+Observed per turn: aux title (2 msgs, no tools) → summarizer (full history, 12
+tools) → post-compaction agent request (system + tools **byte-identical**; history
+replaced by one `<conversation-checkpoint>` user message). Shapes are pinned in
+`test/fixtures/compaction-shapes.mjs`; findings in
+`docs/phases/phase6-compaction-research.md` (`RF-OC-049`).
+
+Limitation: no plugin telemetry file is written in these offline runs and the mock
+reports fixed usage, so cache **read/write counts are not observable offline** —
+only the structural prefix behaviour is.
+
 ## Exit contract
 
 | Code | Meaning |
