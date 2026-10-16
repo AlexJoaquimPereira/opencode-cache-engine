@@ -2043,14 +2043,21 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   statements are structural/modelled, never provider-measured; (3) the forced tiny limit makes
   every turn compact, so this configuration yields a full-history→checkpoint boundary but **no
   accumulating pre-compaction agent request** (`session.context`, `RF-OC-021`, remains the only
-  post-hoc history source). **Structural reuse (P6-T4):** (4) within a session the serialized
-  request is **append-only** — a later request's `messages` array is a byte-identical
-  prefix-extension of the earlier one (verified `req-009` ⊂ `req-010` ⊂ `req-011`), and the system
-  message + `tools` are byte-identical across turns and sessions, so the cache prefix is
-  reuse-eligible on the **very next request** (structural only). (5) The `--continue`
-  re-compaction uses a **different** user instruction (`Update the existing checkpoint in the
-  conversation above into one consolidated summary.`) and **preserves** the prior checkpoint
-  message instead of replacing the history.
+  post-hoc history source). **Structural reuse (P6-T4):** (4) for consecutive requests that
+  extend the same history, the serialized request is **append-only** — a later request's
+  `messages` array is a byte-identical prefix-extension of the earlier one (verified
+  `req-009` ⊂ `req-010` ⊂ `req-011`), and the system message + `tools` are byte-identical across
+  turns and sessions; so the cache prefix is reuse-eligible on the **very next request** (structural
+  only). This does **not** hold across a *completed* compaction boundary, which **replaces** the
+  history (item 3 above: 3 messages → 2). (5) The `--continue` re-compaction uses a **different**
+  user instruction (`Update the existing checkpoint in the conversation above into one consolidated
+  summary.`). (6) On a **template mismatch**, OpenCode **retries** the summarizer with a corrective
+  user message (`The previous response did not fill in the required summary template. …`) before
+  failing the turn (`req-011`; the `--continue` turn then errored, rc=1) — so **no post-compaction
+  request is emitted** for that boundary and its post state was **not observed**.
+  **Unknown:** the exact **required template headings** were not enumerated — only that the mock's
+  `Objective / Requirements / Decisions / Work State / Next Move` shape passed and a plain `ok` did
+  not.
 
 ## RF-OR — OpenRouter transport and routing
 
