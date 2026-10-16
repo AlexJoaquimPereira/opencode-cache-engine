@@ -7556,6 +7556,13 @@ test("phase7/p7t4: CLI argument parsing and path resolution", async () => {
   assert.equal(resolveMetricsPath("/explicit", { CACHE_ENGINE_METRICS_FILE: "/env" }), "/explicit")
   assert.equal(resolveMetricsPath("", { CACHE_ENGINE_METRICS_FILE: "/env" }), "/env")
   assert.equal(resolveMetricsPath("", {}), DEFAULT_METRICS_FILE)
+  assert.equal(resolveMetricsPath("/explicit", { CACHE_ENGINE_METRICS_FILE: "/env" }), "/explicit")
+  assert.equal(resolveMetricsPath("~/m.jsonl", {}), join(homedir(), "m.jsonl"), "~ expanded like the plugin")
+  assert.equal(
+    resolveMetricsPath("", { CACHE_ENGINE_METRICS_FILE: "~/m.jsonl" }),
+    join(homedir(), "m.jsonl"),
+    "env `~` is expanded exactly as the recorder does",
+  )
 })
 
 test("phase7/p7t4: CLI renders a file, reports skipped lines, and exits on errors", async () => {
@@ -7598,12 +7605,12 @@ test("phase7/p7t4: report modules stay off the request path (isolation)", async 
   for (const runtime of ["cache-engine.ts", "cache-engine-v2.mjs", "tui.mjs"]) {
     assert.equal(/cache-report/.test(read(runtime)), false, `${runtime} must not reference the report module`)
   }
-  // The report imports only node builtins + the report core.
+  // The report imports only node builtins + the pure core modules.
   for (const report of ["cache-report-core.mjs", "cache-report.mjs"]) {
     for (const spec of [...read(report).matchAll(/from\s+"([^"]+)"/g)].map((m) => m[1])) {
       assert.ok(
-        spec.startsWith("node:") || spec === "./cache-report-core.mjs",
-        `${report} must import only node builtins + the report core (got ${spec})`,
+        spec.startsWith("node:") || spec === "./cache-report-core.mjs" || spec === "./cache-engine-core.mjs",
+        `${report} must import only node builtins + the report/core modules (got ${spec})`,
       )
     }
   }

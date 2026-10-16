@@ -17,12 +17,11 @@
 // test); the plugin runtime never calls it.
 
 import { readFileSync } from "node:fs"
-import { homedir } from "node:os"
-import { join } from "node:path"
 import { pathToFileURL } from "node:url"
+import { DEFAULT_METRICS_FILE, expandHome } from "./cache-engine-core.mjs"
 import { parseReportInput, renderReport } from "./cache-report-core.mjs"
 
-export const DEFAULT_METRICS_FILE = join(homedir(), ".cache/opencode/cache-metrics.jsonl")
+export { DEFAULT_METRICS_FILE }
 
 const HELP = `Usage: node src/cache-report.mjs [--file <path>]
 
@@ -58,11 +57,13 @@ export function parseCliArgs(argv) {
   return { file }
 }
 
-// Pure path resolution: explicit > env > default.
+// Pure path resolution: explicit > env > default. `~` is expanded exactly as the
+// plugin does for `CACHE_ENGINE_METRICS_FILE` (cache-engine-core `expandHome`),
+// so the report reads the same file the recorder writes.
 export function resolveMetricsPath(file, env = process.env) {
-  if (typeof file === "string" && file.length > 0) return file
+  if (typeof file === "string" && file.length > 0) return expandHome(file)
   const e = env?.CACHE_ENGINE_METRICS_FILE
-  return typeof e === "string" && e.length > 0 ? e : DEFAULT_METRICS_FILE
+  return expandHome(typeof e === "string" && e.length > 0 ? e : DEFAULT_METRICS_FILE)
 }
 
 // Run the CLI. Returns the exit code; writes to `out`/`err` (injectable for
