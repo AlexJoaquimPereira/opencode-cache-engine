@@ -290,8 +290,10 @@ Offline no cache read is observable (P6-T3). Structurally, **yes — from the ve
 
 - the **stable prefix** (system `8267` bytes + `tools`, count 12) is **byte-identical** across the
   boundary, across turns, and across sessions (verified on `req-003` / `req-006` / `req-009`);
-- within a session the serialized request is **append-only**: a later request's `messages` array is
-  a byte-identical prefix-extension of the earlier one (`req-009` ⊂ `req-010` ⊂ `req-011`).
+- for consecutive requests that extend the same history the serialized request is **append-only**:
+  a later request's `messages` array is a byte-identical prefix-extension of the earlier one
+  (`req-009` ⊂ `req-010` ⊂ `req-011`). A *completed* boundary **replaces** the history — the
+  append-only property holds *between* boundaries, not across one.
 
 So every post-boundary request sends a prefix a provider prefix cache could read in full —
 eligibility begins on the **next** request (structural count = 1).
@@ -314,10 +316,10 @@ protection of the live prefix — neither effect is measurable on the tested rou
 ### Q4 — Confounders and the conclusion
 
 Confounders: no provider measurement; the forced tiny limit re-compacts (the `--continue` turn
-triggered a **second** boundary, which used a different summarizer instruction and *preserved* the
-prior checkpoint — `RF-OC-049` notes 4/5); turns 1–3 are separate sessions (within-session reuse is
-observable only via `--continue`); the continue turn failed its template check (rc=1); the mock's
-usage is a fixed constant.
+triggered a **second** boundary with a different summarizer instruction, which then **failed the
+template check and retried** — so its post-boundary state was never observed; `RF-OC-049` notes 5/6);
+turns 1–3 are separate sessions (within-session reuse is observable only via `--continue`); the
+continue turn errored (rc=1); the mock's usage is a fixed constant.
 
 **Conclusion (structural / inconclusive for benefit):** the post-boundary prefix is stable and
 reuse-eligible on the next request, so a provider prefix cache *can* reuse it; whether it *does*,
@@ -355,8 +357,8 @@ From the P6-T2 capture (`req-002` → `req-003`):
 - the **stable prefix is not summarized**: the system message (8267 bytes — harness/project
   instructions) and the `tools` array are **byte-identical** across the boundary, so the risks are
   confined to conversation state, not to instructions or tool definitions;
-- a **later** boundary re-summarizes an existing checkpoint ("Update the existing checkpoint …"), so
-  loss can **compound** across compactions (`RF-OC-049` note 5).
+- the `--continue` re-compaction **instructs** consolidating an existing checkpoint ("Update the
+  existing checkpoint …"), so loss can **compound** across compactions (`RF-OC-049` note 5).
 
 ### Q2 — Correctness risks if the boundary is altered for cache reasons
 
