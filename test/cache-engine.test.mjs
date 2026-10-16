@@ -1525,6 +1525,60 @@ test("phase3/p3t1: volatility shape fixtures (tool order + request kinds)", asyn
   )
 })
 
+test("phase6/p6t2: compaction shape fixtures (trigger, boundary invariants, classification)", async () => {
+  const f = await import("./fixtures/compaction-shapes.mjs")
+  // Trigger + markers.
+  assert.equal(f.COMPACTION_TRIGGER.configKey, "limit.context")
+  assert.equal(f.COMPACTION_TRIGGER.runsBeforeAgentRequest, true)
+  assert.equal(f.COMPACTION_TRIGGER.validatesSummaryTemplate, true)
+  assert.equal(f.CHECKPOINT_MARKER, "<conversation-checkpoint>")
+  assert.ok(f.SUMMARIZER_MARKER.length > 0)
+  // The observed per-turn sequence: aux title -> summarizer -> post-compaction agent.
+  assert.deepEqual(
+    f.TURN_SEQUENCE.map((t) => t.id),
+    ["aux_title", "compaction_summarizer", "post_compaction_agent"],
+  )
+  // A synthetic pre/post boundary pair: system + tools preserved, history replaced.
+  const tools = [{ function: { name: "read" } }, { function: { name: "write" } }]
+  const before = {
+    model: "m",
+    store: true,
+    stream: true,
+    stream_options: {},
+    max_completion_tokens: 8,
+    tools,
+    messages: [
+      { role: "system", content: "SYS" },
+      { role: "user", content: "filler" },
+      { role: "user", content: f.SUMMARIZER_MARKER + " into a structured summary" },
+    ],
+  }
+  const after = {
+    ...before,
+    tools: [...tools],
+    messages: [{ role: "system", content: "SYS" }, { role: "user", content: f.CHECKPOINT_MARKER + "\nsummary" }],
+  }
+  const cb = f.classifyRequest(before)
+  const ca = f.classifyRequest(after)
+  assert.equal(cb.summarizer, true, "pre-compaction request carries the summarizer marker")
+  assert.equal(cb.checkpoint, false)
+  assert.equal(ca.summarizer, false, "post-compaction request does not carry the summarizer marker")
+  assert.equal(ca.checkpoint, true, "post-compaction request carries the checkpoint marker")
+  assert.equal(cb.messageCount, f.BOUNDARY_INVARIANTS.before.messages)
+  assert.equal(ca.messageCount, f.BOUNDARY_INVARIANTS.after.messages)
+  assert.equal(cb.toolCount, tools.length)
+  assert.equal(ca.toolCount, tools.length)
+  assert.equal(f.BOUNDARY_INVARIANTS.toolCount, f.TURN_SEQUENCE[1].tools, "observed tool count is pinned")
+  assert.equal(f.prefixPreserved(before, after), true, "system + tools preserved across the boundary")
+  // The boundary does not change the top-level request kind.
+  const kindOf = (b) => Object.keys(b).sort().join(",")
+  assert.equal(kindOf(before), f.BOUNDARY_INVARIANTS.topLevelKeys)
+  assert.equal(kindOf(after), f.BOUNDARY_INVARIANTS.topLevelKeys)
+  // A changed tool set must be detected as NOT prefix-preserved (guards the invariant).
+  assert.equal(f.prefixPreserved(before, { ...after, tools: [{ function: { name: "read" } }] }), false)
+  assert.ok(Number.isInteger(f.DETERMINISM_REPEATS) && f.DETERMINISM_REPEATS >= 3)
+})
+
 test("phase3/p3t1: equivalent-turn vs first-vs-subsequent pair semantics", () => {
   const dir = mkdtempSync(join(tmpdir(), "ce-pairs-"))
   const main = (msgs) =>
