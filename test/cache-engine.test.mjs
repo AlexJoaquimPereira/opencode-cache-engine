@@ -1531,6 +1531,7 @@ test("phase6/p6t2: compaction shape fixtures (trigger, boundary invariants, clas
   assert.equal(f.COMPACTION_TRIGGER.configKey, "limit.context")
   assert.equal(f.COMPACTION_TRIGGER.runsBeforeAgentRequest, true)
   assert.equal(f.COMPACTION_TRIGGER.validatesSummaryTemplate, true)
+  assert.equal(f.COMPACTION_TRIGGER.retriesOnTemplateMismatch, true)
   assert.equal(f.CHECKPOINT_MARKER, "<conversation-checkpoint>")
   assert.ok(f.SUMMARIZER_MARKER.length > 0)
   // The observed per-turn sequence: aux title -> summarizer -> post-compaction agent.

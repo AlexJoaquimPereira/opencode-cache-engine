@@ -27,6 +27,9 @@ export const COMPACTION_TRIGGER = {
   // The summary must satisfy OpenCode's template or the turn fails
   // (`Session.StepFailedError: Compaction summary did not match the required template`).
   validatesSummaryTemplate: true,
+  // On a template mismatch OpenCode retries the summarizer with a corrective user
+  // message before failing the turn (so a failed boundary emits no post request).
+  retriesOnTemplateMismatch: true,
 }
 
 // The substring OpenCode appends to the user turn for the summarizer request.
