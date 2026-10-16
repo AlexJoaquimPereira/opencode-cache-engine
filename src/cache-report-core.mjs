@@ -144,12 +144,13 @@ function statusSection(records) {
 
 function wireSection(records) {
   const applied = records.filter((r) => r.stage === "applied")
-  const observed = applied.find((r) => str(r.wireEffect) && r.wireEffect !== "not_observed")
-  if (observed) return `  ${observed.wireEffect}`
-  if (applied.length) {
-    return "  not observed — no evidence the change reached the provider wire (a local/hook change is not wire carriage)"
-  }
-  return "  unknown — no applied change to assess"
+  // The wire status of the *newest* applied change — like every other section,
+  // newest-first (an older positive signal must not outrank a newer one).
+  const newest = newestByTs(applied, () => true)
+  if (!newest) return "  unknown — no applied change to assess"
+  const w = str(newest.wireEffect)
+  if (w && w !== "not_observed") return `  ${w}`
+  return "  not observed — no evidence the change reached the provider wire (a local/hook change is not wire carriage)"
 }
 
 function usageSection(records) {

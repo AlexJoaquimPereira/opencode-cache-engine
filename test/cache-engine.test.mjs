@@ -7539,6 +7539,15 @@ test("phase7/p7t3: stage=applied is never rendered as a wire claim", async () =>
   const out = renderReport([{ kind: "boundary", ts: 1, stage: "applied", reason: "system_date_relocated", wireEffect: "not_observed" }])
   assert.match(out, /not observed/, "an applied hook change is not wire evidence")
   assert.equal(/wire (ok|confirmed|success)/i.test(out), false, "no success language")
+  // Newest-first: an older positive signal must not outrank a newer not-observed one.
+  const two = renderReport([
+    { kind: "boundary", ts: 2, stage: "applied", reason: "a", wireEffect: "verified_X" },
+    { kind: "boundary", ts: 3, stage: "applied", reason: "b", wireEffect: "not_observed" },
+  ])
+  assert.match(two, /not observed/, "the newest applied record's wire status wins")
+  assert.equal(two.includes("verified_X"), false)
+  // A genuine (future) positive wire signal is surfaced verbatim.
+  assert.match(renderReport([{ kind: "boundary", ts: 1, stage: "applied", wireEffect: "verified_Y" }]), /verified_Y/)
 })
 
 // ---------------------------------------------------------------------------
@@ -7601,9 +7610,13 @@ test("phase7/p7t4: CLI renders a file, reports skipped lines, and exits on error
 test("phase7/p7t4: report modules stay off the request path (isolation)", async () => {
   const srcDir = new URL("../src/", import.meta.url)
   const read = (name) => readFileSync(new URL(name, srcDir), "utf8")
-  // The plugin runtime must never import the report.
-  for (const runtime of ["cache-engine.ts", "cache-engine-v2.mjs", "tui.mjs"]) {
-    assert.equal(/cache-report/.test(read(runtime)), false, `${runtime} must not reference the report module`)
+  // The plugin runtime must never import the report — guard EVERY src module
+  // except the two report modules themselves (a transitive import via a core
+  // module would otherwise slip through).
+  const reportModules = new Set(["cache-report-core.mjs", "cache-report.mjs"])
+  for (const name of readdirSync(srcDir)) {
+    if (reportModules.has(name)) continue
+    assert.equal(/cache-report/.test(read(name)), false, `src/${name} must not reference the report module`)
   }
   // The report imports only node builtins + the pure core modules.
   for (const report of ["cache-report-core.mjs", "cache-report.mjs"]) {
