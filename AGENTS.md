@@ -48,6 +48,8 @@ npm pack --dry-run
   harness itself (`run.sh`) captures serialized requests inside a `bwrap` sandbox
   against a loopback mock; `OC_CAPTURE_MODEL` selects the model and
   `OC_CAPTURE_ENGINE_CONFIG` injects an inline CacheEngine config.
+  `OC_CAPTURE_CONTEXT_LIMIT` + `OC_CAPTURE_PROMPT` + `OC_CAPTURE_SUMMARY_OK` force an
+  offline compaction boundary (P6-T2; `docs/phases/phase6-compaction-research.md`).
 - `postpublish` creates and pushes a `v<version>` Git tag. Never publish as a
   test; publish only when explicitly requested.
 
@@ -390,8 +392,10 @@ cause; `docs/phases/phase3-other-volatility.md`). **Phase 3 COMPLETE** (P3-T1..P
 **verification-only, no promotion** (GPT cache options and OpenRouter affinity are not
 wire-effective on the tested routes; `docs/phases/phase4-provider-policy-verification.md`). **Phase 5
 (usage accounting and telemetry) COMPLETE** (P5-T1..P5-T5, 2026-10-15) — **additive telemetry +
-tests + docs; no request behavior change** (`docs/phases/phase5-usage-accounting.md`); Phase 6
-(compaction/memory-boundary research) is next. See `TODO.md`.
+tests + docs; no request behavior change** (`docs/phases/phase5-usage-accounting.md`). **Phase 6
+(compaction and memory-boundary research) COMPLETE** (P6-T1..P6-T6, 2026-10-16) — **research-only;
+no request/on-disk change; no promotion** (`docs/phases/phase6-compaction-research.md`,
+`RF-OC-049`); Phase 7 (minimal observability) requires its own authorization. See `TODO.md`.
 
 - **Diagnose before mutating.** Observe the rendered request, identify a specific
   avoidable instability, verify the hook can safely observe/change it, then make
