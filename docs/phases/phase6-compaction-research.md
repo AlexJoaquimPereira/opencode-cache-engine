@@ -395,3 +395,43 @@ one insert per invocation) and do not change thresholds, context limits, or toke
   **Provider measured: not performed.**
 - Acceptance: correctness + staleness risks are documented with their observed basis and the
   do-not-alter boundary is explicit. **P6-T6 may proceed.**
+
+---
+
+## P6-T6 — acceptance decision
+
+**Task:** P6-T6 (`TODO.md`) — apply the plan §10 acceptance criteria and state the Phase-6 outcome.
+
+**Criteria (plan §10, §3B):**
+
+| Criterion | Result | Basis |
+|---|---|---|
+| The report **distinguishes initial re-prefill cost from later reuse** | **MET** | P6-T3 (one-time ≈2706 summarizer-input + ≈120 continuation tokens) vs P6-T4 (reuse eligible on the next request; structural only) |
+| The report **describes semantic risks** | **MET** | P6-T5 (correctness + staleness, with the do-not-alter boundary) |
+| Kill criterion: the hooks expose **sufficient** data | **PASSED** | P6-T1 verdict *sufficient* (the harness captures the wire; the runtime labels the boundary) |
+| Active compaction rewriting requires a **separate decision** | **MET — none implied** | research-only; no request/on-disk mutation; no transform added |
+
+**Phase-6 outcome: research-only, no promotion.** The phase produced a structural understanding of
+the compaction boundary and its cost model; it changed no request, no on-disk history, and no
+provider behaviour. **No active compaction rewriting is proposed.**
+
+**Deliverables:** the Phase-6 record (`docs/phases/phase6-compaction-research.md`, P6-T1..P6-T6);
+an offline compaction trigger in the capture harness; `test/fixtures/compaction-shapes.mjs` + the
+`phase6/p6t2:` test; `RF-OC-049`. `npm test` **379/0**.
+
+**Residual (out of scope; recorded):**
+
+1. **No provider-measured cache data** — every cost figure is *inferred*; any benefit claim needs an
+   authorized, route-specific experiment.
+2. **No accumulating pre-compaction agent request** — the forced tiny limit compacts every turn, so
+   the before/after pair is *summarizer → checkpoint*, not *agent → agent*.
+3. **Continue-turn trigger gap** — the `--continue` re-compaction uses a different summarizer
+   instruction; the mock does not cover it (that turn fails the template check).
+4. **V2 parity gap** — the V2 adapter has no compaction branch (no digest template, no
+   `session.compacted` handling, no key isolation).
+5. **Version drift** — captured on OpenCode **2.0.30** (prior captures: 2.0.26).
+6. **Summary-output cost** unmeasured (the mock returns a fixed template).
+
+**Acceptance:** Phase 6 closes with the criteria met. No version bump is required — the phase is
+research + test-harness + docs; runtime request behaviour is unchanged. Phase 7 (minimal
+observability) requires its own authorization.
