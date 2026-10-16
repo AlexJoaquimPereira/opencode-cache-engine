@@ -7440,3 +7440,171 @@ test("phase5/p5t4: telemetry never carries prompt content, reasoning, or credent
   if (prev === undefined) delete process.env.CACHE_ENGINE_METRICS_FILE
   else process.env.CACHE_ENGINE_METRICS_FILE = prev
 })
+
+// ---------------------------------------------------------------------------
+// Phase 7 / P7-T3 — pure report renderer
+// ---------------------------------------------------------------------------
+
+const reportCore = () => import("../src/cache-report-core.mjs")
+
+test("phase7/p7t3: report core parses JSONL tolerantly (blank/malformed/partial)", async () => {
+  const { parseReportInput } = await reportCore()
+  const text = [
+    '{"kind":"usage","ts":1}',
+    "",
+    "not json",
+    '{"kind":"boundary","ts":2}',
+    '{"kind":"usage","ts":3',
+  ].join("\n")
+  const r = parseReportInput(text)
+  assert.deepEqual(
+    r.records.map((x) => x.kind),
+    ["usage", "boundary"],
+    "blank lines ignored; valid lines kept",
+  )
+  assert.equal(r.skipped, 2, "malformed + partial-trailing lines skipped and counted")
+  assert.deepEqual(parseReportInput(""), { records: [], skipped: 0 })
+  assert.deepEqual(parseReportInput(undefined), { records: [], skipped: 0 })
+})
+
+test("phase7/p7t3: renderer is pure, deterministic, and renders every element", async () => {
+  const { renderReport } = await reportCore()
+  const records = [
+    { kind: "policy-resolution", ts: 1000, family: "glm53", policy: "glm53" },
+    { kind: "cache-options", ts: 2500, keyInjected: true, optionsInjected: true, stage: "applied", wireEffect: "not_observed" },
+    { kind: "prefix-change", ts: 3000, changedFields: ["stableSystemPrefixHash"], dimensions: ["system"], reasons: ["system_stable_prefix_changed"] },
+    { kind: "usage", ts: 4000, read: 300, write: 100, input: 600, tokenSource: "provider", sid: "ses_secret_do_not_print" },
+  ]
+  const snapshot = JSON.stringify(records)
+  const a = renderReport(records)
+  const b = renderReport(records)
+  assert.equal(a, b, "identical input -> identical output")
+  assert.equal(JSON.stringify(records), snapshot, "input is never mutated")
+  assert.match(a, /glm53/, "policy mode")
+  assert.match(a, /system prefix changed/, "last structural change")
+  assert.match(a, /stableSystemPrefixHash/, "first differing section")
+  assert.match(a, /applied/, "transformation status")
+  assert.match(a, /not observed/, "wire verification")
+  assert.match(a, /cache_read_tokens=300/, "provider usage")
+  assert.match(a, /observed_cache_read_ratio=75\.0%/, "generic ratio with a non-zero denominator")
+  assert.match(a, /Accounting limitations/)
+  assert.match(a, /Estimated cost impact[\s\S]*omitted/, "estimates omitted by default")
+  assert.equal(a.includes("ses_secret_do_not_print"), false, "session ids are never rendered")
+  assert.equal(a.includes("provider"), true, "tokenSource surfaces without leaking anything")
+})
+
+test("phase7/p7t3: empty / missing metrics render as unavailable, never zero", async () => {
+  const { renderReport } = await reportCore()
+  const out = renderReport([])
+  assert.match(out, /unavailable — no policy-resolution record/)
+  assert.match(out, /unavailable — no structural-change record/)
+  assert.match(out, /unavailable — no usage record/)
+  assert.match(out, /unknown — no applied change to assess/)
+  assert.equal(/\b0\b/.test(out), false, "no fabricated zero anywhere in an empty report")
+  assert.equal(out.includes("observed_cache_read_ratio"), false, "no ratio without provider data")
+})
+
+test("phase7/p7t3: no ratio when the denominator is zero or the data is partial", async () => {
+  const { renderReport } = await reportCore()
+  const zeroDen = renderReport([{ kind: "usage", ts: 1, read: 0, write: 0, input: 5 }])
+  assert.match(zeroDen, /cache_read_tokens=0/, "an explicit provider zero is shown as 0")
+  assert.equal(zeroDen.includes("observed_cache_read_ratio"), false, "zero denominator -> no ratio")
+  const partial = renderReport([{ kind: "usage", ts: 1, read: 300 }])
+  assert.equal(partial.includes("observed_cache_read_ratio"), false, "missing write -> no generic ratio")
+  const none = renderReport([{ kind: "usage", ts: 1 }])
+  assert.match(none, /unavailable — no provider-reported cache data/)
+})
+
+test("phase7/p7t3: privacy — content-shaped fields never reach the output", async () => {
+  const { renderReport } = await reportCore()
+  const out = renderReport([
+    {
+      kind: "usage",
+      ts: 1,
+      read: 1,
+      write: 1,
+      prompt: "PINEAPPLE_SENTINEL",
+      messages: [{ role: "user", content: "PINEAPPLE_SENTINEL" }],
+      authorization: "Bearer PINEAPPLE_SENTINEL",
+      body: "PINEAPPLE_SENTINEL",
+      model: "some-model",
+    },
+  ])
+  assert.equal(out.includes("PINEAPPLE_SENTINEL"), false, "prompt/body content never appears")
+  assert.equal(/authorization|bearer/i.test(out), false, "no credential-shaped fields")
+})
+
+test("phase7/p7t3: stage=applied is never rendered as a wire claim", async () => {
+  const { renderReport } = await reportCore()
+  const out = renderReport([{ kind: "boundary", ts: 1, stage: "applied", reason: "system_date_relocated", wireEffect: "not_observed" }])
+  assert.match(out, /not observed/, "an applied hook change is not wire evidence")
+  assert.equal(/wire (ok|confirmed|success)/i.test(out), false, "no success language")
+})
+
+// ---------------------------------------------------------------------------
+// Phase 7 / P7-T4 — CLI entry point + isolation
+// ---------------------------------------------------------------------------
+
+test("phase7/p7t4: CLI argument parsing and path resolution", async () => {
+  const { parseCliArgs, resolveMetricsPath, DEFAULT_METRICS_FILE } = await import("../src/cache-report.mjs")
+  assert.deepEqual(parseCliArgs([]), { file: "" })
+  assert.deepEqual(parseCliArgs(["--file", "/x.jsonl"]), { file: "/x.jsonl" })
+  assert.deepEqual(parseCliArgs(["--file=/x.jsonl"]), { file: "/x.jsonl" })
+  assert.deepEqual(parseCliArgs(["-h"]), { help: true })
+  assert.ok(parseCliArgs(["--file"]).error, "--file without a value is an error")
+  assert.ok(parseCliArgs(["--nope"]).error, "unknown argument is an error")
+  assert.equal(resolveMetricsPath("/explicit", { CACHE_ENGINE_METRICS_FILE: "/env" }), "/explicit")
+  assert.equal(resolveMetricsPath("", { CACHE_ENGINE_METRICS_FILE: "/env" }), "/env")
+  assert.equal(resolveMetricsPath("", {}), DEFAULT_METRICS_FILE)
+})
+
+test("phase7/p7t4: CLI renders a file, reports skipped lines, and exits on errors", async () => {
+  const { run } = await import("../src/cache-report.mjs")
+  const dir = mkdtempSync(join(tmpdir(), "ce-p7t4-"))
+  const sink = () => {
+    let s = ""
+    return { write: (c) => (s += c), get value() { return s } }
+  }
+  try {
+    const ok = join(dir, "ok.jsonl")
+    writeFileSync(ok, '{"kind":"usage","ts":1,"read":10,"write":10,"input":0}\nnot json\n')
+    const out = sink()
+    const err = sink()
+    assert.equal(run(["--file", ok], {}, out, err), 0, "exit 0 on success")
+    assert.match(out.value, /cache_read_tokens=10/)
+    assert.match(out.value, /observed_cache_read_ratio=50\.0%/)
+    assert.match(err.value, /skipped 1 unparseable line/)
+
+    const errMissing = sink()
+    assert.equal(run(["--file", join(dir, "nope.jsonl")], {}, sink(), errMissing), 2, "exit 2 on missing file")
+    assert.match(errMissing.value, /cannot read metrics file/)
+
+    const errArg = sink()
+    assert.equal(run(["--nope"], {}, sink(), errArg), 2, "exit 2 on unknown argument")
+    assert.match(errArg.value, /unknown argument/)
+
+    const help = sink()
+    assert.equal(run(["-h"], {}, help, sink()), 0, "help exits 0")
+    assert.match(help.value, /Usage: node src\/cache-report\.mjs/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("phase7/p7t4: report modules stay off the request path (isolation)", async () => {
+  const srcDir = new URL("../src/", import.meta.url)
+  const read = (name) => readFileSync(new URL(name, srcDir), "utf8")
+  // The plugin runtime must never import the report.
+  for (const runtime of ["cache-engine.ts", "cache-engine-v2.mjs", "tui.mjs"]) {
+    assert.equal(/cache-report/.test(read(runtime)), false, `${runtime} must not reference the report module`)
+  }
+  // The report imports only node builtins + the report core.
+  for (const report of ["cache-report-core.mjs", "cache-report.mjs"]) {
+    for (const spec of [...read(report).matchAll(/from\s+"([^"]+)"/g)].map((m) => m[1])) {
+      assert.ok(
+        spec.startsWith("node:") || spec === "./cache-report-core.mjs",
+        `${report} must import only node builtins + the report core (got ${spec})`,
+      )
+    }
+  }
+})
