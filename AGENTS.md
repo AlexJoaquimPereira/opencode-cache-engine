@@ -400,7 +400,10 @@ wire-effective on the tested routes; `docs/phases/phase4-provider-policy-verific
 tests + docs; no request behavior change** (`docs/phases/phase5-usage-accounting.md`). **Phase 6
 (compaction and memory-boundary research) COMPLETE** (P6-T1..P6-T6, 2026-10-16) — **research-only;
 no request/on-disk change; no promotion** (`docs/phases/phase6-compaction-research.md`,
-`RF-OC-049`); Phase 7 (minimal observability) requires its own authorization. See `TODO.md`.
+`RF-OC-049`). **Phase 7 (minimal user-facing observability) COMPLETE** (P7-T1..P7-T5, 2026-10-16) —
+**a read-only, content-free report; 0 bytes added to any prompt; no request-path change**
+(`node src/cache-report.mjs`; `docs/phases/phase7-observability.md`); Phase 8 (reproducible benchmark
+and public documentation) requires its own authorization. See `TODO.md`.
 
 - **Diagnose before mutating.** Observe the rendered request, identify a specific
   avoidable instability, verify the hook can safely observe/change it, then make
