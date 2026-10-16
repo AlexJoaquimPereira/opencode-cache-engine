@@ -1994,6 +1994,57 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   other routes was not established. The adapter logic (eligibility + preservation) is
   unit-verified; only the wire attribution is nil.
 
+### RF-OC-049 — An offline compaction is producible by forcing a small model `limit.context`; the summarizer is a normal chat request carrying the agent system prompt + tools + full history, OpenCode validates its reply against a required template, and the post-compaction history is replaced by one `<conversation-checkpoint>` user message (system + tools byte-identical)
+
+- Status: current
+- Verified: 2026-10-16
+- Area: opencode-runtime
+- Fact: On the offline OpenAI-compatible route a **compaction** can be produced
+  deterministically by (a) giving the model entry a small
+  `"limit": { "context": N, "output": 4096 }` and (b) sending a user message whose
+  estimated token count exceeds it. Observed request sequence per turn (repeated
+  identically across ≥3 equivalent turns):
+  1. **aux title** — `/v1/chat/completions`, 2 messages, **no tools**, system = the
+     title-generator prompt.
+  2. **compaction summarizer** — 3 messages (the agent system prompt, the overflowing
+     user message, and an appended user instruction beginning `You MUST summarize the
+     conversation into a structured summary …`), **12 tools**. The agent request is
+     **never sent before compaction** in this configuration.
+  3. **post-compaction agent request** — 2 messages: the **byte-identical** system
+     message and a single user message beginning `<conversation-checkpoint>` + the
+     summary; `tools` **byte-identical** (12).
+  The top-level body keys are unchanged across the boundary
+  (`max_completion_tokens,messages,model,store,stream,stream_options,tools`); **only
+  `messages` changes** (full history → one checkpoint message), so the cache prefix
+  (model + system + tools) is preserved.
+  OpenCode validates the summarizer's reply against a **required template**; a reply
+  that does not match makes the turn fail with
+  `Session.StepFailedError: Compaction summary did not match the required template`,
+  and the post-compaction request is not emitted.
+- Evidence: [O] (serialized request bodies captured offline via
+  `test/harness/capture/run.sh` with `OC_CAPTURE_CONTEXT_LIMIT` / `OC_CAPTURE_PROMPT` /
+  `OC_CAPTURE_SUMMARY_OK`; loopback mock provider; `bwrap --unshare-net`); [O] (run-log
+  `StepFailedError`).
+- Sources: `~/.opencode/bin/opencode` 2.0.30; harness capture roots
+  `/tmp/opencode/capture.JNKhJd` (retained) and `/tmp/opencode/capture.c4s7VI`;
+  `test/harness/capture/{run.sh,inner.sh,mock-provider.mjs}`.
+- Justifies: `test/fixtures/compaction-shapes.mjs`; `docs/phases/phase6-compaction-research.md`
+  (P6-T2).
+- Version context: OpenCode 2.0.30 (the harness `OC2` binary). Prior Phase-1/3 captures used
+  **2.0.26**; the shapes observed here are consistent with 2.0.26 (12 tools; same top-level keys),
+  but the exact version for this capture is 2.0.30.
+- Re-verify when: OpenCode changes its compaction trigger (the `limit.context` relation), the
+  summarizer request shape or template check, or the post-compaction history marker
+  (`<conversation-checkpoint>`).
+- Superseded by: null
+- Notes: **Offline limitations:** (1) no plugin telemetry file is written in these runs, so no
+  `compaction` telemetry record was observed; (2) the mock provider returns fixed usage and no
+  cache fields, so cache **read/write counts are not observable offline** — Phase-6 cost
+  statements are structural/modelled, never provider-measured; (3) the forced tiny limit makes
+  every turn compact, so this configuration yields a full-history→checkpoint boundary but **no
+  accumulating pre-compaction agent request** (`session.context`, `RF-OC-021`, remains the only
+  post-hoc history source).
+
 ## RF-OR — OpenRouter transport and routing
 
 ### RF-OR-001 — OpenRouter's upstream provider selection is not exposed to plugins
