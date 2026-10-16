@@ -185,3 +185,91 @@ compaction failed the template check (rc=1) — recorded as a limit, not a block
   **Provider measured: not performed.**
 - Acceptance: both boundary requests + the reuse request are captured; the unchanged prefix is
   quantified; no request mutated; no provider contacted. **P6-T3 may proceed.**
+
+---
+
+## P6-T3 — compaction cache-cost accounting
+
+**Task:** P6-T3 (`TODO.md`) — account for the cache cost around the boundary: the
+provider-reported reads/writes at and after the boundary, and the **one-time cost of
+establishing the new prefix** — separating **observed** counts from a **modelled** estimate.
+
+**Headline: no cache read/write count is observable offline.** The mock returns no cache
+fields and fixed usage, and no plugin telemetry file is written in these runs (verified: zero
+`*.jsonl`, zero `cache-metrics*`, zero `"kind":"compaction"` records in the capture root HOME).
+Every cost figure below is therefore **Inferred (model)**, never provider-measured. Missing
+metrics are *unavailable*, **not zero**.
+
+### Q1 — What is observable at/after the boundary, and what is unavailable vs zero?
+
+| Quantity | Offline (this harness) | Live runtime |
+|---|---|---|
+| provider cache `read` / `write` | **unavailable** (mock emits none) | from provider usage fields |
+| provider prompt/completion tokens | **unavailable** — the mock returns a fixed `prompt_tokens: 10` constant (`mock-provider.mjs:81,121`), which is fabricated, not measured | from provider usage |
+| plugin accounting record | **none written** (no telemetry file) | V1 `session.compacted` → `kind:"compaction"` record with cumulative `read`/`write` (`src/cache-engine.ts:1053-1069`); V2 has no compaction branch |
+| segment sizes (chars) | **structurally verified** (below) | — |
+
+So the only observed input to a cost model is the **serialized size** of each region.
+
+### Observed — serialized segment sizes (structurally verified)
+
+From the retained capture (`/tmp/opencode/capture.JNKhJd`), `req-002` (pre) vs `req-003` (post):
+
+| Region | pre (chars) | post (chars) | note |
+|---|---|---|---|
+| system message | 8267 | 8267 | **byte-identical** |
+| tools JSON | 13534 | 13534 | **byte-identical** |
+| history → checkpoint user message(s) | 8102 + 2723 | 478 | **replaced** |
+| body (serialized) | 33120 | 22705 | |
+| `messages` count | 3 | 2 | |
+
+Stable prefix `P = system + tools` = **21801 chars**, unchanged across the boundary.
+
+### Modelled — the one-time re-prefill cost (inferred)
+
+A boundary replaces the message region while the stable prefix stays cache-eligible:
+
+| Term | chars | ≈ tokens (÷4) |
+|---|---|---|
+| `P` stable prefix (system + tools) | 21801 | ≈ 5450 |
+| `H` replaced history (filler + summarizer instruction) | 10825 | ≈ 2706 |
+| `C` checkpoint (new continuation) | 478 | ≈ 120 |
+
+Modelled one-time cost of one boundary:
+- **summarizer input** ≈ `H` + instruction ≈ **≈2700 tokens** (uncached — the summary request
+  carries the full history);
+- **new continuation** ≈ `C` ≈ **≈120 tokens** (written/processed once after the boundary);
+- **summary output** — **not observable** offline (the mock's reply is a fixed template): a
+  real cost omitted from the model.
+
+Steady state: later requests carry ≈ `P + C` ≈ **5570 tokens** (a cache-eligible prefix plus
+the checkpoint), instead of a growing history.
+
+**This is a model, not a measurement** — not a savings claim. The reuse comparison is P6-T4.
+
+### Q3 — interaction with the GPT `<root>:compact` isolation
+
+The V1 adapter isolates a compaction request's key to `<root>:compact`
+(`src/cache-engine-core.mjs:1048-1052`, applied at `src/cache-engine.ts:912-926`) so a
+compaction write cannot pollute the live-session namespace. That is a **structural** decision:
+on the tested routes the GPT cache field is **not wire-attributable** (`RF-OC-047`, Phase 4 —
+Gate 4 NOT PASS), so the isolation cannot be costed or credited. V2 has no compaction branch
+at all (P6-T1 §3).
+
+### Q4 — Assumptions (all explicit)
+
+1. **char→token ratio 4:1** — a heuristic; the harness never tokenizes and the mock's reported
+   tokens are a fixed constant, so no tokenizer is available offline.
+2. The stable prefix is cache-eligible across the boundary — the bytes are identical (measured).
+3. Cache **writes are billed** on the tested route — **unverified** (true for MiniMax M2.x
+   explicit caching; not established here).
+4. The summary **output** token cost is excluded (unobservable offline).
+5. Provider cache behaviour is unknown offline; nothing here is provider-measured.
+
+### Evidence & acceptance
+
+- Labels: **Structurally verified** (segment byte sizes) / **Inferred** (token + cost model).
+  **Provider measured: not performed.**
+- Acceptance: the observed/modelled split is recorded with explicit assumptions, missing
+  metrics are stated as unavailable (not zero), and no figure is presented as measured
+  savings. **P6-T4 may proceed.**
