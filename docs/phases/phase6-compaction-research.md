@@ -273,3 +273,60 @@ at all (P6-T1 §3).
 - Acceptance: the observed/modelled split is recorded with explicit assumptions, missing
   metrics are stated as unavailable (not zero), and no figure is presented as measured
   savings. **P6-T4 may proceed.**
+
+---
+
+## P6-T4 — reuse vs re-prefill comparison
+
+**Task:** P6-T4 (`TODO.md`) — compare the one-time re-prefill cost (P6-T3) against reuse on later
+requests after a boundary, and state whether the new prefix is reused (and how soon).
+
+**Headline: reuse is *structurally eligible immediately*, but no provider reuse is observable
+offline.** The comparison is **structural**, not measured.
+
+### Q1 — Do later requests after the boundary carry the re-usable prefix, and how soon?
+
+Offline no cache read is observable (P6-T3). Structurally, **yes — from the very next request**:
+
+- the **stable prefix** (system `8267` bytes + `tools`, count 12) is **byte-identical** across the
+  boundary, across turns, and across sessions (verified on `req-003` / `req-006` / `req-009`);
+- within a session the serialized request is **append-only**: a later request's `messages` array is
+  a byte-identical prefix-extension of the earlier one (`req-009` ⊂ `req-010` ⊂ `req-011`).
+
+So every post-boundary request sends a prefix a provider prefix cache could read in full —
+eligibility begins on the **next** request (structural count = 1).
+
+### Q2 — Is there a reuse threshold that amortises the re-prefill?
+
+**Not determinable offline.** Structurally, because reuse is eligible from the next request, the
+P6-T3 one-time cost (≈2706 summarizer-input tokens + ≈120 continuation tokens) is spread over the
+subsequent requests in the session; the break-even count depends on the provider's cache economics
+(unobservable) and on the **unmeasured** summary-output cost. A session with a single post-boundary
+request amortises nothing.
+
+### Q3 — Does compaction isolation help or hurt reuse?
+
+Structural only (`<root>:compact`, P6-T3 Q3; **not wire-attributable**, `RF-OC-047`): a distinct key
+namespace for the compaction request means (a) it cannot read the live-session prefix cache, and
+(b) its write cannot pollute the live namespace. Net it trades a possible summarizer cache read for
+protection of the live prefix — neither effect is measurable on the tested route.
+
+### Q4 — Confounders and the conclusion
+
+Confounders: no provider measurement; the forced tiny limit re-compacts (the `--continue` turn
+triggered a **second** boundary, which used a different summarizer instruction and *preserved* the
+prior checkpoint — `RF-OC-049` notes 4/5); turns 1–3 are separate sessions (within-session reuse is
+observable only via `--continue`); the continue turn failed its template check (rc=1); the mock's
+usage is a fixed constant.
+
+**Conclusion (structural / inconclusive for benefit):** the post-boundary prefix is stable and
+reuse-eligible on the next request, so a provider prefix cache *can* reuse it; whether it *does*,
+and the net benefit versus the summarizer cost, is **not established offline**. No provider benefit
+claim.
+
+### Evidence & acceptance
+
+- Labels: **Structurally verified** / **Inconclusive** (no provider measurement).
+  **Provider measured: not performed.**
+- Acceptance: the comparison + confounders are recorded, the conclusion is labelled structural, and
+  no benefit is claimed beyond the evidence. **P6-T5 may proceed.**
