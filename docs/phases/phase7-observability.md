@@ -234,6 +234,58 @@ is applied — consistent with the phase's minimalism value.
 
 ---
 
+## P7-T5 — acceptance decision
+
+**Task:** P7-T5 (`TODO.md`) — apply plan §11 / §3C acceptance and state the Phase-7 outcome.
+**Type:** gate (decision) — read-only. **Provider measured: not performed.**
+
+### Criteria
+
+| Criterion (plan §11 / §3C row 7) | Result | Basis |
+|---|---|---|
+| Shows **policy mode + last change + wire status** | **MET** | the report's *Policy mode* / *Last structural change* / *Wire verification* sections, each with a `Source:` line |
+| **Without exposing prompt content** | **MET** | allow-listed fields only; no read of `sid`/`prompt`/`messages`/`body`/headers; the `phase7/p7t3:` privacy test feeds content-shaped fields and asserts none appear |
+| **Adds 0 bytes to the prompt** | **MET** | the report is never imported by `./server`, `./v2`, or `./tui` (no request-path code changed); the `phase7/p7t4:` isolation test greps **every** `src/` module |
+| **No ratio when provider data is insufficient** | **MET** | `usageSection` requires both `read` and `write` with a positive denominator; tests cover missing / partial / zero-denominator; missing ⇒ `unavailable` (never `0`) |
+| **Estimates only with explicit assumptions** | **MET** | the *Estimated cost impact* section is `omitted`; no estimate is produced |
+| §11 — "users can tell what changed and what evidence supports it" | **MET** | every section names its `Source:` record |
+| §11 — "do not build a large dashboard" | **MET** | a pure renderer + a by-path CLI; no TUI panel, no new dependency, no build step |
+
+### Outcome
+
+**Phase 7 delivered a read-only, content-free observability report.** It changed **no** request,
+**no** on-disk history, and **no** telemetry behaviour; `./tui`, `./server`, and `./v2` keep their
+existing meaning. `npm test` **389/0**; `npm run test:harness` 4/4; `npm pack --dry-run` ships both
+modules (11 files).
+
+**Deliverables:** `src/cache-report-core.mjs` (pure) + `src/cache-report.mjs` (CLI); 10 tests; this
+record (P7-T1..P7-T5 + Appendix A); the AGENTS / plan / TODO updates.
+
+### Residual (recorded)
+
+1. **No TUI panel** — gated behind an `RF-*`-verified OpenCode TUI-panel API; the pure `renderReport`
+   is the reuse point (P7-T2 revisit clause).
+2. **Provider cache metrics** appear only when the provider reports them; offline they are
+   `unavailable`.
+3. **Wire verification is always "not observed"** — the plugin has no wire observer, so the report
+   can never claim wire carriage; a future wire-evidence source would surface automatically.
+4. **Trust assumption (H1)** — allow-listed free-text fields are interpolated verbatim; the store is
+   the plugin's own local file.
+5. A `--json` machine-readable mode is deferred.
+
+### Version
+
+A **minor bump (`1.3.0 → 1.4.0`)** is defensible: Phase 7 adds a user-facing feature. There is no
+breaking change — the package exports are unchanged and the new modules are opt-in by invocation.
+`postpublish` tags on publish; the bump itself is a separate, explicit step.
+
+### Acceptance
+
+Phase 7 closes with the criteria met. Phase 8 (reproducible benchmark and public documentation)
+requires its own authorization.
+
+---
+
 ## Appendix A — P7-T2 independent reviews
 
 Two independent reviews of the same P7-T2 problem statement. They **agree** on the core (pure
