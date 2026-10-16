@@ -330,3 +330,68 @@ claim.
   **Provider measured: not performed.**
 - Acceptance: the comparison + confounders are recorded, the conclusion is labelled structural, and
   no benefit is claimed beyond the evidence. **P6-T5 may proceed.**
+
+---
+
+## P6-T5 — summary correctness + staleness risks
+
+**Task:** P6-T5 (`TODO.md`) — document the semantic risks of compaction summarization: summary
+**correctness** and **staleness** — what is lost/rewritten at the boundary, and what a
+cache-motivated change would risk.
+
+**Headline: compaction is a *lossy, model-generated* rewrite of the conversation; the stable prefix
+is untouched.** These risks are why an active compaction rewrite needs a separate decision (plan §10).
+
+### Q1 — What does compaction rewrite? (observed)
+
+From the P6-T2 capture (`req-002` → `req-003`):
+
+- the entire pre-boundary **conversation** is replaced by a single `<conversation-checkpoint>` user
+  message; the original 8102-char user message is **absent** post-boundary — everything the summary
+  omits is **dropped**;
+- the summary is **model-generated** and must satisfy OpenCode's **required template**; a
+  non-conforming reply fails the turn (`Session.StepFailedError: Compaction summary did not match
+  the required template`, `RF-OC-049`);
+- the **stable prefix is not summarized**: the system message (8267 bytes — harness/project
+  instructions) and the `tools` array are **byte-identical** across the boundary, so the risks are
+  confined to conversation state, not to instructions or tool definitions;
+- a **later** boundary re-summarizes an existing checkpoint ("Update the existing checkpoint …"), so
+  loss can **compound** across compactions (`RF-OC-049` note 5).
+
+### Q2 — Correctness risks if the boundary is altered for cache reasons
+
+| Alteration (for prefix stability) | Risk |
+|---|---|
+| Freeze / short-circuit the summary (keep a stable checkpoint) | conversation state the model needs is **dropped or stale**; it reasons on an outdated snapshot |
+| Reuse one checkpoint across a later boundary | a legitimate re-summarization is **suppressed**; the new state is never captured |
+| Change the summary **template/format** (to stabilise bytes) | the template check fails → **turn failure** (observed), or downstream parsing breaks |
+| Rewrite/summarize the **system prompt or tools** | destroys instructions/tool semantics — out of bounds (P6-T1; plan §13 "broad system-block reordering") |
+
+### Q3 — Staleness risks
+
+- A checkpoint is a **point-in-time snapshot**: changes after the boundary are not reflected in it,
+  and a *cached* (byte-stable) checkpoint makes the staleness **persist** rather than self-correct.
+- **Compounding loss:** each re-summarization can drop or distort more than the last.
+- The V1 digest template (`DIGEST_TEMPLATE`, an empty scaffold) carries no state and so no staleness;
+  pinning or populating it with frozen values would (plan §13 "Frozen date/memory — can expose stale
+  information").
+
+### Q4 — What the plan already defers, and does Phase 6 change it?
+
+Plan §13 defers **Frozen date/memory** precisely because it "can expose stale information", to be
+revisited only when "an explicit use case accepts a staleness window". Phase 6 **does not change**
+that: it is research-only and adds no transform. Plan §10 is explicit that **active compaction
+rewriting requires a separate decision**.
+
+### Do-not-alter boundary (binding)
+
+Do not freeze the checkpoint/summary, suppress re-summarization, alter the summary template, or
+summarize the system prompt/tools. Preserve the current compaction continuation behaviour (at most
+one insert per invocation) and do not change thresholds, context limits, or token budgets (AGENTS).
+
+### Evidence & acceptance
+
+- Labels: **Structurally verified** (capture) / **Documented** (plan §10, §13, §17A).
+  **Provider measured: not performed.**
+- Acceptance: correctness + staleness risks are documented with their observed basis and the
+  do-not-alter boundary is explicit. **P6-T6 may proceed.**
