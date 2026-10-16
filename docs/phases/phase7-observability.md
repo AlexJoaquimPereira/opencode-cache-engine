@@ -214,6 +214,24 @@ P7-T3 is complete when the renderer produces the report from records under the i
 - Labels: **Structurally verified** (unit + CLI tests) / **Offline**. **Provider measured: not performed.**
 - Acceptance: the entry point works offline and the tests pass. **P7-T5 may proceed.**
 
+### Independent review (post-implementation)
+
+`@oracle` reviewed the P7-T2/T3/T4 change set (`ses_ebb439dbaffesZaWDqxOt47xap`): **safe to push, no
+blocking issues**; `npm test` 388/0 and `npm pack --dry-run` (11 files) reproduced independently.
+Two Low hardening items were applied:
+
+- **L1 — `wireSection` selection order.** It used `find` (file order) while every other section is
+  newest-first, so an older positive `wireEffect` could outrank a newer `not_observed`. It now reports
+  the **newest** applied record's wire status (positive signals are still surfaced verbatim), with
+  tests for the positive, negative, and newest-wins cases.
+- **L2 — isolation test breadth.** It grepped only the three entry files; it now greps **every** `src/`
+  module except the two report modules, closing the transitive-import bypass.
+
+**Recorded trust assumption (H1 — acknowledged, not a bug):** allow-listed free-text fields
+(`policy`, `reason`, `changedFields`, `tokenSource`, …) are interpolated verbatim; the metrics store
+is the plugin's own trusted local file (the recorder emits constants there), so no field sanitisation
+is applied — consistent with the phase's minimalism value.
+
 ---
 
 ## Appendix A — P7-T2 independent reviews
