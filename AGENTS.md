@@ -64,6 +64,11 @@ npm pack --dry-run
   agnostic accounting logic there and re-export it from `cache-engine-core.mjs`;
   keep other new testable logic in `cache-engine-core.mjs`. `src/tui.mjs` only
   registers the plugin; it has no CacheEngine-specific UI or server behavior.
+  `src/cache-report-core.mjs` (pure parse/render) + `src/cache-report.mjs` (thin CLI) are the
+  Phase-7 **read-only** observability report over the telemetry JSONL: they import only node
+  builtins (+ the core), are **never** imported by `./server`, `./v2`, or `./tui`, and are never
+  on the request path (they add 0 bytes to any prompt). Invoke with
+  `node src/cache-report.mjs [--file <path>]` (or `npm run report`).
 - Package exports are separate: `./server` → `src/cache-engine.ts` and `./tui`
   → `src/tui.mjs`. The package is ESM (`"type": "module"`, no `main`) with a
   `files` whitelist (`src/`, `README.md`, `LICENSE`); the packed tarball ships

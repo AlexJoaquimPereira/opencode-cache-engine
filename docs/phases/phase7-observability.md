@@ -155,6 +155,67 @@ tiny — nothing is on the request path either way.
 
 ---
 
+## P7-T3 — pure report renderer (implemented)
+
+**Task:** P7-T3 (`TODO.md`) — implement `renderReport(records) → string` per the P7-T2 contract.
+**Type:** implementation — **authorized** (2026-10-16); offline. No request mutation; no provider.
+
+### Delivered
+
+- `src/cache-report-core.mjs` — pure: `parseReportInput(text) → { records, skipped }` (tolerant:
+  blank lines ignored; malformed / partial-trailing lines skipped-and-counted) and
+  `renderReport(records) → string`. Imports **nothing** (not even node builtins); no filesystem,
+  network, clock, environment, or OpenCode access; no side effects on import.
+- Sections (fixed order, each always present): policy mode · last structural change · first
+  differing section · transformation status · wire verification · provider cache usage ·
+  accounting limitations · estimated cost impact.
+- **Allow-listed fields only.** The renderer reads `kind`, `ts`, `policy`/`family`, `reason`,
+  `changedFields`/`dimensions`/`reasons`, `stage`, `wireEffect`,
+  `keyInjected`/`optionsInjected`/`keyPreserved`, and
+  `read`/`write`/`input`/`tokenSource`/`glmHitRate`/`cacheHitRate`; it prints **none of** `sid`,
+  prompt/message content, bodies, headers, or unknown fields.
+- Missing ⇒ `unavailable — <reason>`; the generic ratio requires a non-zero denominator; estimates
+  are omitted.
+
+### Invariants
+
+pure; allow-listed; **0 bytes** added to any prompt (never on the request path); no fabricated zero;
+no ratio without provider data; an `applied` change is never a wire claim.
+
+### Completion rule
+
+P7-T3 is complete when the renderer produces the report from records under the invariants.
+**P7-T4 followed.**
+
+---
+
+## P7-T4 — entry point + tests (implemented)
+
+**Task:** P7-T4 (`TODO.md`) — the metrics-file entry point + unit/privacy/isolation tests.
+**Type:** implementation + tests — offline.
+
+### Delivered
+
+- `src/cache-report.mjs` — thin CLI: `parseCliArgs`, `resolveMetricsPath` (`--file` > env >
+  default), and `run(argv, env, out, err) → exitCode` (injectable streams; never throws). Reads
+  `CACHE_ENGINE_METRICS_FILE` else `~/.cache/opencode/cache-metrics.jsonl`; stdout-only; exit `0`
+  ok / `2` usage or unreadable file. Invoked by path (`node src/cache-report.mjs [--file <path>]`)
+  or `npm run report`. **No `bin`, no new `exports` entry** (P7-T2 decision).
+- Tests (`npm test`, **388/0**): parse tolerance; renderer purity/determinism + no input mutation;
+  per-element rendering; unavailable ≠ zero; no ratio on a zero/partial denominator; privacy
+  (content-shaped fields never appear); `stage:"applied"` never a wire claim; CLI arg/path
+  resolution; CLI render + skipped-line note + exit codes; **isolation** (the plugin runtime does
+  not reference the report; the report imports only node builtins + the core).
+- AGENTS "Ownership and runtime" carries the new modules; `package.json` gains a `report` script.
+  `npm pack --dry-run`: both files ship (`total files: 11`).
+
+### Evidence & acceptance
+
+- Labels: **Structurally verified** (unit + CLI tests) / **Offline**. **Provider measured: not performed.**
+- Acceptance: the entry point works offline and the tests pass. **P7-T5 may proceed.**
+
+---
+
 ## Appendix A — P7-T2 independent reviews
 
 Two independent reviews of the same P7-T2 problem statement. They **agree** on the core (pure
