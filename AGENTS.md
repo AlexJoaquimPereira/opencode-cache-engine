@@ -402,8 +402,12 @@ tests + docs; no request behavior change** (`docs/phases/phase5-usage-accounting
 no request/on-disk change; no promotion** (`docs/phases/phase6-compaction-research.md`,
 `RF-OC-049`). **Phase 7 (minimal user-facing observability) COMPLETE** (P7-T1..P7-T5, 2026-10-16) —
 **a read-only, content-free report; 0 bytes added to any prompt; no request-path change**
-(`node src/cache-report.mjs`; `docs/phases/phase7-observability.md`); Phase 8 (reproducible benchmark
-and public documentation) requires its own authorization. See `TODO.md`.
+(`node src/cache-report.mjs`; `docs/phases/phase7-observability.md`). **Phase 8 (reproducible benchmark
+and public documentation) COMPLETE** (P8-T1..P8-T5, 2026-10-17) — an offline, reproducible harness with
+a machine-readable `benchmark.json` envelope, plus the README's evidence-labelled policy/route/
+reproducibility documentation; **structural only, no provider measurement**
+(`docs/phases/phase8-benchmark-docs.md`). The `v1.x.x` plan's phases 0–8 are complete; further work
+requires a new plan. See `TODO.md`.
 
 - **Diagnose before mutating.** Observe the rendered request, identify a specific
   avoidable instability, verify the hook can safely observe/change it, then make
