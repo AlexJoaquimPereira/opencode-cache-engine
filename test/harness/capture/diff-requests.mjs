@@ -132,7 +132,8 @@ export function loadCapture(dir) {
 
 // A request "kind" is its structural shape minus the conversation payload:
 // distinct code paths (agent loop vs title/summary) have different key sets.
-function kindOf(body) {
+// Exported for the Phase-8 benchmark envelope (`benchmark.mjs`).
+export function kindOf(body) {
   const volatile = new Set(["messages", "input", "stream", "stream_options", "options"])
   return Object.keys(body || {})
     .filter((k) => !volatile.has(k))
