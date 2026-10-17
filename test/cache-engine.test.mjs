@@ -10,7 +10,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync, spawnSync } from "node:child_process"
-import { mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -7639,6 +7639,90 @@ test("phase7/p7t4: the CLI runs through a symlinked path (symlink-safe entry det
     const r = spawnSync(process.execPath, [link, "--file", metrics], { encoding: "utf8" })
     assert.equal(r.status, 0, "a symlinked invocation exits 0")
     assert.match(r.stdout, /OPENCODE CACHE ENGINE — cache report/, "and still prints the report")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Phase 8 / P8-T3 — benchmark envelope
+// ---------------------------------------------------------------------------
+
+function writeBenchmarkRoot(dir, { status = "run1_rc=0\nrun1_ms=120\n", model = "mock/synthetic", reqs = 2 } = {}) {
+  writeFileSync(join(dir, "status"), status)
+  writeFileSync(join(dir, "opencode-version.txt"), "2.0.30\n")
+  mkdirSync(join(dir, "home", ".config", "opencode"), { recursive: true })
+  writeFileSync(
+    join(dir, "home", ".config", "opencode", "cache-engine.json"),
+    '{"policies":{"glm53":{"stabilizeDate":true}}}',
+  )
+  mkdirSync(join(dir, "proj", ".opencode"), { recursive: true })
+  writeFileSync(join(dir, "proj", ".opencode", "opencode.json"), JSON.stringify({ model }))
+  mkdirSync(join(dir, "capture"), { recursive: true })
+  const body = (msgs) => ({
+    seq: 1,
+    method: "POST",
+    url: "/v1/chat/completions",
+    body: { model: "m", store: true, stream: true, tools: [], messages: msgs },
+  })
+  for (let i = 1; i <= reqs; i++) {
+    writeFileSync(
+      join(dir, "capture", `req-${String(i).padStart(3, "0")}.json`),
+      JSON.stringify(body([{ role: "system", content: "S" }, { role: "user", content: `u${i}` }])),
+    )
+  }
+}
+
+test("phase8/p8t3: benchmark envelope assembles from a capture root", async () => {
+  const { buildBenchmark, parseStatus } = await import("./harness/capture/benchmark.mjs")
+  const st = parseStatus("run1_rc=0\nrun1_ms=120\nrun2_rc=1\nrun2_ms=80\nturn_failed=1\nturn2_failed=true\n")
+  assert.deepEqual(st.turns, [
+    { n: 1, rc: 0, durationMs: 120 },
+    { n: 2, rc: 1, durationMs: 80 },
+  ])
+  assert.equal(st.turnFailed, true)
+  assert.deepEqual(parseStatus("").turns, [])
+
+  const dir = mkdtempSync(join(tmpdir(), "ce-p8t3-"))
+  try {
+    writeBenchmarkRoot(dir)
+    const env = buildBenchmark(dir, {
+      plugin: { name: "opencode-cache-engine", version: "1.4.0" },
+      workload: { turns: 2, continue: false },
+    })
+    assert.equal(env.schema, 1)
+    assert.deepEqual(env.plugin, { name: "opencode-cache-engine", version: "1.4.0" })
+    assert.equal(env.opencode.version, "2.0.30", "G1 — the OpenCode version is recorded")
+    assert.equal(env.model, "mock/synthetic")
+    assert.equal(env.provider, "mock")
+    assert.deepEqual(env.engineConfig, { policies: { glm53: { stabilizeDate: true } } }, "G2 — policy conditions recorded")
+    assert.equal(env.workload.turns, 2)
+    assert.equal(env.turns[0].durationMs, 120, "G3 — per-turn duration recorded")
+    assert.equal(env.turnFailed, false)
+    assert.equal(env.requests.total, 2, "G8 — request census")
+    assert.equal(env.diff.verdict, "expected")
+    assert.deepEqual(env.evidence, {
+      conclusionClass: "structural",
+      providerMetrics: "unavailable",
+      wireVerification: "not_observed",
+    })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("phase8/p8t3: benchmark CLI writes benchmark.json and rejects a missing root", () => {
+  const script = fileURLToPath(new URL("./harness/capture/benchmark.mjs", import.meta.url))
+  const dir = mkdtempSync(join(tmpdir(), "ce-p8cli-"))
+  try {
+    writeBenchmarkRoot(dir, { status: "run1_rc=0\n" })
+    const ok = spawnSync(process.execPath, [script, dir], { encoding: "utf8" })
+    assert.equal(ok.status, 0)
+    const env = JSON.parse(readFileSync(join(dir, "benchmark.json"), "utf8"))
+    assert.equal(env.schema, 1)
+    assert.equal(env.diff.verdict, "expected")
+    const missing = spawnSync(process.execPath, [script, join(dir, "nope")], { encoding: "utf8" })
+    assert.equal(missing.status, 2, "a missing root is a blocker")
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
