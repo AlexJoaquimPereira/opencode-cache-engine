@@ -216,6 +216,8 @@ The key is derived from the OpenCode session identity (or the resolved cache roo
 
 Key ownership depends on the transport. OpenCode itself pre-sets `promptCacheKey` to the session id for direct OpenAI/Azure, so on ordinary live requests CacheEngine preserves that existing key and writes its own key only when cache-root affinity is enabled. On OpenRouter, where OpenCode sets no key, CacheEngine supplies it. In both cases a cache key provides namespace **stability and isolation**; it does not by itself guarantee a cache hit — provider-reported usage remains the authoritative signal.
 
+On the tested routes this mutation is **not wire-attributable**: OpenCode already supplies the key and every inspected provider schema drops `promptCacheOptions` (`RF-OC-047`) — see *Evidence, routes, and reproducibility*.
+
 ### Important: the prompt text is not rewritten
 
 For GPT-5.6:
@@ -352,6 +354,9 @@ For direct Z.AI or any other non-OpenRouter endpoint, CacheEngine does not add
 the OpenRouter-specific affinity header. It leaves the endpoint's native cache
 behavior intact.
 
+On the tested route this header is **harness-owned** — OpenCode sets `x-session-id` itself and
+CacheEngine merely preserves it, so the header cannot be credited to this plugin (`RF-OC-048`).
+
 Affinity observations record eligibility, the observed provider identity,
 whether a header was already present or added, and provider-identity changes
 (`glm_provider_changed`). They do not record the header value.
@@ -446,6 +451,9 @@ For Xiaomi's direct endpoint and every other non-OpenRouter provider, CacheEngin
 does not add its OpenRouter-specific `x-session-id`. Direct provider endpoints
 retain their provider-native caching behavior. Any header already supplied by
 the user or runtime is left untouched.
+
+On the tested route this header is **harness-owned** — OpenCode sets it and CacheEngine preserves
+it (`RF-OC-048`).
 
 The `x-session-id` header is not a top-level request-body `session_id`, a
 `promptCacheKey`, or a cache-control option. MiMo uses provider-managed implicit
@@ -2182,7 +2190,10 @@ opencode-cache-engine/
 │   ├── cache-engine.ts
 │   ├── cache-engine-v2.mjs
 │   ├── cache-engine-core.mjs
+│   ├── cache-usage-core.mjs
 │   ├── cache-policy-core.mjs
+│   ├── cache-report-core.mjs
+│   ├── cache-report.mjs
 │   └── tui.mjs
 ├── test/
 │   └── cache-engine.test.mjs
@@ -2339,7 +2350,7 @@ and `./v2` is the V2 entry convention (RF-OC-017, RF-OC-018).
 * **Unverified:** **managed-config discovery and registration** of `./v2`, and
   direct `plugins: ["opencode-cache-engine/v2"]` entry resolution (failed in the
   tested offline config — RF-OC-023).
-* **Unit tests (316/316):** cover the pure logic and contract shapes only; they
+* **Unit tests (391/391):** cover the pure logic and contract shapes only; they
   do **not** prove loader registration or live accounting.
 
 **Known limitations (preview):**
@@ -2415,9 +2426,9 @@ Runtime validation should additionally confirm:
 DeepSeek:
     no request mutation
 
-GPT-5.6:
-    promptCacheKey present
-    promptCacheOptions present
+GPT-5.6 (adapter assignment only — NOT a wire claim; see "Evidence, routes, and reproducibility"):
+    promptCacheKey assigned when absent (OpenCode pre-sets it on live OpenAI/Azure requests — RF-OC-047)
+    promptCacheOptions assigned (dropped by every inspected provider schema, so this is not a wire result — RF-OC-047)
 
 GLM-5.3:
     volatile env block relocated when eligible
@@ -2574,7 +2585,7 @@ MiMo V2.6+  -> family baseline; V2.6 Flash/Pro only: preserve-content <env> relo
 Kimi        -> passive; Moonshot caching is automatic (V2.6/K2.7-code/K3); request unchanged
 Claude      -> passive; OpenCode applies Anthropic cache_control breakpoints; request unchanged
 Gemini      -> passive; Google implicit caching (2.5+); request unchanged, no CachedContent created
-OpenCode V2 -> adapter (./v2) preview: offline-tested; runtime registration/hooks unverified
+OpenCode V2 -> adapter (./v2) preview: shim-route setup + context/model.request dispatch verified (RF-OC-024/025); managed-config discovery + the direct subpath entry remain unverified
 ```
 
 That separation is the core design of the project.
