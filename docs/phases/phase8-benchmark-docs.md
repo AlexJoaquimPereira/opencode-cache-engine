@@ -190,3 +190,41 @@ identical paired diffs, and all four harness suites pass).
 
 P8-T3 is complete when the gaps close and `npm test` + `npm run test:harness` pass. **P8-T4 may
 proceed.**
+
+---
+
+## P8-T4 — public documentation (published)
+
+**Task:** P8-T4 (`TODO.md`) — publish what the evidence does and does not establish.
+**Type:** documentation — **authorized** (2026-10-17). **Provider measured: not performed.**
+
+### Delivered (README — the only doc shipped in the npm tarball)
+
+- **`# Cache report`** — the read-only report CLI (`node src/cache-report.mjs [--file <path>]`,
+  `npm run report`), what it prints, its guarantees (0 bytes added to any prompt; no content/ids;
+  missing ⇒ `unavailable`; no ratio without provider data; an applied change is never wire
+  verification), and its exit codes.
+- **`# Evidence, routes, and reproducibility`** (new closing section):
+  - an **evidence-level legend** (Documented / Observed / Inferred / Unknown / Author-reported) plus
+    the explicit statement that **no performance claim is provider-measured on the reader's route**;
+  - a **policy governance matrix** — class · mutation · wire status on the tested routes · evidence ·
+    disable path — for every family and both transport overlays (read alongside the existing
+    mechanism table; not a duplicate);
+  - **supported routes and version limits** (V1 1.18.35; V2 2.0.26, a 2026-10 capture observed
+    2.0.32; Node 22.23.2) with the "per API route, not per provider name" scope rule;
+  - the **identity-versus-stability** distinction ("a stable identity does not repair unstable
+    bytes");
+  - **telemetry limitations** (best-effort / never exactly-once; missing ⇒ *unavailable*, not zero;
+    provider-specific ratios; undercount + restart recount; the field allow-list);
+  - **reproducibility** (the documented offline commands + `benchmark.json` + its `evidence` block);
+  - the **competitor-numbers** labelling (author-reported unless a note says otherwise).
+
+### Invariants
+
+every claim cites a store entry (`RF-*`), a test, or the Compatibility section; no unverified claim;
+no prompt content; no competitor number presented as reproduced.
+
+### Completion rule
+
+P8-T4 is complete when the documentation exists and every claim carries an evidence label.
+**P8-T5 may proceed.**
