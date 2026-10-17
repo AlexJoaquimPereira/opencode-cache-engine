@@ -1474,7 +1474,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 
 ### RF-OC-033 — GLM/MiMo `<env>` relocation is a no-op on the captured OpenCode 2.0.26 system-prompt shape (marker precondition unmet); cache benefit unverified
 
-- Status: current
+- Status: superseded
 - Verified: 2026-10-13
 - Area: opencode-runtime
 - Fact:

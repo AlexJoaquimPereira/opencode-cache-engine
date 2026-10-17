@@ -1,6 +1,6 @@
 # CacheEngine Cache-Policy Compatibility Inventory
 
-Release: **v0.4.0 — research and documentation only.**
+Release: **v1.4.0** — provider compatibility reference (research and documentation).
 
 This document inventories documented cache behavior for the model boundaries that
 CacheEngine classifies, and states whether CacheEngine's current treatment is
