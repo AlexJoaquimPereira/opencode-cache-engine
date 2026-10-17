@@ -436,4 +436,5 @@ an offline compaction trigger in the capture harness; `test/fixtures/compaction-
 
 **Acceptance:** Phase 6 closes with the criteria met. No version bump is required — the phase is
 research + test-harness + docs; runtime request behaviour is unchanged. Phase 7 (minimal
-observability) requires its own authorization.
+observability) is **complete** (P7-T1..P7-T5, 2026-10-16, v1.4.0); Phase 8 requires its own
+authorization.
