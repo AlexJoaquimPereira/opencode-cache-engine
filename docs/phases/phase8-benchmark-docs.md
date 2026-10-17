@@ -228,3 +228,75 @@ no prompt content; no competitor number presented as reproduced.
 
 P8-T4 is complete when the documentation exists and every claim carries an evidence label.
 **P8-T5 may proceed.**
+
+---
+
+## P8-T5 — benchmark report + clean-room reproducibility (gate)
+
+**Task:** P8-T5 (`TODO.md`) — produce the benchmark report and demonstrate the §3C row-8 criterion.
+**Type:** gate (decision + validation). **Provider measured: not performed.**
+
+### Clean-room reproduction
+
+A **fresh clone** of the pushed `master` (`ce0b1dc`) into a new directory; no credentials; offline.
+
+```sh
+git clone <repo> /tmp/opencode/clean-room.<pid> && cd /tmp/opencode/clean-room.<pid>
+npm test                                                  # 391/0
+test/harness/capture/run.sh                               # rc 0
+OC_CAPTURE_TURNS=3 OC_CAPTURE_CONTINUE=1 test/harness/capture/run.sh   # rc 0
+```
+
+**Result — reproduced.** Both documented commands exited `0` with `diff.verdict = "expected"` — the
+same **structural** result on the same inputs (the P8-T2 definition). `npm test` is 391/0 in the clean
+clone.
+
+### Benchmark report
+
+| Field | Value |
+|---|---|
+| Plugin | `opencode-cache-engine` **1.4.0** |
+| OpenCode | **v2.0.32** (harness binary; the README's verified V2 line is 2.0.26) |
+| Route | `mock` provider → `http://127.0.0.1:<port>/v1/chat/completions` (loopback OpenAI-compatible; **no provider contacted**) |
+| Model | `mock/synthetic` |
+| Policy conditions | `engineConfig: null` — no policy overlay injected for the baseline/determinism runs |
+| Workload / repetition | baseline: 2 equivalent turns; determinism: 3 equivalent turns + 1 session-continue |
+| Structural diff | baseline `pairs 2 / expected 2 / unexpected 0`; determinism `pairs 5 / expected 5 / unexpected 0` |
+| Result distribution | `model,store`: 2 pairs (2 identical); `max_completion_tokens,model,store,tools`: 3 pairs (2 identical, all expected) |
+| Requests | baseline 4 (2 aux + 2 agent); determinism 7 (3 aux + 4 agent) |
+| Per-turn duration | baseline 725 / 646 ms; determinism 690 / 675 / 659 / 667 ms |
+| Errors / confounders | `turnFailed: false`, no failed turns. Confounders: the mock returns fixed usage; every turn is a fresh session except the `--continue` turn |
+| Wire verification | `wireVerification: "not_observed"` — the harness observes the serialized request, not provider wire carriage |
+| Provider metrics | `providerMetrics: "unavailable"` — the mock emits no cache fields |
+| **Conclusion class** | **`structural`** — a serialized-request observation. **Not provider-measured; not a cache-benefit claim.** |
+
+### §12 acceptance
+
+| Criterion | Result | Basis |
+|---|---|---|
+| A third party can **reproduce the method** | **MET** | the clean-room clone runs the documented commands |
+| … and **obtains the same structural result** (§3C row 8) | **MET** | both commands exit `0` with `verdict "expected"` in the clean clone |
+| … and can **understand what the evidence does and does not establish** | **MET** | the README's *Evidence, routes, and reproducibility* section + the `evidence` block in every `benchmark.json` |
+| Published: policy matrix · routes/version limits · identity vs stability · telemetry limitations · per-claim evidence levels · competitor labelling | **MET** | `# Evidence, routes, and reproducibility` (P8-T4) |
+| No unverified claim; no competitor number presented as reproduced | **MET** | every row cites a store entry, a test, or the Compatibility section |
+
+### Outcome
+
+**Phase 8 delivered a reproducible offline benchmark harness (with a machine-readable envelope) and
+the public documentation that states the evidence level behind every claim.** No request, on-disk, or
+telemetry behaviour changed; `./server`, `./v2`, and `./tui` keep their meaning.
+
+**Residual (recorded):**
+
+1. **No provider-measured benchmark** — the offline harness cannot produce one; a live A/B needs an
+   authorized provider experiment (testing ladder D) on a pinned route.
+2. **`wireVerification` is always `not_observed`** — the plugin has no wire observer.
+3. The harness **rollover** is simulated; a real-calendar rollover remains optional/unavailable
+   offline.
+4. Competitor numbers remain **author-reported**.
+5. The README's verified V2 line (2.0.26) trails the harness-observed binary (2.0.32).
+
+### Acceptance
+
+Phase 8 closes with the criteria met. The `v1.x.x` plan's phases 0–8 are complete; any further work
+requires a new plan and its own authorization.
