@@ -115,7 +115,7 @@ never changes the exit contract) recording the conditions a third party needs to
 - `workload` (`turns`, `continue`, `promptBytes`, `mockPort`);
 - `turns` — per-turn `rc` + `durationMs` (G3) — and `turnFailed`;
 - `requests.total` + a per-kind census (G8), `diff.verdict` (`expected`/`unexpected`/`no-pairs`/
-  `error`, from `diff-requests.mjs`), and a per-kind `repetitions` summary (G5);
+  `no-captures`/`error`, from `diff-requests.mjs`), and a per-kind `repetitions` summary (G5);
 - `evidence` — the P8-T2 taxonomy: `conclusionClass: "structural"`,
   `providerMetrics: "unavailable"`, `wireVerification: "not_observed"`.
 

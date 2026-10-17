@@ -13,9 +13,9 @@
 // the offline harness cannot produce a provider-measured result, and
 // `providerMetrics` / `wireVerification` are labelled accordingly (G4/G7).
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { pathToFileURL } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import { diffCapture, kindOf, loadCapture } from "./diff-requests.mjs"
 
 // --- pure helpers -----------------------------------------------------------
@@ -157,12 +157,12 @@ function runCli(argv, env = process.env) {
     console.error(`error: capture root not found: ${root}`)
     return 2
   }
-  const repoRoot = new URL("../../..", import.meta.url).pathname
+  const repoRoot = fileURLToPath(new URL("../../..", import.meta.url))
   const prompt = typeof env.OC_CAPTURE_PROMPT === "string" ? env.OC_CAPTURE_PROMPT : ""
   const workload = {
     turns: Number(env.OC_CAPTURE_TURNS ?? 0) || null,
     continue: env.OC_CAPTURE_CONTINUE === "1",
-    promptBytes: prompt.length,
+    promptBytes: Buffer.byteLength(prompt, "utf8"),
     mockPort: Number(env.MOCK_PORT ?? 0) || null,
   }
   let envelope
@@ -181,6 +181,18 @@ function runCli(argv, env = process.env) {
   return 0
 }
 
-const invokedDirectly =
-  typeof process.argv[1] === "string" && import.meta.url === pathToFileURL(process.argv[1]).href
-if (invokedDirectly) process.exit(runCli(process.argv))
+// Symlink-safe entry detection. `import.meta.url` is the *realpath* of this
+// module while `process.argv[1]` keeps the path as given — and `run.sh` passes
+// `$SCRIPT_DIR/benchmark.mjs` where `SCRIPT_DIR` comes from a logical `pwd`, so a
+// repo checked out under a symlinked path would otherwise silently no-op (exit 0,
+// no envelope, and no warning, since the guarding `||` only fires on a non-zero exit).
+function invokedDirectly(argv1) {
+  if (typeof argv1 !== "string" || argv1.length === 0) return false
+  try {
+    return realpathSync(argv1) === realpathSync(fileURLToPath(import.meta.url))
+  } catch {
+    return import.meta.url === pathToFileURL(argv1).href
+  }
+}
+
+if (invokedDirectly(process.argv[1])) process.exit(runCli(process.argv))

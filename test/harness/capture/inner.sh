@@ -63,12 +63,14 @@ run_turn() {
   local rc=$?
   t1=$(date +%s%3N 2>/dev/null || true)
   echo "run${n}_rc=$rc" >>"$CE/status"
-  # Per-turn duration (Phase 8 / G3). When `date` lacks millisecond precision the
-  # line is omitted rather than written with a bogus value.
-  case "$t0$t1" in
-    ''|*[!0-9]*) : ;;
-    *) echo "run${n}_ms=$((t1 - t0))" >>"$CE/status" ;;
-  esac
+  # Per-turn duration (Phase 8 / G3). Each timestamp is validated separately (so a
+  # mixed empty/garbage pair can never yield a bogus value), and a negative
+  # (clock-skew) result is omitted rather than written.
+  case "$t0" in ''|*[!0-9]*) t0="" ;; esac
+  case "$t1" in ''|*[!0-9]*) t1="" ;; esac
+  if [ -n "$t0" ] && [ -n "$t1" ] && [ "$t1" -ge "$t0" ]; then
+    echo "run${n}_ms=$((t1 - t0))" >>"$CE/status"
+  fi
   if [ "$rc" -ne 0 ]; then
     echo "turn_failed=1" >>"$CE/status"
     echo "turn${n}_failed=true" >>"$CE/status"
