@@ -1336,6 +1336,32 @@ A MiMo usage record adds the provider-reported cache fields:
 ```
 
 
+# Cache report
+
+A read-only report over the telemetry JSONL: see what changed and what evidence supports it,
+without touching a request.
+
+```sh
+node src/cache-report.mjs                                 # $CACHE_ENGINE_METRICS_FILE, else the default path
+node src/cache-report.mjs --file ./cache-metrics.jsonl
+npm run report -- --file ./cache-metrics.jsonl
+```
+
+It prints **policy mode**, the **last structural change**, the **first differing section**,
+**transformation status**, **wire verification**, **provider cache usage**, the **accounting
+limitations**, and an **estimated cost impact** (omitted unless assumptions are explicit).
+
+Guarantees:
+
+- it is **never on the request path** — it adds **0 bytes** to any prompt and is never imported
+  by the plugin entries;
+- it never prints prompt or reasoning content, credentials, headers, bodies, or session ids;
+- a missing metric is rendered `unavailable`, **never `0`**;
+- no ratio is shown without provider-reported data and a non-zero denominator;
+- an applied hook change is **never** presented as wire verification.
+
+Exit codes: `0` ok; `2` a usage error or an unreadable metrics file.
+
 # Configuration
 
 The default configuration is:
@@ -2554,3 +2580,101 @@ OpenCode V2 -> adapter (./v2) preview: offline-tested; runtime registration/hook
 That separation is the core design of the project.
 
 The plugin should be evaluated using real provider-reported usage and real task cost rather than assuming that any particular local transformation guarantees a cache hit.
+
+# Evidence, routes, and reproducibility
+
+This section states what the claims above rest on, what is out of scope, and how to reproduce the
+structural findings yourself.
+
+## Evidence levels
+
+| Label | Meaning |
+| ----- | ------- |
+| **Documented** | stated by first-party creator documentation |
+| **Observed** | reproduced here (offline capture, an isolated runtime measurement, or a test) |
+| **Inferred** | a reasoned conclusion from the above, not directly measured |
+| **Unknown** | no evidence — the plugin stays passive rather than guessing |
+| **Author-reported** | a third-party claim (e.g. a competitor's numbers) **not** independently reproduced here; never promoted to Documented/Observed without our own reproduction |
+
+Each per-provider *Evidence and status* subsection above carries the label behind its claims.
+**No performance claim in this README is provider-measured on your route** — cache-benefit
+numbers require a provider-side A/B on a pinned route (see *Reproducibility*).
+
+## Policy governance matrix
+
+Mechanism is in *Provider comparison* above; this table states the **class**, what the plugin
+changes, the **wire status on the tested routes**, the evidence, and the disable path.
+
+| Policy | Class | Mutation | Wire status (tested routes) | Evidence | Disable |
+| ------ | ----- | -------- | --------------------------- | -------- | ------- |
+| `deepseek` | passive | none | n/a | Documented + Observed | `policies.deepseek.enabled=false` |
+| `gpt56.cache-options` | transport | adds `prompt_cache_key`/options only when absent | **not wire-attributable** on the tested openai-compatible route — OpenCode already sets the key and the provider schema drops the options (`RF-OC-047`) | Observed | `policies.gpt56.enabled=false` (or `promptCacheKey=false`) |
+| `gpt56` compaction isolation | structural | `<root>:compact` key namespace | structural only (`RF-OC-047`) | Observed | `policies.gpt56.compactionCacheIsolation=false` |
+| `glm53.env-relocation` | structural | `<env>` block → system tail (content-preserving) | structural | Observed | `policies.glm53.stabilizeSystem=false` |
+| `glm53.stabilizeDate` | experimental | daily date line → system tail | structural; **default off** | Observed | `policies.glm53.stabilizeDate=false` (default) |
+| `mimo26.env-relocation` | structural | as GLM-5.3 | structural | Observed | `policies.mimo26.stabilizeSystem=false` |
+| `mimo26.stabilizeDate` | experimental | as GLM-5.3 | structural; **default off** | Observed | `policies.mimo26.stabilizeDate=false` (default) |
+| `openrouter.affinity` | transport | adds `x-session-id` for GLM-5.3 / MiMo-V2.6 on `openrouter` only | **harness-owned** — OpenCode sets the header natively; the adapter preserves it (`RF-OC-048`) | Observed | inherent (route gate) |
+| `kimi` · `claude` · `gemini` · `qwen` · `grok` · `muse` · `minimax` | passive | none | n/a | Documented + Observed | `policies.<family>.enabled=false` |
+
+**Reading the wire column.** *structural* = a content-preserving change reached the serialized
+request; *not wire-attributable* = the field's presence cannot be credited to this plugin;
+*harness-owned* = OpenCode already sets it. A policy being **applied** is never a wire claim, and
+no row here is a cache-benefit claim.
+
+## Supported routes and version limits
+
+| Surface | Verified | Notes |
+| ------- | -------- | ----- |
+| OpenCode V1 | **1.18.35** | `./server` → `server(input, options)` |
+| OpenCode V2 | **2.0.26** (a 2026-10 capture observed **2.0.32**) | `./server` → `setup(ctx)`; adapter **preview** |
+| Node | **22.23.2** | built-in test runner; no build step, no runtime dependency |
+
+Route scope is **per API route, not per provider name**: a native endpoint, an OpenAI-compatible
+gateway, and a third-party gateway can serialize different request shapes. Every claim above is
+scoped to the route named with it. Anthropic and Kimi in particular have route differences.
+
+## Identity versus stability
+
+Two different things, often conflated:
+
+- **Identity** — *which* cache bucket a request is routed to (a session key, `prompt_cache_key`,
+  or an affinity header such as `x-session-id`).
+- **Stability** — whether the **bytes** of the request prefix are unchanged between requests.
+
+They are independent, and **a stable identity does not repair unstable bytes**: a perfect session
+key cannot produce a cache read if the prefix content itself changed. The plugin therefore treats
+key/affinity work (*transport*) and prefix work (*structural*) as separate concerns, and never
+presents one as evidence for the other.
+
+## Telemetry limitations
+
+- Telemetry is **best-effort, never exactly-once**; a failed write is swallowed rather than
+  allowed to break a request.
+- **A missing metric is *unavailable*, not zero** — an absent value is never rendered as `0` and
+  never inferred.
+- Ratios are **provider-specific and never universalised**: generic `read/(read+write)`; GLM
+  `read/(read+write+input)`; MiMo `cachedTokens/(read+input)`.
+- Accounting can **undercount** (a dropped idle event, a same-millisecond boundary, capacity
+  eviction) and **recount across a process restart** (the cursor is in-memory). Attributed usage
+  is an observation, not a billing statement.
+- **No prompt or reasoning content, credentials, authorization headers, or request bodies** are
+  recorded; the field set is an allow-list.
+
+## Reproducibility
+
+The harness findings can be reproduced **offline** — no provider, no credentials:
+
+```sh
+test/harness/capture/run.sh                                            # two equivalent turns
+OC_CAPTURE_TURNS=3 OC_CAPTURE_CONTINUE=1 test/harness/capture/run.sh   # determinism
+node test/harness/capture/diff-requests.mjs <captureRoot>/capture      # structural diff
+```
+
+Requires Linux with `bubblewrap`, Node, and an OpenCode binary (`OC2`). Each capture root gains a
+machine-readable **`benchmark.json`** — versions, route, injected config, per-turn rc and
+duration, request census, diff verdict — plus an `evidence` block labelling the run `structural`,
+with `providerMetrics: "unavailable"` and `wireVerification: "not_observed"`.
+
+**Competitor numbers** quoted anywhere in this project are **author-reported** unless a note says
+otherwise; they are not reproduced here and are not used as evidence for any claim above.
