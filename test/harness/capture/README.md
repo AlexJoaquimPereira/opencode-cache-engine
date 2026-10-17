@@ -104,6 +104,24 @@ Limitation: no plugin telemetry file is written in these offline runs and the mo
 reports fixed usage, so cache **read/write counts are not observable offline** —
 only the structural prefix behaviour is.
 
+## Benchmark envelope (P8-T3)
+
+Each `run.sh` capture root gains a machine-readable **`benchmark.json`** (written best-effort — it
+never changes the exit contract) recording the conditions a third party needs to compare the
+*structural* result:
+
+- `plugin` / `opencode.version` (G1), `model` / `provider`, `engineConfig` (G2 — the injected
+  `OC_CAPTURE_ENGINE_CONFIG`, or `null`);
+- `workload` (`turns`, `continue`, `promptBytes`, `mockPort`);
+- `turns` — per-turn `rc` + `durationMs` (G3) — and `turnFailed`;
+- `requests.total` + a per-kind census (G8), `diff.verdict` (`expected`/`unexpected`/`no-pairs`/
+  `error`, from `diff-requests.mjs`), and a per-kind `repetitions` summary (G5);
+- `evidence` — the P8-T2 taxonomy: `conclusionClass: "structural"`,
+  `providerMetrics: "unavailable"`, `wireVerification: "not_observed"`.
+
+`benchmark.mjs` is read-only over the capture root and never contacts a provider. The full
+reproducibility contract is in `docs/phases/phase8-benchmark-docs.md` (P8-T2).
+
 ## Exit contract
 
 | Code | Meaning |

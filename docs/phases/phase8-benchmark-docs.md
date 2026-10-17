@@ -85,3 +85,108 @@ verified. **Provider measured: not performed.**
   performed.**
 - Acceptance: the capability matrix + the report-field map exist with an explicit gap list (G1–G8)
   and a smallest-fix per gap. **P8-T2 may proceed (subject to explicit authorization).**
+
+---
+
+## P8-T2 — reproducibility contract + claims taxonomy
+
+**Task:** P8-T2 (`TODO.md`) — fix the documented command(s), the meaning of "the same structural
+result", and the taxonomy labelling every conclusion.
+**Type:** design decision — **authorized by the user (2026-10-17)**. Read-only.
+**Provider measured: not performed.**
+
+### The contract
+
+**Prerequisites (documented, no credentials):** Linux with `bubblewrap`; Node ≥ 22; an OpenCode V2
+binary (`OC2`, default `~/.opencode/bin/opencode`). The mock provider binds loopback only and the
+sandbox runs `bwrap --unshare-net`.
+
+**Documented commands**
+
+```sh
+# baseline (two equivalent turns)
+test/harness/capture/run.sh
+
+# determinism (three equivalent turns + a session-continue turn)
+OC_CAPTURE_TURNS=3 OC_CAPTURE_CONTINUE=1 test/harness/capture/run.sh
+
+# policy A/B (baseline vs candidate) — two runs + the wire verifier
+OC_CAPTURE_ENGINE_CONFIG='{"policies":{"glm53":{"stabilizeDate":true}}}' test/harness/capture/run.sh
+node test/harness/capture/verify-date-relocation.mjs <offCaptureRoot> <onCaptureRoot>
+```
+
+**"The same structural result" means:** the same **exit-contract verdict** (`0` identical/expected-
+only, `1` an unexpected structural difference, `2` a blocker) **and** a `benchmark.json` whose
+`diff.verdict` and `requests.kinds` match — for the same `OC_CAPTURE_*` inputs and the same OpenCode +
+plugin versions. Provider-reported numbers are explicitly **out of scope** for reproduction.
+
+### Claims taxonomy (binding)
+
+| Class | Meaning | Use in a published benchmark |
+|---|---|---|
+| `structural` | a serialized-request observation (diff, prefix, marker) | **allowed** — the harness's only offline class |
+| `provider-measured` | a provider-reported number (cache read/write, tokens) from an **authorized** provider experiment | only with the authorization and that run's evidence |
+| `estimated` | a model over stated assumptions (e.g. the P6-T3 re-prefill) | allowed, **with the assumptions stated** |
+
+**Rules**
+
+1. A `structural` result **never** implies a provider benefit.
+2. Offline, `providerMetrics` is **`unavailable`** — never zero, never inferred.
+3. `wireVerification` is **`not_observed`** unless a wire verifier applies (today only the date-relocation
+   verifier does; `RF-OC-030`/`RF-OC-031`).
+4. Competitor numbers are **`author-reported`** unless independently reproduced.
+
+### Redaction / local-only defaults (preserved)
+
+Captures contain only the harness's synthetic prompt; `authorization` **values** are never recorded
+(presence flag only); captures stay under the temp root; the mock is loopback-only; `bwrap
+--unshare-net` with a private HOME/XDG. A published benchmark must not add real prompts, credentials,
+or provider bodies.
+
+### Acceptance
+
+Recorded and user-authorized (2026-10-17). **P8-T3 may proceed.**
+
+---
+
+## P8-T3 — benchmark harness gaps (implemented)
+
+**Task:** P8-T3 (`TODO.md`) — implement only the gaps P8-T1 proved missing, under the P8-T2 contract.
+**Type:** implementation — **authorized** (2026-10-17); offline. No request mutation; no provider.
+
+### Delivered
+
+- `test/harness/capture/benchmark.mjs` (**new**) — assembles `benchmark.json` for a capture root:
+  pure helpers `parseStatus` / `summarizeRequests` / `summarizeRepetitions` + `buildBenchmark`, and a
+  CLI that writes the envelope. **Read-only**; never contacts a provider.
+- `run.sh` — invokes `benchmark.mjs` after the sandbox run, **best-effort** (it never changes the
+  exit contract), passing the resolved workload env.
+- `inner.sh` — records the OpenCode version once (`opencode --version` → `opencode-version.txt`, **G1**)
+  and a per-turn duration (`runN_ms`, **G3**; the line is omitted when `date` lacks millisecond
+  precision, so no bogus value is written).
+- `diff-requests.mjs` — exports `kindOf` (additive; no behaviour change).
+- `exit-contract.test.sh` — counts **turn** invocations only (a `--version` probe is not a turn) and
+  the sleep stub answers `--version`.
+- Harness README — the "Benchmark envelope (P8-T3)" section.
+- Tests (`npm test`, **391/0**; 2 new): envelope assembly from a synthetic root (+ `parseStatus`);
+  CLI write + missing-root blocker.
+
+### Envelope (verified in situ — a real default capture)
+
+`plugin 1.4.0` · `opencode v2.0.32` (**G1**) · `model`/`provider` · `engineConfig: null` (**G2**) ·
+`workload {turns:2, continue:false, promptBytes:6, mockPort:39420}` ·
+`turns[{n:1,rc:0,durationMs:705},{n:2,rc:0,durationMs:645}]` (**G3**) · `requests.total 4` + per-kind
+census (**G8**) · `diff.verdict "expected"` · `repetitions` per kind (**G5**) ·
+`evidence {conclusionClass:"structural", providerMetrics:"unavailable", wireVerification:"not_observed"}`
+(**G4/G7**).
+
+### Invariants
+
+offline; no provider calls; **no request-behaviour change**; the envelope is best-effort and cannot
+alter the exit contract; the default capture path is unchanged (a clean default run still exits 0 with
+identical paired diffs, and all four harness suites pass).
+
+### Completion rule
+
+P8-T3 is complete when the gaps close and `npm test` + `npm run test:harness` pass. **P8-T4 may
+proceed.**
