@@ -98,16 +98,18 @@ CE="$TMP/ce-cont-bad" REPO="$REPO" OC_CAPTURE_CONTINUE=yes bash "$INNER" >/dev/n
 ARGVSTUB="$TMP/stub-argv.sh"; printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >>"$CE/argv.log"\n' >"$ARGVSTUB"; chmod +x "$ARGVSTUB"
 mkdir -p "$TMP/ce-turns/proj"
 CE="$TMP/ce-turns" REPO="$REPO" OC_BIN="$ARGVSTUB" MOCK_PORT=39432 OC_CAPTURE_TURNS=3 OC_CAPTURE_CONTINUE=1 OC_CAPTURE_TURN_TIMEOUT=5 bash "$INNER" >/dev/null 2>&1
-turns=$(wc -l <"$TMP/ce-turns/argv.log" 2>/dev/null | tr -d ' ')
+# The version probe (`--version`) is not a turn; count only the turn invocations.
+grep -v '^--version' "$TMP/ce-turns/argv.log" >"$TMP/ce-turns/turns.log" 2>/dev/null
+turns=$(wc -l <"$TMP/ce-turns/turns.log" 2>/dev/null | tr -d ' ')
 check 4 "${turns:-0}" "inner.sh: TURNS=3 + CONTINUE=1 runs 4 turns"
-if grep -q -- '--continue' <(sed -n '4p' "$TMP/ce-turns/argv.log" 2>/dev/null) && ! grep -q -- '--continue' <(sed -n '1,3p' "$TMP/ce-turns/argv.log" 2>/dev/null); then
+if grep -q -- '--continue' <(sed -n '4p' "$TMP/ce-turns/turns.log" 2>/dev/null) && ! grep -q -- '--continue' <(sed -n '1,3p' "$TMP/ce-turns/turns.log" 2>/dev/null); then
   echo "ok   inner.sh: only the last turn uses --continue"
 else
   echo "FAIL inner.sh: --continue placement"; fail=1
 fi
 
 # --- inner.sh: a controlled stub turn exceeds the timeout -> turn_failed=1 ---
-STUB="$TMP/stub-sleep.sh"; printf '#!/usr/bin/env bash\nsleep 30\n' >"$STUB"; chmod +x "$STUB"
+STUB="$TMP/stub-sleep.sh"; printf '#!/usr/bin/env bash\nif [ "${1:-}" = "--version" ]; then echo "opencode v-stub"; exit 0; fi\nsleep 30\n' >"$STUB"; chmod +x "$STUB"
 mkdir -p "$TMP/ce-timeout/proj"
 CE="$TMP/ce-timeout" REPO="$REPO" OC_BIN="$STUB" MOCK_PORT=39431 OC_CAPTURE_TURN_TIMEOUT=1 bash "$INNER" >/dev/null 2>&1
 inner_rc=$?

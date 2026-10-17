@@ -42,6 +42,10 @@ case "$CONTINUE" in 0|1) : ;; *) echo "BLOCKER: invalid OC_CAPTURE_CONTINUE='$CO
 mkdir -p "$CAPTURE_DIR"
 : >"$CE/status"
 
+# Record the OpenCode version once (Phase 8 / G1). Best-effort: `--version` is
+# inert, and a failure just leaves the envelope's version null.
+timeout 15 "$OC_BIN" --version >"$CE/opencode-version.txt" 2>/dev/null || true
+
 node "$REPO/test/harness/capture/mock-provider.mjs" >"$CE/mock.log" 2>&1 &
 MOCK=$!
 sleep 0.7
@@ -53,9 +57,18 @@ cd "$CE/proj" || exit 3
 # Extra args (e.g. --continue) precede the message.
 run_turn() {
   local n="$1"; shift
+  local t0 t1
+  t0=$(date +%s%3N 2>/dev/null || true)
   timeout --kill-after=5 "$TURN_TIMEOUT" "$OC_BIN" run --standalone --print-logs --log-level info -m "$CAPTURE_MODEL" "$@" "${OC_CAPTURE_PROMPT:-say hi}" >"$CE/run${n}.log" 2>&1
   local rc=$?
+  t1=$(date +%s%3N 2>/dev/null || true)
   echo "run${n}_rc=$rc" >>"$CE/status"
+  # Per-turn duration (Phase 8 / G3). When `date` lacks millisecond precision the
+  # line is omitted rather than written with a bogus value.
+  case "$t0$t1" in
+    ''|*[!0-9]*) : ;;
+    *) echo "run${n}_ms=$((t1 - t0))" >>"$CE/status" ;;
+  esac
   if [ "$rc" -ne 0 ]; then
     echo "turn_failed=1" >>"$CE/status"
     echo "turn${n}_failed=true" >>"$CE/status"

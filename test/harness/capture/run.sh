@@ -209,6 +209,17 @@ bwrap --unshare-net --unshare-pid --unshare-uts --unshare-ipc \
 rc=$?
 echo "sandbox rc=$rc ($(cat "$TMP/status" 2>/dev/null | tr '\n' ' '))" >&2
 
+# Machine-readable benchmark envelope (Phase 8 / P8-T3). Best-effort: it never
+# changes the exit contract.
+if [ -n "${NODE_BIN:-}" ]; then
+  OC_CAPTURE_TURNS="${OC_CAPTURE_TURNS:-2}" \
+  OC_CAPTURE_CONTINUE="${OC_CAPTURE_CONTINUE:-0}" \
+  OC_CAPTURE_PROMPT="$CAPTURE_PROMPT" \
+  MOCK_PORT="$MOCK_PORT" \
+    "$NODE_BIN" "$SCRIPT_DIR/benchmark.mjs" "$TMP" >/dev/null 2>&1 \
+    || echo "warn: benchmark.json was not written" >&2
+fi
+
 # Post-capture decision (turn failure, capture count, diff) with the exit contract.
 bash "$SCRIPT_DIR/decide.sh" "$TMP"
 exit $?
