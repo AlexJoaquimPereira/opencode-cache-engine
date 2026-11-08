@@ -53,6 +53,12 @@ export function isOpenAIish(s) {
   if (p === "openai" || p === "azure") return true
   if (slug.startsWith("openai/") || slug.startsWith("azure/")) return true
   if (/@ai-sdk\/openai|@ai-sdk\/azure/.test(npm)) return true
+  // OpenCode Go is OpenCode's first-party OpenAI-compatible gateway
+  // (models.dev: npm `@ai-sdk/openai-compatible`, api https://opencode.ai/zen/go/v1).
+  // The V2 `context`/`model.request` payload carries no `api` metadata (RF-OC-058),
+  // so the npm check above can never see this route. Allowlist the provider id for
+  // GPT-family slugs only; every other Go model resolves through its own entry.
+  if (p === "opencode-go" && /(^|[/\s])gpt-\d/.test(slug)) return true
   return false
 }
 
