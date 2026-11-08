@@ -3066,7 +3066,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 
 ### RF-OC-054 — `opencode-go/claude-haiku-5-5` is listed in the registry but returns HTTP 403 "Model access is disabled" on the Go subscription
 
-- Status: current
+- Status: superseded
 - Verified: 2026-11-08
 - Area: opencode-runtime
 - Fact: Every live turn against `opencode-go/claude-haiku-5-5` fails with
@@ -3082,9 +3082,11 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Version context: OpenCode 2.2.6; `opencode-go`; 2026-11-08.
 - Re-verify when: the Go subscription/plan exposes the model, or the model id is
   removed/replaced in the registry.
-- Superseded by: null
+- Superseded by: RF-OC-056
 - Notes: "listed in the registry" is not evidence of access — resolve access by an
-  actual request.
+  actual request. **Same-day update:** access was enabled in the OpenCode Console a few
+  hours later and the model then measured normally (RF-OC-056); this entry records the
+  403 window only.
 
 ### RF-OC-055 — `opencode run` resolves the project (and therefore project plugins) from `PWD`, not from the process working directory
 
@@ -3110,3 +3112,96 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Superseded by: null
 - Notes: shell-launched runs are unaffected because the shell sets `PWD` itself;
   the trap bites programmatic launchers (Node/Python `spawn` with `cwd`).
+
+### RF-OC-056 — Once access was enabled, `opencode-go/claude-haiku-5-5` reports Anthropic-style write+read accounting and full cross-session prefix reuse after one warm-up
+
+- Status: current
+- Verified: 2026-11-08
+- Area: opencode-runtime
+- Fact: After the Go subscription enabled the model, live turns report
+  `input: 4`, `read: 8522`, `write: 12741` on the first request of a session;
+  later turns report `read: 21263`/`21288` with an incremental `write` of 25/26.
+  A **fresh** session sending the byte-identical ~30 kB block reports
+  `read: 21263, write: 0` (twice), while a different-block control reports
+  `read: 8522, write: 12904`. In a 4-repeat fresh-session run the reads were
+  5971, 21467, 21467, 21467 (control 8522) — i.e. one warm-up miss, then full
+  reuse. The runtime policy resolves to `claude` (telemetry `usage.policy`), and
+  the plugin performs no mutation.
+- Evidence: [O] (live provider-reported usage; `step_finish.tokens`).
+- Sources: local live measurement 2026-11-08, `opencode-go/claude-haiku-5-5`,
+  OpenCode 2.2.6; tables in
+  `docs/audits/audit-report-live-cache-opencode-go-2026-11-08.md` (gitignored).
+- Justifies: the Claude baseline stays passive and read/write-aware; the
+  provider-correct ratio is `read/(input+read+write)` for this dialect.
+- Version context: OpenCode 2.2.6; Node 22.23.2; `opencode-go`; 2026-11-08.
+- Re-verify when: the Go route changes Claude accounting or cache scope; access
+  is revoked again.
+- Superseded by: null
+- Notes: supersedes RF-OC-054. The first request carries both a read and a large
+  write, which is Anthropic-style cache-creation; do not compute a hit rate for
+  turn 1 as if `write` were uncached input.
+
+### RF-OC-057 — On the OpenCode Go route every measured family reuses its prefix ~98–100% within a session, but cross-session reuse splits by family (GLM/MiMo/Kimi/MiniMax/Claude yes; GPT/Muse/DeepSeek no)
+
+- Status: current
+- Verified: 2026-11-08
+- Area: opencode-runtime
+- Fact: In a 8-model × 2-arm × 6-turn live matrix (96 turns) plus a 4-repeat
+  fresh-session test, with a ~30 kB synthetic block:
+  - **Within-session** prompt share (`read/(input+read+write)`) on turns 2–3 is
+    98–100% for all eight models and both plugin arms.
+  - **Accounting dialect**: GPT-6 Luna and Claude Haiku 5.5 report
+    write+read (first request = cache write); MiMo-V2.6-Flash, GLM-5.3-Flash,
+    Muse Spark 1.3 Contributor, MiniMax M3.1 Flash, Kimi K2.7 Code and
+    DeepSeek V4.1 Flash report **read-only** (`write: 0` on every turn).
+  - **Cross-session** (fresh session, byte-identical block; 4 repeats vs a
+    different-block control): GLM 4/4, MiMo 4/4 (after one cold miss), Kimi 3/4,
+    MiniMax 2/4 (two warm-up misses), Claude 3/4 (one warm-up miss);
+    **GPT-6 Luna 0/4** (every fresh session is a new write),
+    **Muse Spark 1.3 0/4**, **DeepSeek V4.1 Flash 0/4** (at or below control).
+  - **Plugin ON vs OFF** shows no systematic difference on any model; the
+    observed deltas are explained by cache warm-up on byte-identical fresh
+    sessions.
+- Evidence: [O] (live provider-reported usage; per-turn `step_finish.tokens`).
+- Sources: local live measurement 2026-11-08; raw per-run JSON + the driver under
+  `/tmp/opencode/live-cache` (untracked); tables in
+  `docs/audits/audit-report-live-cache-opencode-go-2026-11-08.md` (gitignored).
+- Justifies: keeps every family's ratio provider-specific; documents that
+  cross-session reuse is a provider/route property, not something the adapter
+  should synthesize (and that `cacheRootKey:false` costs nothing on Go for GPT).
+- Version context: OpenCode 2.2.6; Node 22.23.2; `opencode-go`; 2026-11-08.
+- Re-verify when: the Go route changes cache scope/TTL, a family changes its
+  usage dialect, or a new model is added to the matrix.
+- Superseded by: null
+- Notes: one B1 sample understates reuse because the first fresh session often
+  pays full price; use several repeats. Muse Spark 1.3 reported the *lowest*
+  reads on repeat (0–2801 vs a 3057 control), so it currently shows no evidence
+  of cross-request prefix reuse on this route.
+
+### RF-OC-058 — The OpenCode 2.2.6 V2 `context` hook model payload is `{id, providerID, variant}` with no `api` metadata, so npm/url-dependent policy gates cannot resolve on gateway routes
+
+- Status: current
+- Verified: 2026-11-08
+- Area: opencode-runtime
+- Fact: A temporary diagnostic record in the V2 adapter's `context` hook logged
+  `Object.keys(event.model)` as exactly `["id","providerID","variant"]` and
+  `event.model.api` as `undefined` for `opencode-go/gpt-6-luna`. Because
+  `toModelInfo()` forwards only `{providerID, id, api:{id}}` and the runtime
+  supplies no npm, `isOpenAIish()` is false for `opencode-go`; the GPT exact-id
+  entry (`requiresOpenAIish: true`, `exactIds` includes `gpt-6-luna`) therefore
+  never matches and the model resolves **neutral**. Runtime telemetry agrees:
+  no `cache-options` record and no `usage.policy` field. (The diagnostic was
+  reverted; the shipped adapter is unchanged.)
+- Evidence: [O] (temporary diagnostic record from the live hook payload).
+- Sources: local live measurement 2026-11-08; OpenCode 2.2.6.
+- Justifies: keeps the GPT policy **unapplied** on the Go route; a route-specific
+  gate (or upstream `api` metadata in the V2 payload) would be a separate,
+  evidence-backed change — do not synthesize a key merely because the model id
+  matches.
+- Version context: OpenCode 2.2.6; Node 22.23.2; `opencode-go`; 2026-11-08.
+- Re-verify when: OpenCode V2 adds `api`/`npm` to the hook model payload, or a
+  Go-specific OpenAI-compatible policy is approved with wire evidence.
+- Superseded by: null
+- Notes: V1 forwards `input.model.api.npm` and can resolve route-sensitive
+  policies; this is a V1/V2 metadata parity gap in the harness, not a registry
+  bug. Do not "fix" it by hard-coding camelCase/snake_case or a key.

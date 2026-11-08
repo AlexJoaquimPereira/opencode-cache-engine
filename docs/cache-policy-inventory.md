@@ -956,22 +956,26 @@ guaranteed cache hit.
 
 **Scope:** live `opencode run --standalone` turns against `opencode-go` only (OpenCode 2.2.6,
 Node 22.23.2), CacheEngine V2 adapter loaded from a disposable project shim vs no plugin. Evidence:
-*provider measured* (`step_finish.tokens`); details in RF-OC-050…RF-OC-055 and in
+*provider measured* (`step_finish.tokens`). 8 models × 2 arms × 6 turns (96 turns) plus a
+4-repeat fresh-session test. Details: RF-OC-050…RF-OC-058 and
 `docs/audits/audit-report-live-cache-opencode-go-2026-11-08.md` (gitignored local report).
 
-| Model (`opencode-go/…`) | Accounting dialect (observed) | Within-session reuse | Cross-session reuse | Adapter ON vs OFF |
+| Model (`opencode-go/…`) | Runtime policy | Accounting dialect | Within-session hit rate (turn 2+) | Cross-session reuse (4 fresh sessions vs control) |
 |---|---|---|---|---|
-| `gpt-6-luna` | first request = **cache write** of the whole prefix (`input: 3`); later turns = read + small incremental write | yes (`read: 13098` → `13121`) | **no** (`read: 0, write: 13098` on a fresh identical session, twice) | identical |
-| `mimo-v2.6-flash` | read-only (`write: 0` on every turn) | yes (`read: ~14848`) | **yes**, content-addressed (`~14784–14848` vs `4864` control) | identical within noise |
-| `glm-5.3-flash` | read-only (`write: 0` on every turn) | yes (`read: 14144`) | **yes**, content-addressed (`14144` vs `0` control) | identical |
-| `claude-haiku-5-5` | **unavailable** — HTTP 403 `Model access is disabled` (12/12 turns) | n/a | n/a | n/a |
+| `gpt-6-luna` | **neutral** (no `api` in the V2 hook payload; RF-OC-058) | first request = **cache write** of the whole prefix (`input: 3`); later turns read + small write | 100% | **0/4** — every fresh session writes again |
+| `claude-haiku-5-5` | `claude` | first request = partial read + **large write** (`8522/12741`); later turns read + ~25 write | 100% | **3/4** (one warm-up miss; then 21 467 vs 8 522 control) |
+| `mimo-v2.6-flash` | `mimo26` | read-only (`write: 0` always) | 99–100% | **4/4** (one cold miss, then 14 464 vs 4 096 control) |
+| `glm-5.3-flash` | `glm53` | read-only | 98–99% | **4/4** (14 144 vs 0 control) |
+| `muse-spark-1.3-contributor` | `muse` | read-only | 99% | **0/4** (0–2 801 vs 3 057 control) |
+| `minimax-m3.1-flash` | `minimax` | read-only | 99–100% | **2/4** (two warm-up misses; then 14 464 vs 483 control) |
+| `kimi-k2.7-code` | `kimi` | read-only | 99–100% | **3/4** (14 848 vs 6 144 control) |
+| `deepseek-v4.1-flash` | `deepseek` | read-only | 98–99% | **0/4** (0–4 096 vs 4 096 control) |
 
-**Structural check:** on the 2.2.6 system shape the GLM/MiMo `<env>` relocation is a
-byte-identical no-op (`stabilizeSystem:false` vs `true`, normalized capture), reproducing
-RF-OC-033 for the newer harness version (RF-OC-053). The OpenRouter affinity header is correctly
-withheld on this route (`reason:"openrouter_affinity_bypassed_non_openrouter"`,
-`headerAttached:false`).
+**Plugin transparency:** ON vs OFF shows no systematic difference for any family; the deltas track
+cache warm-up on byte-identical fresh sessions. The GLM/MiMo `<env>` relocation is a byte-identical
+no-op on the 2.2.6 system shape (RF-OC-053), and the OpenRouter affinity header is withheld on this
+route (`reason:"openrouter_affinity_bypassed_non_openrouter"`, `headerAttached:false`).
 
-**Do not generalise across families:** the GPT write/read dialect and the MiMo/GLM read-only dialect
-are different accounting shapes on the same gateway; keep the GPT `read/(read+write)`, GLM
-`read/(read+write+input)`, and MiMo `cachedTokens/promptTokens` ratios separate.
+**Do not generalise across families:** GPT/Claude use write+read accounting; the other six use
+read-only accounting. Keep the GPT `read/(read+write)`, GLM `read/(read+write+input)`,
+MiMo `cachedTokens/promptTokens`, and Claude `read/(input+read+write)` ratios separate.
