@@ -3180,7 +3180,7 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 
 ### RF-OC-058 — The OpenCode 2.2.6 V2 `context` hook model payload is `{id, providerID, variant}` with no `api` metadata, so npm/url-dependent policy gates cannot resolve on gateway routes
 
-- Status: current
+- Status: superseded
 - Verified: 2026-11-08
 - Area: opencode-runtime
 - Fact: A temporary diagnostic record in the V2 adapter's `context` hook logged
@@ -3201,7 +3201,42 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Version context: OpenCode 2.2.6; Node 22.23.2; `opencode-go`; 2026-11-08.
 - Re-verify when: OpenCode V2 adds `api`/`npm` to the hook model payload, or a
   Go-specific OpenAI-compatible policy is approved with wire evidence.
-- Superseded by: null
+- Superseded by: RF-OC-059
 - Notes: V1 forwards `input.model.api.npm` and can resolve route-sensitive
   policies; this is a V1/V2 metadata parity gap in the harness, not a registry
   bug. Do not "fix" it by hard-coding camelCase/snake_case or a key.
+
+### RF-OC-059 — `opencode-go` GPT models now classify as `gpt56` via a provider-id allowlist; the cache-option assignment is recorded but its wire carriage remains unattributed
+
+- Status: current
+- Verified: 2026-11-08
+- Area: opencode-runtime
+- Fact: Because the V2 hook payload has no `api` metadata (RF-OC-058),
+  `isOpenAIish()` now allowlists the first-party Go gateway for GPT-family slugs
+  only: `providerID === "opencode-go"` and a slug matching `/(^|[/\s])gpt-\d/`.
+  `resolveRuntimePolicy({providerID:"opencode-go", id:"gpt-6-luna"})` therefore
+  returns `gpt56` (exact-id match, overlay applied) while a generic
+  `openai-compatible` provider with the same model id stays **neutral**. A live
+  6-turn verification succeeded (`rc: 0`): telemetry records
+  `policy:"gpt56"` and one `cache-options` record with `keyInjected: true`,
+  `optionsInjected: true`, `transport:"promptCacheKey"`,
+  `wireEffect:"not_observed"`; provider-reported tokens are **unchanged** from
+  the neutral run (A2 `read 13343/write 23`, A3 `13366/24`, fresh sessions
+  `read 0/write 13343`, control `13277`), i.e. no cache-behaviour change.
+- Evidence: [O] (unit tests + live provider-reported usage).
+- Sources: local live measurement 2026-11-08, `opencode-go/gpt-6-luna`, OpenCode
+  2.2.6; `src/cache-policy-core.mjs` `isOpenAIish`; tests in
+  `test/cache-engine.test.mjs` (policy table + "v2 adapter: context applies the
+  GPT cache policy on the opencode-go route").
+- Justifies: the GPT policy applies on the Go route, fixing the neutral
+  resolution; the mutation stays conservative (missing fields only) and is
+  explicitly marked `wireEffect:"not_observed"`.
+- Version context: OpenCode 2.2.6; Node 22.23.2; 2026-11-08.
+- Re-verify when: OpenCode V2 adds `api`/`npm` to the hook model payload (delete
+  the allowlist and use npm), or the Go gateway rejects/strips the fields on the
+  wire (then revert to neutral).
+- Superseded by: null
+- Notes: RF-OC-030 still applies — the `openai-compatible` provider-options
+  schema strips the GPT cache fields, so the assignment is not a wire claim.
+  Do **not** broaden the allowlist to non-GPT slugs; the guard keeps every other
+  Go model on its own baseline.

@@ -132,6 +132,15 @@ the documented capability. Since v0.4.2 the policy resolves by the documented
 baseline; no GPT-6 cache-control exception is documented (OpenAI *Prompt
 caching* guide, re-verified 2026-09-27), and none is coded.
 
+**OpenCode Go route (2026-11-08):** the V2 `context`/`model.request` payloads
+carry no `api` metadata (RF-OC-058), so the resolver allowlists `opencode-go`
+for GPT-family slugs (RF-OC-059). `gpt-6-luna` resolves `gpt56` and the adapter
+assigns the missing key/options; the assignment is recorded with
+`wireEffect:"not_observed"` because the `openai-compatible` provider-options
+schema strips these fields (RF-OC-030). Live 6-turn check: request succeeds,
+within-session hit rate 100%, cross-session reuse 0/4 — i.e. no observable
+cache-behaviour change from the assignment.
+
 ---
 
 ## 2. DeepSeek (V4 and later)
