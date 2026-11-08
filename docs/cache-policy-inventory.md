@@ -951,3 +951,27 @@ preserve an existing key. Regression: `v0.4.11` tests (existing/no key, root mod
 on/off, compaction override, repeated requests, separate sessions, transport field
 names). A prompt-cache key provides namespace stability/isolation, not a
 guaranteed cache hit.
+
+### Follow-up: live OpenCode Go route measurement (2026-11-08)
+
+**Scope:** live `opencode run --standalone` turns against `opencode-go` only (OpenCode 2.2.6,
+Node 22.23.2), CacheEngine V2 adapter loaded from a disposable project shim vs no plugin. Evidence:
+*provider measured* (`step_finish.tokens`); details in RF-OC-050…RF-OC-055 and in
+`docs/audits/audit-report-live-cache-opencode-go-2026-11-08.md` (gitignored local report).
+
+| Model (`opencode-go/…`) | Accounting dialect (observed) | Within-session reuse | Cross-session reuse | Adapter ON vs OFF |
+|---|---|---|---|---|
+| `gpt-6-luna` | first request = **cache write** of the whole prefix (`input: 3`); later turns = read + small incremental write | yes (`read: 13098` → `13121`) | **no** (`read: 0, write: 13098` on a fresh identical session, twice) | identical |
+| `mimo-v2.6-flash` | read-only (`write: 0` on every turn) | yes (`read: ~14848`) | **yes**, content-addressed (`~14784–14848` vs `4864` control) | identical within noise |
+| `glm-5.3-flash` | read-only (`write: 0` on every turn) | yes (`read: 14144`) | **yes**, content-addressed (`14144` vs `0` control) | identical |
+| `claude-haiku-5-5` | **unavailable** — HTTP 403 `Model access is disabled` (12/12 turns) | n/a | n/a | n/a |
+
+**Structural check:** on the 2.2.6 system shape the GLM/MiMo `<env>` relocation is a
+byte-identical no-op (`stabilizeSystem:false` vs `true`, normalized capture), reproducing
+RF-OC-033 for the newer harness version (RF-OC-053). The OpenRouter affinity header is correctly
+withheld on this route (`reason:"openrouter_affinity_bypassed_non_openrouter"`,
+`headerAttached:false`).
+
+**Do not generalise across families:** the GPT write/read dialect and the MiMo/GLM read-only dialect
+are different accounting shapes on the same gateway; keep the GPT `read/(read+write)`, GLM
+`read/(read+write+input)`, and MiMo `cachedTokens/promptTokens` ratios separate.

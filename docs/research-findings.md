@@ -2948,3 +2948,165 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
   `prompt_cache_key` is routing-only — do not treat them as equivalent. M3 and
   M2.x must not share one `cacheWriteBilled` value. Do not store prompts,
   credentials, bodies, or cache-key values.
+
+### RF-OC-050 — On the OpenCode Go route GPT-6 Luna reports OpenAI-style cache accounting (first request = cache write, later turns = read + small incremental write) and no cross-session prefix reuse
+
+- Status: current
+- Verified: 2026-11-08
+- Area: opencode-runtime
+- Fact: Live `opencode run --standalone` turns against `opencode-go/gpt-6-luna`
+  (OpenCode 2.2.6) report `step_finish.tokens` as `input: 3` plus a **cache write**
+  of the whole request prefix on the first request of a session (`write: 13098`),
+  then **cache read** of that prefix plus a small incremental write on later turns
+  in the same session (`read: 13098, write: 23`; then `read: 13121, write: 35`).
+  A **fresh** session sending a byte-identical ~30 kB synthetic user block reports
+  `read: 0, write: 13098` again, twice (`B1`, `B2`), while a different-block control
+  reports `read: 0, write: 13277`. Within-session reuse is therefore reported;
+  cross-session reuse is not, on this route. The CacheEngine V2 adapter loaded via a
+  project plugin shim produces the same numbers as the no-plugin arm (differences
+  track per-session prompt variance, not the arm), and the `on` arm emitted no
+  `cache-options` record, i.e. the adapter neither wrote a key nor options here.
+- Evidence: [O] (live provider-reported usage: `step_finish.tokens.{input,
+  cache.read, cache.write}` from `opencode run --format json`).
+- Sources: local live measurement 2026-11-08, `opencode-go/gpt-6-luna`, OpenCode
+  2.2.6, disposable projects under `/tmp/opencode/live-cache` (untracked scratch);
+  per-turn tables in `docs/audits/audit-report-live-cache-opencode-go-2026-11-08.md`
+  (gitignored local report).
+- Justifies: the GPT policy's decision not to synthesize a cross-session cache
+  namespace (`cacheRootKey` default `false`) — a new session is a new accounting
+  namespace on this route, so no cross-session key is expected or fabricated.
+- Version context: OpenCode 2.2.6; Node 22.23.2; provider identity `opencode-go`;
+  verified 2026-11-08.
+- Re-verify when: OpenCode changes its Go provider adapter or cache-key handling;
+  the Go route changes its usage normalization; or a GPT model on this route starts
+  reporting cross-session reads.
+- Superseded by: null
+- Notes: `input: 3` on every turn means the prompt is counted almost entirely in
+  `cache.read`/`cache.write`, not in `input`. This is a different dialect from
+  MiMo/GLM on the same route (RF-OC-051/052) — do not universalise one ratio
+  across families. No wire capture was taken, so key presence on the wire is
+  *inferred* from the absence of a `cache-options` record, not observed.
+
+### RF-OC-051 — On the OpenCode Go route MiMo-V2.6-Flash reports read-only cache accounting (write always 0) with content-addressed cross-session reuse
+
+- Status: current
+- Verified: 2026-11-08
+- Area: opencode-runtime
+- Fact: Live turns against `opencode-go/mimo-v2.6-flash` (OpenCode 2.2.6) report
+  `cache.write: 0` on **every** turn and `cache.read` from the second turn onward
+  (~14 848–14 912 of a ~10.8 k-token synthetic block plus system/tools). A **fresh**
+  session sending the identical block also reports `read: 14784–14848`, while a
+  different-block control reports `read: 4864`. Cross-session reuse is therefore
+  content-addressed on this route. Adapter ON vs OFF is identical within run-to-run
+  noise (≤128 tokens, tracking block/session variance); the `on` arm records
+  `boundary:decision` with `reason:"openrouter_affinity_bypassed_non_openrouter"`,
+  `provider:"opencode-go"`, `headerAttached:false`.
+- Evidence: [O] (live provider-reported usage).
+- Sources: local live measurement 2026-11-08 (scratch under
+  `/tmp/opencode/live-cache`); tables in
+  `docs/audits/audit-report-live-cache-opencode-go-2026-11-08.md` (gitignored).
+- Justifies: keeps the MiMo baseline passive and write-free on non-OpenRouter
+  routes (no `cache_control`, no key), and keeps the affinity header gated on
+  `providerID === "openrouter"`.
+- Version context: OpenCode 2.2.6; Node 22.23.2; `opencode-go`; 2026-11-08.
+- Re-verify when: the Go route starts reporting MiMo cache writes, or the MiMo
+  usage normalization changes.
+- Superseded by: null
+- Notes: the reported read includes the invariant system/tool prefix (~4–4.9 k
+  tokens) even on a first turn, so absolute read values overstate the user block;
+  compare against the different-block control, not against zero.
+
+### RF-OC-052 — On the OpenCode Go route GLM-5.3-Flash reports read-only cache accounting (write always 0) with full content-addressed cross-session reuse
+
+- Status: current
+- Verified: 2026-11-08
+- Area: opencode-runtime
+- Fact: Live turns against `opencode-go/glm-5.3-flash` (OpenCode 2.2.6) report
+  `cache.write: 0` on every turn; the first turn reports `read: 0` (full `input`),
+  later turns report `read: 14144`, and **fresh** sessions with the identical block
+  also report `read: 14144` while a different-block control reports `read: 0`.
+  Adapter ON vs OFF is byte-for-byte identical in every cell.
+- Evidence: [O] (live provider-reported usage).
+- Sources: local live measurement 2026-11-08 (scratch under
+  `/tmp/opencode/live-cache`); tables in
+  `docs/audits/audit-report-live-cache-opencode-go-2026-11-08.md` (gitignored).
+- Justifies: the GLM baseline stays passive on a non-OpenRouter route; the GLM
+  ratio (`read/(read+write+input)`) stays the provider-correct one.
+- Version context: OpenCode 2.2.6; Node 22.23.2; `opencode-go`; 2026-11-08.
+- Re-verify when: the Go route starts reporting GLM cache writes; GLM usage
+  normalization changes; or the `<env>` system shape changes (see RF-OC-053).
+- Superseded by: null
+- Notes: plugin no-op here is explained by RF-OC-053 (the `<env>` relocation does
+  not apply to the 2.2.6 system shape).
+
+### RF-OC-053 — The GLM/MiMo `<env>` relocation is still a structural no-op on the OpenCode 2.2.6 system shape (offline wire capture)
+
+- Status: current
+- Verified: 2026-11-08
+- Area: opencode-runtime
+- Fact: With the V2 adapter loaded and `OC_CAPTURE_ENGINE_CONFIG` set to
+  `{"policies":{"glm53":{"stabilizeSystem":false}}}` vs `…{"stabilizeSystem":true}}`,
+  the **serialized** main-agent request on the loopback OpenAI-compatible route is
+  byte-identical (system message 8 583 bytes after normalizing the per-capture
+  project path) and the `<env>` block remains in place (`<env>` at offset 8 093).
+  The transform therefore does not fire on the OpenCode 2.2.6 shape — the same
+  outcome recorded for 2.0.26 in RF-OC-033 (marker precondition unmet).
+- Evidence: [O] (serialized request bodies; loopback mock provider;
+  `test/harness/capture/run.sh` with `OC_CAPTURE_MODEL=mock/glm-5.3-flash`).
+- Sources: local offline capture 2026-11-08 (`/tmp/opencode/capture.KIVxkZ` and
+  `/tmp/opencode/capture.nofUt8`, untracked).
+- Justifies: the live ON/OFF equality in RF-OC-051/052; no code change — the
+  transform stays enabled-but-inert and the marker guard stays as-is.
+- Version context: OpenCode 2.2.6; Node 22.23.2; mock provider route.
+- Re-verify when: OpenCode changes the system prompt composition (e.g. `<env>`
+  placement) or the relocation helper's marker precondition changes.
+- Superseded by: null
+- Notes: this is an offline structural result, not a provider measurement; it does
+  not by itself prove the transform is safe on a future shape.
+
+### RF-OC-054 — `opencode-go/claude-haiku-5-5` is listed in the registry but returns HTTP 403 "Model access is disabled" on the Go subscription
+
+- Status: current
+- Verified: 2026-11-08
+- Area: opencode-runtime
+- Fact: Every live turn against `opencode-go/claude-haiku-5-5` fails with
+  `provider.auth` 403 and body
+  `{"type":"error","error":{"type":"permission_error","message":"Model access is disabled"}}`
+  (12/12 turns, both plugin arms). No usage is produced, so no cache measurement
+  for Claude on this route is possible.
+- Evidence: [O] (live provider error responses).
+- Sources: local live measurement 2026-11-08; scratch under
+  `/tmp/opencode/live-cache`.
+- Justifies: keeps Claude's compatibility status at "passive, structurally
+  verified only" — do not record a Claude cache measurement for the Go route.
+- Version context: OpenCode 2.2.6; `opencode-go`; 2026-11-08.
+- Re-verify when: the Go subscription/plan exposes the model, or the model id is
+  removed/replaced in the registry.
+- Superseded by: null
+- Notes: "listed in the registry" is not evidence of access — resolve access by an
+  actual request.
+
+### RF-OC-055 — `opencode run` resolves the project (and therefore project plugins) from `PWD`, not from the process working directory
+
+- Status: current
+- Verified: 2026-11-08
+- Area: opencode-runtime
+- Fact: Launching `opencode run --standalone` with `cwd` set to a disposable project
+  whose `.opencode/plugins/ce-entry.ts` loads the adapter, but with an inherited
+  `PWD` pointing at a parent directory, produces a run with **no plugin**: the
+  loader never logs `loading plugin`, no telemetry file is written, and the request
+  behaves as the no-plugin baseline. Setting `PWD` to the project directory in the
+  same environment loads the shim and writes telemetry. `opencode` also watches the
+  `PWD`-derived config/project paths.
+- Evidence: [O] (two controlled A/B launches from a Node `spawn` with identical
+  env except `PWD`; loader log + telemetry presence).
+- Sources: local measurement 2026-11-08; scratch under `/tmp/opencode/live-cache`.
+- Justifies: the live-test harness must export `PWD` when it sets `cwd`; otherwise
+  an "plugin on" arm silently measures the off baseline.
+- Version context: OpenCode 2.2.6; Node 22.23.2 (Node `spawn` does not update
+  `PWD` automatically).
+- Re-verify when: OpenCode changes project resolution to use the real cwd, or the
+  CLI stops reading `PWD`.
+- Superseded by: null
+- Notes: shell-launched runs are unaffected because the shell sets `PWD` itself;
+  the trap bites programmatic launchers (Node/Python `spawn` with `cwd`).
