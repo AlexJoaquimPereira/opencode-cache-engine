@@ -2545,6 +2545,9 @@ async function runPolicyMigrationProbe() {
       { name: "gpt-6-astra", model: { providerID: "openai", id: "gpt-6-astra", api: { id: "gpt-6-astra", npm: "@ai-sdk/openai" } }, expect: { policy: "gpt56", env: false, gpt: true, header: false } },
       { name: "gpt-6-openrouter", model: { providerID: "openrouter", id: "openai/gpt-6-luna", api: { id: "openai/gpt-6-luna" } }, expect: { policy: "gpt56", env: false, gpt: true, header: false } },
       { name: "gpt-6-openai-compatible", model: { providerID: "openai-compatible", id: "gpt-6-astra", api: { id: "gpt-6-astra" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
+      { name: "gpt-6-luna-opencode-go", model: { providerID: "opencode-go", id: "gpt-6-luna" }, expect: { policy: "gpt56", env: false, gpt: true, header: false } },
+      { name: "gpt-6-astra-opencode-go", model: { providerID: "opencode-go", id: "gpt-6-astra" }, expect: { policy: "gpt56", env: false, gpt: true, header: false } },
+      { name: "claude-openCode-go", model: { providerID: "opencode-go", id: "claude-haiku-5-5" }, expect: { policy: "claude", env: false, gpt: false, header: false } },
       { name: "gpt-5.60-malformed", model: { providerID: "openai", id: "gpt-5.60", api: { id: "gpt-5.60", npm: "@ai-sdk/openai" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
       { name: "gpt-5.5", model: { providerID: "openai", id: "gpt-5.5", api: { id: "gpt-5.5", npm: "@ai-sdk/openai" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
       { name: "gpt-daybreak-alias", model: { providerID: "openai", id: "gpt-daybreak-blue-latest", api: { id: "gpt-daybreak-blue-latest", npm: "@ai-sdk/openai" } }, expect: { policy: "neutral", env: false, gpt: false, header: false } },
@@ -5723,6 +5726,18 @@ test("v2 adapter: context hook relocates the <env> block for MiMo/GLM and is pas
   assert.equal(deepseek.system[0].text, env, "passive family must not mutate the system")
   assert.deepEqual(deepseek.options, {}, "passive family must not inject options")
 
+  await cleanup()
+})
+
+test("v2 adapter: context applies the GPT cache policy on the opencode-go route", async () => {
+  const mod = await import("../src/cache-engine-v2.mjs")
+  const { ctx, handlers } = makeV2Ctx()
+  const cleanup = await mod.default.setup(ctx)
+  const ev = { sessionID: "ses_v2_go_gpt", model: { id: "gpt-6-luna", providerID: "opencode-go" }, system: [{ type: "text", text: "S" }], messages: [], options: {} }
+  await handlers["context"](ev)
+  assert.equal(typeof ev.options.promptCacheKey, "string", "GPT key must be assigned on the OpenCode Go route")
+  assert.ok(ev.options.promptCacheKey.length > 0)
+  assert.deepEqual(ev.options.promptCacheOptions, { mode: "implicit", ttl: "30m" })
   await cleanup()
 })
 
