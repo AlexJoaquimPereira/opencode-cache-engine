@@ -103,10 +103,14 @@ npm pack --dry-run
   options, or cache keys.
 - **GPT-5.6:** prompt text stays unchanged. For OpenAI/Azure-compatible GPT-5.6
   models, add only missing `promptCacheKey` and `promptCacheOptions` (default
-  `implicit`, `30m`) in `chat.params`; preserve runtime-supplied values.
-  Compaction has its separate `<root>:compact` namespace. Reasoning effort is
-  observe-only. Context/output limits and the 272K pricing boundary belong to
-  user/harness configuration; never set or raise them here.
+  `implicit`, `30m`) in `chat.params`; preserve runtime-supplied values. The V2
+  adapter applies the same policy on the first-party `opencode-go` gateway for
+  GPT-family slugs (provider-id allowlist, because the V2 hook payload carries no
+  `api` metadata); that assignment is recorded with `wireEffect:"not_observed"`
+  and is **not** a wire claim (the `openai-compatible` schema strips these fields
+  — RF-OC-030/059). Compaction has its separate `<root>:compact` namespace.
+  Reasoning effort is observe-only. Context/output limits and the 272K pricing
+  boundary belong to user/harness configuration; never set or raise them here.
 - **GLM-5.3 and MiMo-V2.6:** the only prompt mutations are exact,
   content-preserving relocations, only when enabled and eligible: (a) the
   identifiable `<env>` block to the system tail (`stabilizeSystem`), and (b) the
