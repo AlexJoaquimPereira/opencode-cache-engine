@@ -3165,7 +3165,8 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Evidence: [O] (live provider-reported usage; per-turn `step_finish.tokens`).
 - Sources: local live measurement 2026-11-08; raw per-run JSON + the driver under
   `/tmp/opencode/live-cache` (untracked); tables in
-  `docs/audits/audit-report-live-cache-opencode-go-2026-11-08.md` (gitignored).
+  `docs/audits/audit-report-live-cache-opencode-go-2026-11-08.md` (gitignored; tracked
+  synthesis: `docs/research/live-cache-verification-opencode-go-2026-11-08.md`).
 - Justifies: keeps every family's ratio provider-specific; documents that
   cross-session reuse is a provider/route property, not something the adapter
   should synthesize (and that `cacheRootKey:false` costs nothing on Go for GPT).
@@ -3227,7 +3228,8 @@ Area codes: `OC` OpenCode runtime/SDK, `OR` OpenRouter transport,
 - Sources: local live measurement 2026-11-08, `opencode-go/gpt-6-luna`, OpenCode
   2.2.6; `src/cache-policy-core.mjs` `isOpenAIish`; tests in
   `test/cache-engine.test.mjs` (policy table + "v2 adapter: context applies the
-  GPT cache policy on the opencode-go route").
+  GPT cache policy on the opencode-go route"); tracked audit:
+  `docs/research/live-cache-verification-opencode-go-2026-11-08.md` §6.
 - Justifies: the GPT policy applies on the Go route, fixing the neutral
   resolution; the mutation stays conservative (missing fields only) and is
   explicitly marked `wireEffect:"not_observed"`.
